@@ -1,0 +1,58 @@
+# .cursorrules
+
+## Project: Marugen Koi & Arowana Farm — Business Management App
+## Language: Myanmar (Burmese) & English bilingual support
+## Stack: React 18 + Vite + Tailwind CSS v4 + Zustand + Supabase + Gemini API
+
+## Tech Rules
+- Always use React functional components with hooks
+- Use Tailwind CSS for all styling (dark theme: bg-slate-900/800/700)
+- Primary color palette: slate + cyan (text-cyan-400, bg-cyan-500)
+- Use lucide-react for all icons
+- State management: Zustand (useStore)
+- All forms: controlled components (useState)
+- API calls: async/await with try/catch
+- Never use class components
+- TypeScript not required — plain JSX only
+
+## Code Style
+- Component props destructured in function signature
+- Event handlers named: handleXxx or onXxx
+- Constants UPPERCASE in constants.js
+- Custom hooks in /hooks/ folder, prefixed "use"
+- All monetary values: formatSGD() helper (S$XX.XX)
+- Dates: date-fns library, format("dd MMM yyyy")
+
+## Business Domain Knowledge
+- Fish types: Koi (Kohaku, Sanke, Showa, Kinginrin, Ogon),
+  Arowana (Super Red, Cross Back Golden, Malaysian Golden, Silver)
+- Singapore delivery areas: 25 HDB towns
+- Customer tiers: Bronze, Silver, Gold, Platinum
+- Product categories: Fish Food, Water Treatment, Equipment,
+  Accessories, Medicine, Pond Supplies
+- Expense categories: Feed, Transport, Utilities, Rent,
+  Equipment, Labor, Medicine, Packaging, Marketing
+- Currency: Singapore Dollar (SGD, S$)
+- Invoice IDs: INV-XXXXX format
+- Delivery IDs: DEL-XXXXX format
+
+## AI Chat Agent
+- Model: gemini-2.5-flash (Google Gemini API)
+- Bilingual: Myanmar + English
+- System prompt must include current business data counts
+- Max tokens: 1000
+- API key: VITE_GEMINI_API_KEY in .env
+
+## Component Patterns
+- Modal: always check if open prop before rendering
+- Tables: overflow-x-auto wrapper
+- Forms: validation before submit
+- Loading states: spinner or skeleton
+- Empty states: helpful message + action button
+
+## File Structure
+- One component per file
+- Module files in /modules/ (Dashboard, Inventory, etc.)
+- Reusable UI in /components/ui/
+- No inline styles — Tailwind only
+- No CSS files except index.css (Tailwind import only)
