@@ -15,8 +15,8 @@ import { calcInvoiceAmounts } from "./lib/invoiceDesign";
 import { compressReceiptImage, expenseImageSrc } from "./lib/compressImage";
 import { enrichInvoiceCustomer, findCustomerWhatsApp, formatCustomerAddress, findCustomerRecord, openWhatsAppChat, resolveInvoiceCustomer, resolveInvoiceWhatsApp } from "./lib/invoiceWhatsApp";
 import {
-  buildDeliveryWhatsAppRecipients, formatDeliveryRecipientLabel, loadWhatsappGroups,
-  saveWhatsappGroups, sendDeliveryToRecipient,
+  buildDeliveryWhatsAppRecipients, formatDeliveryRecipientLabel, formatDeliverySchedule,
+  loadWhatsappGroups, saveWhatsappGroups, sendDeliveryToRecipient,
 } from "./lib/deliveryWhatsApp";
 import { normalizeWhatsAppGroupLink } from "./lib/invoiceWhatsApp";
 import { fetchAiUsage, fetchAiUsageStats, sendChatMessage } from "./lib/gemini";
@@ -300,8 +300,8 @@ function LoginScreen({ onLogin, users, cloudMode }) {
         <Card className="p-5 sm:p-6">
           <div className="mb-4">
             <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wide flex items-center gap-1"><Lock size={12} /> PIN Login</label>
-            <input type="password" inputMode="numeric" value={pin} onChange={e => setPin(e.target.value)} placeholder="••••"
-              onKeyDown={e => e.key === "Enter" && !loading && handleLogin()}
+            <input type="password" inputMode="numeric" value={pin} onChange={e => setPin(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="••••"
+              onKeyDown={e => { if (e.key === "Enter" && !loading) { e.preventDefault(); handleLogin(); } }}
               className="w-full bg-slate-900/50 border border-slate-600 rounded-xl px-3 py-4 text-white text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 touch-manipulation" />
             <p className="text-xs text-slate-500 mt-2 text-center">Enter your assigned PIN to login</p>
           </div>
@@ -340,7 +340,9 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
   const unbookedInvoices = invoices.filter((i) => !i.booked && getInvoiceStatus(i) !== "cancelled").length;
   const lowStock = products.filter((p) => p.minStock > 0 && p.stock <= p.minStock);
   const todayStr = today();
-  const todayEvents = events.filter((e) => e.date === todayStr);
+  const todayEvents = events
+    .filter((e) => e.date === todayStr)
+    .sort((a, b) => `${a.time || ""}`.localeCompare(`${b.time || ""}`));
   const scheduledDeliveries = deliveries.filter((d) => d.status === "scheduled").length;
   const todayDeliveries = deliveries.filter((d) => d.schedule?.startsWith(todayStr)).length;
   const recentInvoices = [...invoices].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 5);
@@ -354,7 +356,16 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
     { label: "Revenue (Paid)", value: formatSGD(totalRevenue), icon: DollarSign, color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20", tab: can("invoices") ? "invoices" : null },
     { label: "Pending / Overdue", value: formatSGD(pendingRevenue), icon: Clock, color: "text-amber-400", bg: "bg-amber-500/10 border-amber-500/20", tab: can("invoices") ? "invoices" : null },
     { label: "Expense Receipts", value: String(expenses.length), icon: ImagePlus, color: "text-purple-400", bg: "bg-purple-500/10 border-purple-500/20", tab: can("expenses") ? "expenses" : null },
-    { label: "Pending Accounts", value: String(unbookedExpenses + unbookedInvoices), icon: BookCheck, color: "text-cyan-400", bg: "bg-cyan-500/10 border-cyan-500/20", tab: can("accounting") ? "invoices" : null },
+    {
+      label: "Pending Accounts",
+      value: String(unbookedExpenses + unbookedInvoices),
+      icon: BookCheck,
+      color: "text-cyan-400",
+      bg: "bg-cyan-500/10 border-cyan-500/20",
+      tab: can("accounting")
+        ? (unbookedExpenses > 0 && unbookedInvoices === 0 && can("expenses") ? "expenses" : "invoices")
+        : null,
+    },
   ];
 
   const sectionLink = (tab, label) => can(tab) ? (
@@ -892,6 +903,12 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
   const unbookedInvoiceCount = invoices.filter((i) => !i.booked && i.status !== "cancelled").length;
   const activeViewInv = viewInv ? invoices.find((i) => i.id === viewInv.id) || viewInv : null;
   const canCancelInvoice = (inv) => ["pending", "overdue"].includes(getInvoiceStatus(inv));
+  const canMarkPaid = (inv) => ["pending", "overdue"].includes(getInvoiceStatus(inv));
+
+  const invoiceForDisplay = (inv) => enrichInvoiceCustomer(
+    { ...inv, status: getInvoiceStatus(inv) },
+    customers,
+  );
 
   const toggleInvoiceBooked = (id) => {
     if (!canMarkAccounting(currentUser)) {
@@ -935,6 +952,10 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
   const addProductItem = (productId) => {
     const p = products.find((x) => String(x.id) === String(productId));
     if (!p) return;
+    if (p.stock <= 0) {
+      addNotification({ type: "warning", title: "Out of Stock", message: `${p.name} has no stock left.` });
+      return;
+    }
     setForm(f => ({
       ...f,
       items: [...f.items, { name: p.name, qty: 1, price: p.price, productId: p.id, manual: false }],
@@ -960,8 +981,16 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
       setFormError("Please select or enter a customer name.");
       return;
     }
-    if (form.items.some(it => !it.name?.trim() || !it.price)) {
+    if (form.items.some(it => !it.name?.trim() || it.price === '' || it.price == null)) {
       setFormError("Each item needs a name and price.");
+      return;
+    }
+    if (form.items.some((it) => (+it.qty || 0) <= 0)) {
+      setFormError("Each item needs quantity of at least 1.");
+      return;
+    }
+    if (form.items.some((it) => +it.price < 0)) {
+      setFormError("Item prices cannot be negative.");
       return;
     }
     if (form.discountType === "percent" && (+form.discountValue <= 0 || +form.discountValue > 100)) {
@@ -976,6 +1005,10 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
     const customerDetails = resolveInvoiceCustomer({ customerId: form.customerId, customerName: form.customerName }, customers);
     const discountValue = form.discountType === "none" ? 0 : +form.discountValue || 0;
     const issueDate = today();
+    if (form.due && form.due < issueDate) {
+      setFormError("Due date cannot be before the invoice date.");
+      return;
+    }
     const invId = genInvoiceId(invoices, issueDate);
     const invoiceItems = form.items.map(serializeInvoiceItem);
     const stockCheck = deductStockForInvoice(setProducts, setStockLog, products, invoiceItems, {
@@ -1028,23 +1061,29 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
   };
 
   const markPaid = (id) => {
-    const inv = invoices.find(i => i.id === id);
+    const inv = invoices.find((i) => i.id === id);
     if (!inv) return;
-    setInvoices(prev => prev.map(i => i.id === id ? { ...i, status: "paid" } : i));
-    if (inv.customerId) {
-      setCustomers(prev => prev.map(c => {
-        if (c.id !== inv.customerId) return c;
-        const totalSpent = c.totalSpent + inv.total;
+    if (!canMarkPaid(inv)) {
+      addNotification({ type: "warning", title: "Cannot Mark Paid", message: `${id} is ${getInvoiceStatus(inv)}.` });
+      return;
+    }
+    const paidTotal = calcInvoiceAmounts(inv).total;
+    setInvoices((prev) => prev.map((i) => (i.id === id ? { ...i, status: "paid" } : i)));
+    setViewInv((prev) => (prev?.id === id ? { ...prev, status: "paid" } : prev));
+    if (inv.customerId != null && inv.customerId !== "") {
+      setCustomers((prev) => prev.map((c) => {
+        if (String(c.id) !== String(inv.customerId)) return c;
+        const totalSpent = (Number(c.totalSpent) || 0) + paidTotal;
         return { ...c, totalSpent, tier: calcCustomerTier(totalSpent) };
       }));
     }
-    addNotification({ type: "success", title: "Payment Received", message: `${id} marked as paid - ${formatSGD(inv.total)}` });
+    addNotification({ type: "success", title: "Payment Received", message: `${id} marked as paid - ${formatSGD(paidTotal)}` });
   };
 
   const downloadPdf = async (inv) => {
     setPdfLoading(true);
     try {
-      const filename = await downloadInvoicePdf(enrichInvoiceCustomer(inv, customers));
+      const filename = await downloadInvoicePdf(invoiceForDisplay(inv));
       addNotification({ type: "success", title: "PDF Downloaded", message: `${filename} saved to your device.` });
     } catch (err) {
       addNotification({ type: "error", title: "PDF Failed", message: err?.message || "Could not generate PDF." });
@@ -1116,7 +1155,9 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
 
       <div className="md:hidden space-y-3">
         {filtered.length === 0 ? (
-          <Card className="p-8 text-center text-slate-500">No invoices</Card>
+          <Card className="p-8 text-center text-slate-500">
+            {invoices.length === 0 ? "No invoices yet — tap New Invoice to create one." : "No invoices match your filters."}
+          </Card>
         ) : filtered.map(inv => {
           const invAmounts = calcInvoiceAmounts(inv);
           return (
@@ -1151,7 +1192,7 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
                 {canCancelInvoice(inv) && (
                   <Btn variant="ghost" size="sm" onClick={() => cancelInvoice(inv.id)} title="Cancel invoice"><XCircle size={14} className="text-red-400" /></Btn>
                 )}
-                {["pending", "overdue"].includes(getInvoiceStatus(inv)) && <Btn variant="success" size="sm" onClick={() => markPaid(inv.id)}><Check size={12} />Paid</Btn>}
+                {canMarkPaid(inv) && <Btn variant="success" size="sm" onClick={() => markPaid(inv.id)}><Check size={12} />Paid</Btn>}
               </div>
             </div>
           </Card>
@@ -1166,7 +1207,11 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
             <th className="text-right p-3">Amount</th><th className="text-center p-3">Status</th><th className="text-center p-3">Actions</th>
           </tr></thead>
           <tbody className="divide-y divide-slate-700/30">
-            {filtered.length === 0 ? <tr><td colSpan={6} className="text-center py-8 text-slate-500">No invoices</td></tr> :
+            {filtered.length === 0 ? (
+              <tr><td colSpan={6} className="text-center py-8 text-slate-500">
+                {invoices.length === 0 ? "No invoices yet." : "No invoices match your filters."}
+              </td></tr>
+            ) :
               filtered.map(inv => {
                 const invAmounts = calcInvoiceAmounts(inv);
                 return (
@@ -1199,7 +1244,7 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
                       {canCancelInvoice(inv) && (
                         <Btn variant="ghost" size="sm" onClick={() => cancelInvoice(inv.id)} title="Cancel invoice"><XCircle size={12} className="text-red-400" /></Btn>
                       )}
-                      {["pending", "overdue"].includes(getInvoiceStatus(inv)) && <Btn variant="success" size="sm" onClick={() => markPaid(inv.id)}><Check size={12} />Paid</Btn>}
+                      {canMarkPaid(inv) && <Btn variant="success" size="sm" onClick={() => markPaid(inv.id)}><Check size={12} />Paid</Btn>}
                     </div>
                   </td>
                 </tr>
@@ -1220,7 +1265,7 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
                   if (e.target.value === "manual") {
                     setForm(f => ({ ...f, manualCustomer: true, customerId: "", customerName: "" }));
                   } else {
-                    const c = customers.find(c => c.id === +e.target.value);
+                    const c = customers.find((x) => String(x.id) === String(e.target.value));
                     setForm(f => ({ ...f, manualCustomer: false, customerId: e.target.value, customerName: c?.name || "" }));
                   }
                 }}
@@ -1393,7 +1438,7 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
         {activeViewInv && (() => {
           const viewAmounts = calcInvoiceAmounts(activeViewInv);
           const canEditDiscount = ["pending", "overdue"].includes(getInvoiceStatus(activeViewInv));
-          const docInv = enrichInvoiceCustomer(activeViewInv, customers);
+          const docInv = invoiceForDisplay(activeViewInv);
           return (
           <div className="space-y-4">
             <div className="no-print flex flex-wrap items-center justify-between gap-3">
@@ -1415,6 +1460,11 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
                 <Btn onClick={() => downloadPdf(activeViewInv)} disabled={pdfLoading} className="flex-1 sm:flex-none justify-center">
                   <Printer size={14} />{pdfLoading ? "Generating..." : "Download PDF"}
                 </Btn>
+                {canMarkPaid(activeViewInv) && (
+                  <Btn variant="success" onClick={() => markPaid(activeViewInv.id)} className="flex-1 sm:flex-none justify-center">
+                    <Check size={14} />Mark Paid
+                  </Btn>
+                )}
                 {canCancelInvoice(activeViewInv) && (
                   <Btn variant="danger" onClick={() => cancelInvoice(activeViewInv.id)} className="flex-1 sm:flex-none justify-center">
                     <XCircle size={14} />Cancel Invoice
@@ -1509,36 +1559,110 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
 // CUSTOMER CRM
 // ─────────────────────────────────────────────
 function CustomerModule({ customers, setCustomers, addNotification }) {
+  const emptyForm = () => ({
+    name: "", phone: "", whatsapp: "", area: "Tampines", postalCode: "", address: "", fishTypes: [], notes: "",
+  });
+
   const [showAdd, setShowAdd] = useState(false);
-  const [view, setView] = useState(null);
+  const [viewId, setViewId] = useState(null);
+  const [editCustomer, setEditCustomer] = useState(null);
   const [search, setSearch] = useState("");
   const [tierFilter, setTierFilter] = useState("All");
-  const [form, setForm] = useState({ name: "", phone: "", whatsapp: "", area: "Tampines", postalCode: "", address: "", fishTypes: [], tier: "Bronze", notes: "" });
+  const [form, setForm] = useState(emptyForm());
 
-  const filtered = customers.filter(c =>
-    (tierFilter === "All" || c.tier === tierFilter) &&
-    (c.name.toLowerCase().includes(search.toLowerCase())
-      || c.area.toLowerCase().includes(search.toLowerCase())
-      || c.postalCode?.includes(search)
-      || c.address?.toLowerCase().includes(search.toLowerCase()))
-  );
+  const view = viewId != null ? customers.find((c) => String(c.id) === String(viewId)) : null;
 
-  const addCustomer = () => {
-    if (!form.name || !form.phone) return;
-    const c = { ...form, id: Date.now(), totalSpent: 0 };
-    setCustomers(prev => [...prev, c]);
-    addNotification({ type: "success", title: "Customer Added", message: `${c.name} added to CRM` });
-    setShowAdd(false);
-    setForm({ name: "", phone: "", whatsapp: "", area: "Tampines", postalCode: "", address: "", fishTypes: [], tier: "Bronze", notes: "" });
+  const filtered = customers.filter((c) => {
+    if (tierFilter !== "All" && c.tier !== tierFilter) return false;
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return [c.name, c.phone, c.whatsapp, c.area, c.address, c.postalCode].some(
+      (x) => String(x || "").toLowerCase().includes(q),
+    );
+  });
+
+  const toggleFishType = (target, ft) => {
+    target((f) => {
+      const types = f.fishTypes || [];
+      return {
+        ...f,
+        fishTypes: types.includes(ft) ? types.filter((x) => x !== ft) : [...types, ft],
+      };
+    });
   };
 
-  const toggleFishType = (ft) => {
-    setForm(f => ({ ...f, fishTypes: f.fishTypes.includes(ft) ? f.fishTypes.filter(x => x !== ft) : [...f.fishTypes, ft] }));
+  const addCustomer = () => {
+    const name = form.name?.trim();
+    const phone = form.phone?.trim();
+    if (!name) {
+      addNotification({ type: "error", title: "Name Required", message: "Enter the customer name." });
+      return;
+    }
+    if (!phone) {
+      addNotification({ type: "error", title: "Phone Required", message: "Enter a contact phone number." });
+      return;
+    }
+    const whatsapp = form.whatsapp?.trim() || phone;
+    const c = {
+      name,
+      phone,
+      whatsapp,
+      area: form.area || "Tampines",
+      postalCode: form.postalCode?.trim() || "",
+      address: form.address?.trim() || "",
+      fishTypes: form.fishTypes || [],
+      notes: form.notes?.trim() || "",
+      id: Date.now(),
+      totalSpent: 0,
+      tier: calcCustomerTier(0),
+    };
+    setCustomers((prev) => [...prev, c]);
+    addNotification({ type: "success", title: "Customer Added", message: `${c.name} added to CRM` });
+    setShowAdd(false);
+    setForm(emptyForm());
+  };
+
+  const saveEdit = () => {
+    if (!editCustomer) return;
+    const name = editCustomer.name?.trim();
+    const phone = editCustomer.phone?.trim();
+    if (!name) {
+      addNotification({ type: "error", title: "Name Required", message: "Enter the customer name." });
+      return;
+    }
+    if (!phone) {
+      addNotification({ type: "error", title: "Phone Required", message: "Enter a contact phone number." });
+      return;
+    }
+    const updated = {
+      ...editCustomer,
+      name,
+      phone,
+      whatsapp: editCustomer.whatsapp?.trim() || phone,
+      postalCode: editCustomer.postalCode?.trim() || "",
+      address: editCustomer.address?.trim() || "",
+      notes: editCustomer.notes?.trim() || "",
+      fishTypes: editCustomer.fishTypes || [],
+      tier: calcCustomerTier(Number(editCustomer.totalSpent) || 0),
+    };
+    setCustomers((prev) => prev.map((c) => (String(c.id) === String(updated.id) ? updated : c)));
+    addNotification({ type: "success", title: "Customer Updated", message: `${updated.name} saved` });
+    setEditCustomer(null);
+    setViewId(updated.id);
   };
 
   const generateWhatsApp = (c) => {
-    const msg = encodeURIComponent(`Hi ${c.name}! 🐟 Marugen Koi & Arowana Farm here. We have new arrivals that may interest you. Would you like to take a look?`);
-    window.open(`https://wa.me/${c.whatsapp?.replace(/\D/g, "")}?text=${msg}`, "_blank");
+    const phone = findCustomerWhatsApp(customers, c.id, c.name) || c.whatsapp || c.phone;
+    if (!phone?.trim()) {
+      addNotification({ type: "error", title: "No Number", message: "Add a phone or WhatsApp number first." });
+      return;
+    }
+    const text = `Hi ${c.name}! Marugen Koi & Arowana Farm here. We have new arrivals that may interest you. Would you like to take a look?`;
+    try {
+      openWhatsAppChat(phone, text);
+    } catch (err) {
+      addNotification({ type: "error", title: "WhatsApp Failed", message: err?.message || "Could not open WhatsApp." });
+    }
   };
 
   return (
@@ -1563,7 +1687,11 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {filtered.map(c => (
+        {filtered.length === 0 ? (
+          <Card className="p-8 text-center text-slate-500 md:col-span-2 xl:col-span-3">
+            {customers.length === 0 ? "No customers yet — tap Add Customer to get started." : "No customers match your search or filters."}
+          </Card>
+        ) : filtered.map((c) => (
           <Card key={c.id} className="p-4 hover:border-slate-600 transition-colors">
             <div className="flex items-start justify-between mb-3">
               <div>
@@ -1571,17 +1699,18 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
                 <p className="text-slate-500 text-xs flex items-center gap-1"><MapPin size={10} />{c.area}{c.postalCode ? ` · ${c.postalCode}` : ""}</p>
                 {c.address && <p className="text-slate-600 text-xs mt-0.5 truncate">{c.address}</p>}
               </div>
-              <span className={`font-black text-sm ${tierColor[c.tier]}`}>{c.tier}</span>
+              <span className={`font-black text-sm ${tierColor[c.tier] || tierColor.Bronze}`}>{c.tier || "Bronze"}</span>
             </div>
             <div className="flex flex-wrap gap-1 mb-3">
-              {c.fishTypes.map(f => <Badge key={f} className="bg-slate-700/60 text-slate-300">{f}</Badge>)}
+              {(c.fishTypes || []).map((f) => <Badge key={f} className="bg-slate-700/60 text-slate-300">{f}</Badge>)}
             </div>
             <div className="flex items-center justify-between mb-3">
               <span className="text-slate-500 text-xs">{c.phone}</span>
-              <span className="text-emerald-400 font-bold text-sm">{formatSGD(c.totalSpent)}</span>
+              <span className="text-emerald-400 font-bold text-sm">{formatSGD(c.totalSpent || 0)}</span>
             </div>
             <div className="flex gap-2">
-              <Btn variant="ghost" size="sm" onClick={() => setView(c)}><Eye size={12} />View</Btn>
+              <Btn variant="ghost" size="sm" onClick={() => setViewId(c.id)}><Eye size={12} />View</Btn>
+              <Btn variant="ghost" size="sm" onClick={() => setEditCustomer({ ...c, fishTypes: [...(c.fishTypes || [])] })}><Edit2 size={12} />Edit</Btn>
               <Btn variant="success" size="sm" onClick={() => generateWhatsApp(c)}><MessageSquare size={12} />WhatsApp</Btn>
             </div>
           </Card>
@@ -1595,15 +1724,14 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
           <Input label="Phone" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="+65 9XXX XXXX" required />
           <Input label="WhatsApp" value={form.whatsapp} onChange={e => setForm(f => ({ ...f, whatsapp: e.target.value }))} placeholder="+65 9XXX XXXX" />
           <Select label="Area" value={form.area} onChange={e => setForm(f => ({ ...f, area: e.target.value }))} options={SG_AREAS} />
-          <Select label="Tier" value={form.tier} onChange={e => setForm(f => ({ ...f, tier: e.target.value }))} options={CUSTOMER_TIERS} />
           <Input label="Postal Code" value={form.postalCode} onChange={e => setForm(f => ({ ...f, postalCode: e.target.value.replace(/\D/g, "").slice(0, 6) }))} placeholder="e.g. 521123" inputMode="numeric" />
           <Input label="Address Details" value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} placeholder="Blk / Unit / Street" className="sm:col-span-2" />
         </div>
         <div className="mt-4">
           <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wide">Fish Interests</label>
           <div className="flex flex-wrap gap-2">
-            {FISH_TYPES.map(ft => (
-              <button key={ft} onClick={() => toggleFishType(ft)}
+            {FISH_TYPES.map((ft) => (
+              <button key={ft} type="button" onClick={() => toggleFishType(setForm, ft)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${form.fishTypes.includes(ft) ? "bg-cyan-500 text-slate-900" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>{ft}</button>
             ))}
           </div>
@@ -1616,26 +1744,63 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
       </Modal>
 
       {/* View Customer */}
-      <Modal open={!!view} onClose={() => setView(null)} title={view?.name} size="md">
+      <Modal open={!!view} onClose={() => setViewId(null)} title={view?.name || "Customer"} size="md">
         {view && (
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-              <div><p className="text-slate-500 text-xs">Phone</p><p className="text-white flex items-center gap-1"><Phone size={12} />{view.phone}</p></div>
-              <div><p className="text-slate-500 text-xs">WhatsApp</p><p className="text-white">{view.whatsapp}</p></div>
+              <div><p className="text-slate-500 text-xs">Phone</p><p className="text-white flex items-center gap-1"><Phone size={12} />{view.phone || "—"}</p></div>
+              <div><p className="text-slate-500 text-xs">WhatsApp</p><p className="text-white">{view.whatsapp || view.phone || "—"}</p></div>
               <div><p className="text-slate-500 text-xs">Area</p><p className="text-white">{view.area}</p></div>
               <div><p className="text-slate-500 text-xs">Postal Code</p><p className="text-white">{view.postalCode || "—"}</p></div>
               <div className="sm:col-span-2"><p className="text-slate-500 text-xs">Address</p><p className="text-white">{view.address || "—"}</p></div>
-              <div><p className="text-slate-500 text-xs">Tier</p><p className={`font-black ${tierColor[view.tier]}`}><Star size={12} className="inline mr-1" />{view.tier}</p></div>
-              <div><p className="text-slate-500 text-xs">Total Spent</p><p className="text-emerald-400 font-black text-lg">{formatSGD(view.totalSpent)}</p></div>
+              <div><p className="text-slate-500 text-xs">Tier</p><p className={`font-black ${tierColor[view.tier] || tierColor.Bronze}`}><Star size={12} className="inline mr-1" />{view.tier || calcCustomerTier(view.totalSpent)}</p></div>
+              <div><p className="text-slate-500 text-xs">Total Spent</p><p className="text-emerald-400 font-black text-lg">{formatSGD(view.totalSpent || 0)}</p></div>
             </div>
-            <div><p className="text-slate-500 text-xs mb-2">Fish Types</p><div className="flex flex-wrap gap-2">{view.fishTypes.map(f => <Badge key={f} className="bg-slate-700 text-slate-300">{f}</Badge>)}</div></div>
+            <div><p className="text-slate-500 text-xs mb-2">Fish Types</p><div className="flex flex-wrap gap-2">{(view.fishTypes || []).length ? (view.fishTypes || []).map((f) => <Badge key={f} className="bg-slate-700 text-slate-300">{f}</Badge>) : <span className="text-slate-500 text-sm">—</span>}</div></div>
             {view.notes && <div className="bg-slate-900/50 rounded-lg p-3"><p className="text-slate-500 text-xs">Notes</p><p className="text-slate-300 text-sm">{view.notes}</p></div>}
+            <div className="flex flex-wrap gap-2">
+              <Btn variant="ghost" size="sm" onClick={() => { setEditCustomer({ ...view, fishTypes: [...(view.fishTypes || [])] }); setViewId(null); }}><Edit2 size={12} />Edit</Btn>
+              <Btn variant="success" size="sm" onClick={() => generateWhatsApp(view)}><Send size={12} />Send on WhatsApp</Btn>
+            </div>
             <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4">
-              <p className="text-emerald-400 text-xs font-bold mb-2">WhatsApp Template</p>
-              <p className="text-slate-300 text-sm">Hi {view.name}! 🐟 Marugen Farm here. We have new {view.fishTypes[0] || "fish"} arrivals. Interested? DM us!</p>
-              <Btn variant="success" size="sm" className="mt-2" onClick={() => generateWhatsApp(view)}><Send size={12} />Send on WhatsApp</Btn>
+              <p className="text-emerald-400 text-xs font-bold mb-2">Message preview</p>
+              <p className="text-slate-300 text-sm">Hi {view.name}! Marugen Farm here. We have new {(view.fishTypes || [])[0] || "fish"} arrivals. Interested? DM us!</p>
             </div>
           </div>
+        )}
+      </Modal>
+
+      {/* Edit Customer */}
+      <Modal open={!!editCustomer} onClose={() => setEditCustomer(null)} title="Edit Customer" size="lg">
+        {editCustomer && (
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input label="Full Name" value={editCustomer.name} onChange={(e) => setEditCustomer((c) => ({ ...c, name: e.target.value }))} required className="sm:col-span-2" />
+              <Input label="Phone" value={editCustomer.phone} onChange={(e) => setEditCustomer((c) => ({ ...c, phone: e.target.value }))} required />
+              <Input label="WhatsApp" value={editCustomer.whatsapp} onChange={(e) => setEditCustomer((c) => ({ ...c, whatsapp: e.target.value }))} placeholder="Defaults to phone if blank" />
+              <Select label="Area" value={editCustomer.area} onChange={(e) => setEditCustomer((c) => ({ ...c, area: e.target.value }))} options={SG_AREAS} />
+              <Input label="Postal Code" value={editCustomer.postalCode || ""} onChange={(e) => setEditCustomer((c) => ({ ...c, postalCode: e.target.value.replace(/\D/g, "").slice(0, 6) }))} inputMode="numeric" />
+              <Input label="Address Details" value={editCustomer.address || ""} onChange={(e) => setEditCustomer((c) => ({ ...c, address: e.target.value }))} className="sm:col-span-2" />
+            </div>
+            <p className="text-xs text-slate-500 mt-3">
+              Tier: <span className={tierColor[calcCustomerTier(editCustomer.totalSpent)]}>{calcCustomerTier(editCustomer.totalSpent)}</span>
+              {" "}(auto from {formatSGD(editCustomer.totalSpent || 0)} spent)
+            </p>
+            <div className="mt-4">
+              <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wide">Fish Interests</label>
+              <div className="flex flex-wrap gap-2">
+                {FISH_TYPES.map((ft) => (
+                  <button key={ft} type="button" onClick={() => toggleFishType(setEditCustomer, ft)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${editCustomer.fishTypes?.includes(ft) ? "bg-cyan-500 text-slate-900" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>{ft}</button>
+                ))}
+              </div>
+            </div>
+            <Textarea label="Notes" value={editCustomer.notes || ""} onChange={(e) => setEditCustomer((c) => ({ ...c, notes: e.target.value }))} className="mt-4" rows={2} />
+            <div className="modal-actions mt-4 flex justify-end gap-2">
+              <Btn variant="secondary" onClick={() => setEditCustomer(null)}>Cancel</Btn>
+              <Btn onClick={saveEdit}>Save</Btn>
+            </div>
+          </>
         )}
       </Modal>
     </div>
@@ -1647,15 +1812,20 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
 // ─────────────────────────────────────────────
 function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) {
   const [showAdd, setShowAdd] = useState(false);
-  const [viewExpense, setViewExpense] = useState(null);
+  const [viewExpenseId, setViewExpenseId] = useState(null);
   const [bookedFilter, setBookedFilter] = useState("all");
   const [uploadPreview, setUploadPreview] = useState(null);
   const [uploadName, setUploadName] = useState("");
+  const [uploadNote, setUploadNote] = useState("");
   const [uploading, setUploading] = useState(false);
   const albumInputRef = useRef(null);
   const cameraInputRef = useRef(null);
 
   if (!hasPermission(currentUser, "expenses")) return <AccessDenied moduleName="Expenses" />;
+
+  const viewExpense = viewExpenseId != null
+    ? expenses.find((e) => String(e.id) === String(viewExpenseId))
+    : null;
 
   const unbookedExpenseCount = expenses.filter((e) => !e.booked).length;
   const visibleExpenses = [...expenses].reverse().filter((e) => {
@@ -1667,6 +1837,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
   const resetUpload = () => {
     setUploadPreview(null);
     setUploadName("");
+    setUploadNote("");
     if (albumInputRef.current) albumInputRef.current.value = "";
     if (cameraInputRef.current) cameraInputRef.current.value = "";
   };
@@ -1692,17 +1863,16 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
       return;
     }
     setExpenses((prev) => prev.map((e) => {
-      if (e.id !== id) return e;
+      if (String(e.id) !== String(id)) return e;
       return { ...e, ...makeBookedPatch(!e.booked, currentUser.name) };
     }));
-    setViewExpense((prev) => (prev?.id === id ? { ...prev, ...makeBookedPatch(!prev.booked, currentUser.name) } : prev));
   };
 
   const deleteExpense = (expense) => {
     const label = expense.imageName || expense.date || "this receipt";
     if (!confirm(`Delete ${label}? This cannot be undone.`)) return;
     setExpenses((prev) => prev.filter((e) => e.id !== expense.id));
-    setViewExpense((prev) => (prev?.id === expense.id ? null : prev));
+    setViewExpenseId((prev) => (String(prev) === String(expense.id) ? null : prev));
     addNotification({ type: "info", title: "Receipt Deleted", message: "Expense receipt removed." });
   };
 
@@ -1711,13 +1881,17 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
       addNotification({ type: "error", title: "Image Required", message: "Upload an expense invoice or receipt photo." });
       return;
     }
+    if (uploading) return;
     const e = {
       id: Date.now(),
+      category: null,
+      amount: null,
       date: today(),
+      note: uploadNote?.trim() || "",
       imageData: uploadPreview,
       imageName: uploadName,
       imageUrl: "",
-      addedBy: currentUser.name,
+      addedBy: currentUser?.name || "Staff",
       booked: false,
       bookedAt: null,
       bookedBy: "",
@@ -1757,15 +1931,21 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
       {visibleExpenses.length === 0 ? (
         <Card className="p-10 text-center">
           <ImagePlus size={40} className="mx-auto text-slate-600 mb-3" />
-          <p className="text-slate-400 text-sm">No expense receipts yet</p>
-          <Btn className="mt-4 mx-auto" onClick={() => { resetUpload(); setShowAdd(true); }}><ImagePlus size={14} />Upload first receipt</Btn>
+          <p className="text-slate-400 text-sm">
+            {expenses.length === 0
+              ? "No expense receipts yet — upload supplier invoice photos here."
+              : "No receipts match this accounts filter."}
+          </p>
+          {expenses.length === 0 && (
+            <Btn className="mt-4 mx-auto" onClick={() => { resetUpload(); setShowAdd(true); }}><ImagePlus size={14} />Upload first receipt</Btn>
+          )}
         </Card>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
           {visibleExpenses.map((e) => {
             const src = expenseImageSrc(e);
             return (
-              <Card key={e.id} className="overflow-hidden hover:border-slate-600 transition-colors cursor-pointer" onClick={() => setViewExpense(e)}>
+              <Card key={e.id} className="overflow-hidden hover:border-slate-600 transition-colors cursor-pointer" onClick={() => setViewExpenseId(e.id)}>
                 <div className="aspect-[3/4] bg-slate-900 relative">
                   {src ? (
                     <img src={src} alt={e.imageName || "Expense receipt"} className="w-full h-full object-cover" />
@@ -1790,7 +1970,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
                 </div>
                 <div className="p-2.5">
                   <p className="text-white text-xs font-medium truncate">{e.imageName || e.category || "Receipt"}</p>
-                  <p className="text-slate-500 text-[10px]">{e.date} · {e.addedBy}</p>
+                  <p className="text-slate-500 text-[10px]">{e.date} · {e.addedBy}{e.note ? ` · ${e.note}` : ""}</p>
                 </div>
               </Card>
             );
@@ -1854,6 +2034,13 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
               </Btn>
             </div>
           )}
+          <Textarea
+            label="Note (optional)"
+            value={uploadNote}
+            onChange={(ev) => setUploadNote(ev.target.value)}
+            rows={2}
+            placeholder="e.g. Feed supplier, March order"
+          />
         </div>
         <div className="modal-actions">
           <Btn variant="secondary" onClick={() => { setShowAdd(false); resetUpload(); }}>Cancel</Btn>
@@ -1861,14 +2048,27 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
         </div>
       </Modal>
 
-      <Modal open={!!viewExpense} onClose={() => setViewExpense(null)} title="Expense Receipt" size="lg">
+      <Modal open={!!viewExpense} onClose={() => setViewExpenseId(null)} title="Expense Receipt" size="lg">
         {viewExpense && (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <BookedBadge booked={viewExpense.booked} bookedBy={viewExpense.bookedBy} />
               <span className="text-slate-500">{viewExpense.date}</span>
               <span className="text-slate-500">· {viewExpense.addedBy}</span>
+              {viewExpense.imageName && <span className="text-slate-500">· {viewExpense.imageName}</span>}
             </div>
+            {(viewExpense.category || viewExpense.amount > 0) && (
+              <p className="text-amber-400/90 text-xs">
+                Legacy record{viewExpense.category ? ` · ${viewExpense.category}` : ""}
+                {viewExpense.amount > 0 ? ` · ${formatSGD(viewExpense.amount)}` : ""}
+              </p>
+            )}
+            {viewExpense.note && (
+              <Card className="p-3 border-slate-700/50">
+                <p className="text-slate-500 text-xs">Note</p>
+                <p className="text-slate-300 text-sm">{viewExpense.note}</p>
+              </Card>
+            )}
             {expenseImageSrc(viewExpense) ? (
               <div className="rounded-xl overflow-hidden border border-slate-600 bg-[#d4d4d4] p-2">
                 <img src={expenseImageSrc(viewExpense)} alt={viewExpense.imageName || "Receipt"} className="w-full max-h-[70vh] object-contain mx-auto" />
@@ -1906,37 +2106,133 @@ function DeliveryModule({
 }) {
   const emptyDeliveryForm = () => ({
     invoiceId: "", customerId: "", customerName: "", area: "Tampines", postalCode: "", address: "",
-    schedule: "", items: "", driver: "", notes: "",
+    schedule: "", items: "", driver: "", notes: "", status: "scheduled",
+  });
+  const deliveryToForm = (d) => ({
+    invoiceId: d.invoiceId || "",
+    customerId: d.customerId != null && d.customerId !== "" ? String(d.customerId) : "",
+    customerName: d.customerName || "",
+    area: d.area || "Tampines",
+    postalCode: d.postalCode || "",
+    address: d.address || "",
+    schedule: d.schedule || "",
+    items: d.items || "",
+    driver: d.driver || "",
+    notes: d.notes || "",
+    status: d.status || "scheduled",
   });
   const [showAdd, setShowAdd] = useState(false);
+  const [editDeliveryId, setEditDeliveryId] = useState(null);
   const [filter, setFilter] = useState("all");
   const [form, setForm] = useState(emptyDeliveryForm());
+  const isEditing = editDeliveryId != null;
+  const formOpen = showAdd || isEditing;
   const [showLinkedInvoicePreview, setShowLinkedInvoicePreview] = useState(true);
   const [invoicePreviewId, setInvoicePreviewId] = useState(null);
-  const [whatsappDelivery, setWhatsappDelivery] = useState(null);
+  const [whatsappDeliveryId, setWhatsappDeliveryId] = useState(null);
   const [whatsappRecipientId, setWhatsappRecipientId] = useState("custom");
   const [whatsappDraft, setWhatsappDraft] = useState("");
   const [showManageGroups, setShowManageGroups] = useState(false);
   const [groupForm, setGroupForm] = useState({ name: "", link: "" });
 
-  const filtered = deliveries.filter(d => filter === "all" || d.status === filter);
+  if (!hasPermission(currentUser, "deliveries")) return <AccessDenied moduleName="Deliveries" />;
+
+  const whatsappDelivery = whatsappDeliveryId != null
+    ? deliveries.find((d) => String(d.id) === String(whatsappDeliveryId))
+    : null;
+
+  const filtered = deliveries
+    .filter((d) => filter === "all" || d.status === filter)
+    .sort((a, b) => (a.schedule || "").localeCompare(b.schedule || ""));
   const linkedInvoice = form.invoiceId ? invoices.find((i) => i.id === form.invoiceId) : null;
   const linkedInvoiceDoc = linkedInvoice ? enrichInvoiceCustomer(linkedInvoice, customers) : null;
   const linkableInvoices = [...invoices]
     .filter((i) => i.status !== "cancelled")
     .sort((a, b) => `${b.date || ""}${b.id}`.localeCompare(`${a.date || ""}${a.id}`));
 
-  const addDelivery = () => {
-    if (!form.customerName || !form.address || !form.schedule) return;
-    const d = { ...form, id: genId("DEL"), status: "scheduled", createdBy: currentUser.name };
-    setDeliveries(prev => [...prev, d]);
-    addNotification({
-      type: "info",
-      title: "Delivery Scheduled",
-      message: d.invoiceId ? `${d.id} linked to ${d.invoiceId} → ${d.customerName}` : `${d.id} → ${d.customerName} at ${d.area}`,
-    });
+  const closeDeliveryForm = () => {
     setShowAdd(false);
+    setEditDeliveryId(null);
     setForm(emptyDeliveryForm());
+    setShowLinkedInvoicePreview(true);
+  };
+
+  const openAddDelivery = () => {
+    setEditDeliveryId(null);
+    setForm(emptyDeliveryForm());
+    setShowLinkedInvoicePreview(true);
+    setShowAdd(true);
+  };
+
+  const openEditDelivery = (d) => {
+    setShowAdd(false);
+    setEditDeliveryId(d.id);
+    setForm(deliveryToForm(d));
+    setShowLinkedInvoicePreview(true);
+  };
+
+  const validateDeliveryForm = () => {
+    const customerName = form.customerName?.trim();
+    const address = form.address?.trim();
+    const schedule = form.schedule?.trim();
+    if (!customerName) {
+      addNotification({ type: "error", title: "Customer Required", message: "Select a customer or link an invoice with customer details." });
+      return null;
+    }
+    if (!address) {
+      addNotification({ type: "error", title: "Address Required", message: "Enter the delivery address (Blk / Unit / Street)." });
+      return null;
+    }
+    if (!schedule) {
+      addNotification({ type: "error", title: "Schedule Required", message: "Choose date and time for the delivery." });
+      return null;
+    }
+    return { customerName, address, schedule };
+  };
+
+  const saveDelivery = () => {
+    const validated = validateDeliveryForm();
+    if (!validated) return;
+    const { customerName, address, schedule } = validated;
+    const payload = {
+      ...form,
+      customerId: form.customerId || null,
+      customerName,
+      address,
+      schedule,
+      status: isEditing ? (form.status || "scheduled") : "scheduled",
+    };
+
+    if (isEditing) {
+      setDeliveries((prev) => prev.map((d) => (
+        String(d.id) === String(editDeliveryId)
+          ? { ...d, ...payload, createdBy: d.createdBy || currentUser?.name || "Staff" }
+          : d
+      )));
+      addNotification({ type: "success", title: "Delivery Updated", message: `${editDeliveryId} saved.` });
+    } else {
+      const d = {
+        ...payload,
+        id: genId("DEL"),
+        createdBy: currentUser?.name || "Staff",
+      };
+      setDeliveries((prev) => [...prev, d]);
+      addNotification({
+        type: "info",
+        title: "Delivery Scheduled",
+        message: d.invoiceId ? `${d.id} linked to ${d.invoiceId} → ${d.customerName}` : `${d.id} → ${d.customerName} at ${d.area}`,
+      });
+    }
+    closeDeliveryForm();
+  };
+
+  const deleteDelivery = (d) => {
+    const label = `${d.id} → ${d.customerName}`;
+    if (!confirm(`Delete ${label}? This cannot be undone.`)) return;
+    setDeliveries((prev) => prev.filter((x) => String(x.id) !== String(d.id)));
+    if (String(editDeliveryId) === String(d.id)) closeDeliveryForm();
+    if (String(whatsappDeliveryId) === String(d.id)) closeWhatsappPicker();
+    addNotification({ type: "info", title: "Delivery Deleted", message: `${d.id} removed.` });
   };
 
   const selectDeliveryInvoice = (invoiceId) => {
@@ -1953,6 +2249,7 @@ function DeliveryModule({
       schedule: f.schedule,
       driver: f.driver,
       notes: f.notes,
+      status: f.status,
     }));
     setShowLinkedInvoicePreview(true);
   };
@@ -1962,13 +2259,19 @@ function DeliveryModule({
       setForm((f) => ({ ...f, invoiceId: "", customerId: "", customerName: "", area: "Tampines", postalCode: "", address: "" }));
       return;
     }
-    const c = customers.find(x => x.id === +customerId);
-    setForm((f) => ({ ...f, invoiceId: "", ...customerDeliveryFields(c), schedule: f.schedule, items: f.items, driver: f.driver, notes: f.notes }));
+    const c = customers.find((x) => String(x.id) === String(customerId));
+    setForm((f) => ({ ...f, invoiceId: "", ...customerDeliveryFields(c), schedule: f.schedule, items: f.items, driver: f.driver, notes: f.notes, status: f.status }));
   };
 
   const updateStatus = (id, status) => {
-    setDeliveries(prev => prev.map(d => d.id === id ? { ...d, status } : d));
-    if (status === "delivered") addNotification({ type: "success", title: "Delivery Completed", message: `${id} delivered successfully!` });
+    setDeliveries((prev) => prev.map((d) => (String(d.id) === String(id) ? { ...d, status } : d)));
+    if (status === "delivered") {
+      addNotification({ type: "success", title: "Delivery Completed", message: `${id} delivered successfully!` });
+    } else if (status === "transit") {
+      addNotification({ type: "info", title: "Out for Delivery", message: `${id} is now in transit.` });
+    } else if (status === "cancelled") {
+      addNotification({ type: "info", title: "Delivery Cancelled", message: `${id} has been cancelled.` });
+    }
   };
 
   const statusFlow = { scheduled: ["transit", "cancelled"], transit: ["delivered", "cancelled"], delivered: [], cancelled: [] };
@@ -2004,13 +2307,13 @@ function DeliveryModule({
 
   const openWhatsappPicker = (d) => {
     const recipients = buildDeliveryWhatsAppRecipients(d, customers, whatsappGroups);
-    setWhatsappDelivery(d);
+    setWhatsappDeliveryId(d.id);
     setWhatsappRecipientId(recipients.find((r) => r.id === "delivery-customer")?.id || recipients[0]?.id || "custom");
     setWhatsappDraft("");
   };
 
   const closeWhatsappPicker = () => {
-    setWhatsappDelivery(null);
+    setWhatsappDeliveryId(null);
     setWhatsappRecipientId("custom");
     setWhatsappDraft("");
   };
@@ -2055,7 +2358,7 @@ function DeliveryModule({
           <Btn variant="secondary" onClick={() => setShowManageGroups(true)} className="w-full sm:w-auto justify-center">
             <Users size={16} />WhatsApp Groups
           </Btn>
-          <Btn onClick={() => setShowAdd(true)} className="w-full sm:w-auto justify-center"><Plus size={16} />Schedule Delivery</Btn>
+          <Btn onClick={openAddDelivery} className="w-full sm:w-auto justify-center"><Plus size={16} />Schedule Delivery</Btn>
         </div>
       </div>
 
@@ -2067,7 +2370,19 @@ function DeliveryModule({
       </div>
 
       <div className="space-y-3">
-        {filtered.length === 0 ? <Card className="p-8 text-center text-slate-500">No deliveries</Card> :
+        {filtered.length === 0 ? (
+          <Card className="p-10 text-center">
+            <Truck size={40} className="mx-auto text-slate-600 mb-3" />
+            <p className="text-slate-400 text-sm">
+              {deliveries.length === 0
+                ? "No deliveries scheduled yet."
+                : "No deliveries match this status filter."}
+            </p>
+            {deliveries.length === 0 && (
+              <Btn className="mt-4 mx-auto" onClick={openAddDelivery}><Plus size={14} />Schedule first delivery</Btn>
+            )}
+          </Card>
+        ) :
           filtered.map(d => (
             <Card key={d.id} className="p-4">
               <div className="flex items-start justify-between gap-4">
@@ -2081,12 +2396,20 @@ function DeliveryModule({
                   <p className="text-slate-400 text-sm flex items-center gap-1"><MapPin size={12} />{d.address}{d.postalCode ? `, Singapore ${d.postalCode}` : ""}</p>
                   <p className="text-slate-500 text-xs">{d.area}</p>
                   <div className="flex flex-wrap gap-4 mt-2 text-xs text-slate-500">
-                    <span><Clock size={10} className="inline mr-1" />{d.schedule}</span>
-                    <span>Items: {d.items}</span>
+                    <span><Clock size={10} className="inline mr-1" />{formatDeliverySchedule(d.schedule)}</span>
+                    {d.items && <span>Items: {d.items}</span>}
                     {d.driver && <span>Driver: {d.driver}</span>}
                   </div>
+                  {d.notes && <p className="text-slate-500 text-xs mt-1 italic">{d.notes}</p>}
+                  {d.createdBy && <p className="text-slate-600 text-[10px] mt-1">Scheduled by {d.createdBy}</p>}
                 </div>
                 <div className="flex flex-col gap-2">
+                  <Btn variant="ghost" size="sm" onClick={() => openEditDelivery(d)} title="Edit delivery">
+                    <Edit2 size={14} className="text-cyan-400" />
+                  </Btn>
+                  <Btn variant="ghost" size="sm" onClick={() => deleteDelivery(d)} title="Delete delivery">
+                    <Trash2 size={14} className="text-red-400" />
+                  </Btn>
                   {d.status !== "cancelled" && (
                     <Btn variant="ghost" size="sm" onClick={() => openWhatsappPicker(d)} title="Send schedule on WhatsApp">
                       <MessageSquare size={14} className="text-emerald-400" />
@@ -2097,7 +2420,7 @@ function DeliveryModule({
                       <Eye size={14} />
                     </Btn>
                   )}
-                  {statusFlow[d.status]?.map(next => (
+                  {(statusFlow[d.status] ?? []).map(next => (
                     <Btn key={next} variant={next === "delivered" ? "success" : next === "cancelled" ? "danger" : "secondary"} size="sm"
                       onClick={() => updateStatus(d.id, next)}>
                       {next === "delivered" ? <Check size={12} /> : next === "transit" ? <Truck size={12} /> : <X size={12} />}
@@ -2111,7 +2434,12 @@ function DeliveryModule({
         }
       </div>
 
-      <Modal open={showAdd} onClose={() => { setShowAdd(false); setShowLinkedInvoicePreview(true); }} title="Schedule Delivery" size={form.invoiceId && showLinkedInvoicePreview ? "xl" : "lg"}>
+      <Modal
+        open={formOpen}
+        onClose={closeDeliveryForm}
+        title={isEditing ? `Edit Delivery ${editDeliveryId}` : "Schedule Delivery"}
+        size={form.invoiceId && showLinkedInvoicePreview ? "xl" : "lg"}
+      >
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 min-w-0">
           <Select
             label="Link to Invoice"
@@ -2153,19 +2481,38 @@ function DeliveryModule({
             <p className="sm:col-span-2 text-xs text-cyan-400/80">Filled from customer profile — edit here if this delivery goes elsewhere.</p>
           )}
           <Input label="Schedule" type="datetime-local" value={form.schedule} onChange={e => setForm(f => ({ ...f, schedule: e.target.value }))} required className="w-full max-w-full" />
+          {isEditing && (
+            <Select
+              label="Status"
+              value={form.status}
+              onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}
+              options={[
+                { value: "scheduled", label: "Scheduled" },
+                { value: "transit", label: "In transit" },
+                { value: "delivered", label: "Delivered" },
+                { value: "cancelled", label: "Cancelled" },
+              ]}
+            />
+          )}
           <Input label="Driver Name" value={form.driver} onChange={e => setForm(f => ({ ...f, driver: e.target.value }))} />
           <Textarea label="Items" value={form.items} onChange={e => setForm(f => ({ ...f, items: e.target.value }))} placeholder="e.g. 1x Super Red Arowana, 2x Koi Pellets" className="sm:col-span-2" rows={2} />
           <Textarea label="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="sm:col-span-2" rows={2} />
         </div>
         <div className="modal-actions">
-          <Btn variant="secondary" onClick={() => { setShowAdd(false); setShowLinkedInvoicePreview(true); }}>Cancel</Btn>
-          <Btn onClick={addDelivery}><Truck size={14} />Schedule</Btn>
+          {isEditing && (
+            <Btn variant="danger" onClick={() => {
+              const d = deliveries.find((x) => String(x.id) === String(editDeliveryId));
+              if (d) deleteDelivery(d);
+            }} className="mr-auto"><Trash2 size={14} />Delete</Btn>
+          )}
+          <Btn variant="secondary" onClick={closeDeliveryForm}>Cancel</Btn>
+          <Btn onClick={saveDelivery}><Truck size={14} />{isEditing ? "Save Changes" : "Schedule"}</Btn>
         </div>
       </Modal>
 
       <Modal open={!!invoicePreviewId} onClose={() => setInvoicePreviewId(null)} title={`Invoice ${invoicePreviewId || ""}`} size="full">
         {invoicePreviewId && (() => {
-          const inv = invoices.find((i) => i.id === invoicePreviewId);
+          const inv = invoices.find((i) => String(i.id) === String(invoicePreviewId));
           if (!inv) return <p className="text-slate-400 text-sm">Invoice not found.</p>;
           return (
             <div className="rounded-xl border border-slate-600 bg-[#d4d4d4] p-4 sm:p-6 overflow-y-auto max-h-[min(80vh,920px)]">
@@ -2248,33 +2595,117 @@ function DeliveryModule({
 // ─────────────────────────────────────────────
 // CALENDAR MODULE
 // ─────────────────────────────────────────────
-function CalendarModule({ events, setEvents, addNotification, currentUser }) {
-  const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ title: "", date: today(), time: "09:00", type: "other", note: "" });
+const EVENT_TYPE_OPTIONS = [
+  { value: "maintenance", label: "Maintenance" },
+  { value: "feeding", label: "Feeding" },
+  { value: "purchase", label: "Purchase" },
+  { value: "customer", label: "Customer visit" },
+  { value: "other", label: "Other" },
+];
 
-  const addEvent = () => {
-    if (!form.title || !form.date) return;
-    const e = { ...form, id: Date.now(), createdBy: currentUser.name };
-    setEvents(prev => [...prev, e]);
-    addNotification({ type: "info", title: "Event Added", message: `${e.title} on ${e.date}` });
+function CalendarModule({ events, setEvents, addNotification, currentUser }) {
+  const emptyEventForm = () => ({ title: "", date: today(), time: "09:00", type: "other", note: "" });
+  const eventToForm = (e) => ({
+    title: e.title || "",
+    date: e.date || today(),
+    time: e.time || "09:00",
+    type: e.type || "other",
+    note: e.note || "",
+  });
+
+  const [showAdd, setShowAdd] = useState(false);
+  const [editEventId, setEditEventId] = useState(null);
+  const [form, setForm] = useState(emptyEventForm());
+  const [showAllPast, setShowAllPast] = useState(false);
+
+  if (!hasPermission(currentUser, "calendar")) return <AccessDenied moduleName="Calendar" />;
+
+  const isEditing = editEventId != null;
+  const formOpen = showAdd || isEditing;
+
+  const closeEventForm = () => {
     setShowAdd(false);
-    setForm({ title: "", date: today(), time: "09:00", type: "other", note: "" });
+    setEditEventId(null);
+    setForm(emptyEventForm());
   };
 
-  const deleteEvent = (id) => setEvents(prev => prev.filter(e => e.id !== id));
-  const sorted = [...events].sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`));
-  const todayEvents = sorted.filter(e => e.date === today());
-  const upcoming = sorted.filter(e => e.date > today());
-  const past = sorted.filter(e => e.date < today());
+  const openAddEvent = () => {
+    setEditEventId(null);
+    setForm(emptyEventForm());
+    setShowAdd(true);
+  };
+
+  const openEditEvent = (e) => {
+    setShowAdd(false);
+    setEditEventId(e.id);
+    setForm(eventToForm(e));
+  };
+
+  const saveEvent = () => {
+    const title = form.title?.trim();
+    const date = form.date?.trim();
+    if (!title) {
+      addNotification({ type: "error", title: "Title Required", message: "Enter an event title." });
+      return;
+    }
+    if (!date) {
+      addNotification({ type: "error", title: "Date Required", message: "Choose an event date." });
+      return;
+    }
+    const payload = {
+      title,
+      date,
+      time: form.time || "09:00",
+      type: form.type || "other",
+      note: form.note?.trim() || "",
+    };
+
+    if (isEditing) {
+      setEvents((prev) => prev.map((e) => (
+        String(e.id) === String(editEventId)
+          ? { ...e, ...payload, createdBy: e.createdBy || currentUser?.name || "Staff" }
+          : e
+      )));
+      addNotification({ type: "success", title: "Event Updated", message: `"${title}" saved.` });
+    } else {
+      const ev = { ...payload, id: Date.now(), createdBy: currentUser?.name || "Staff" };
+      setEvents((prev) => [...prev, ev]);
+      addNotification({ type: "info", title: "Event Added", message: `${ev.title} on ${ev.date}` });
+    }
+    closeEventForm();
+  };
+
+  const deleteEvent = (e) => {
+    const label = e.title || "this event";
+    if (!confirm(`Delete "${label}" on ${e.date}? This cannot be undone.`)) return;
+    setEvents((prev) => prev.filter((x) => String(x.id) !== String(e.id)));
+    if (String(editEventId) === String(e.id)) closeEventForm();
+    addNotification({ type: "info", title: "Event Deleted", message: `"${label}" removed.` });
+  };
+
+  const sorted = [...events].sort((a, b) => `${a.date}${a.time || ""}`.localeCompare(`${b.date}${b.time || ""}`));
+  const todayStr = today();
+  const todayEvents = sorted.filter((e) => e.date === todayStr);
+  const upcoming = sorted.filter((e) => e.date > todayStr);
+  const past = sorted.filter((e) => e.date < todayStr);
+  const visiblePast = showAllPast ? past : past.slice(0, 5);
 
   const EventCard = ({ e }) => (
-    <div className={`p-3 rounded-xl border ${eventTypeColor[e.type]} flex items-start justify-between gap-3`}>
-      <div>
+    <div className={`p-3 rounded-xl border ${eventTypeColor[e.type] || eventTypeColor.other} flex items-start justify-between gap-3`}>
+      <div className="min-w-0 flex-1">
         <p className="font-bold text-sm">{e.time && `${e.time} · `}{e.title}</p>
-        <p className="text-xs opacity-70">{e.date}</p>
+        <p className="text-xs opacity-70">{e.date}{e.type ? ` · ${e.type}` : ""}</p>
         {e.note && <p className="text-xs mt-1 opacity-60">{e.note}</p>}
+        {e.createdBy && <p className="text-[10px] mt-1 opacity-50">Added by {e.createdBy}</p>}
       </div>
-      <button onClick={() => deleteEvent(e.id)} className="opacity-50 hover:opacity-100 flex-shrink-0"><X size={12} /></button>
+      <div className="flex flex-col gap-1 shrink-0">
+        <button type="button" onClick={() => openEditEvent(e)} className="opacity-60 hover:opacity-100 touch-manipulation" title="Edit event">
+          <Edit2 size={12} className="text-cyan-400" />
+        </button>
+        <button type="button" onClick={() => deleteEvent(e)} className="opacity-60 hover:opacity-100 touch-manipulation" title="Delete event">
+          <Trash2 size={12} className="text-red-400" />
+        </button>
+      </div>
     </div>
   );
 
@@ -2282,43 +2713,81 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div><h2 className="text-xl sm:text-2xl font-black text-white">Calendar</h2><p className="text-slate-400 text-sm">Events & reminders</p></div>
-        <Btn onClick={() => setShowAdd(true)} className="w-full sm:w-auto justify-center"><Plus size={16} />Add Event</Btn>
+        <Btn onClick={openAddEvent} className="w-full sm:w-auto justify-center"><Plus size={16} />Add Event</Btn>
       </div>
 
-      {todayEvents.length > 0 && (
-        <Card className="p-4 border-cyan-500/30 bg-cyan-500/5">
-          <h3 className="text-sm font-bold text-cyan-400 mb-3 flex items-center gap-2"><Zap size={14} />Today</h3>
-          <div className="space-y-2">{todayEvents.map(e => <EventCard key={e.id} e={e} />)}</div>
+      {events.length === 0 ? (
+        <Card className="p-10 text-center">
+          <Calendar size={40} className="mx-auto text-slate-600 mb-3" />
+          <p className="text-slate-400 text-sm">No events yet — add pond maintenance, feeding, or customer visits.</p>
+          <Btn className="mt-4 mx-auto" onClick={openAddEvent}><Plus size={14} />Add first event</Btn>
         </Card>
+      ) : (
+        <>
+          {todayEvents.length > 0 && (
+            <Card className="p-4 border-cyan-500/30 bg-cyan-500/5">
+              <h3 className="text-sm font-bold text-cyan-400 mb-3 flex items-center gap-2"><Zap size={14} />Today</h3>
+              <div className="space-y-2">{todayEvents.map((e) => <EventCard key={e.id} e={e} />)}</div>
+            </Card>
+          )}
+
+          {upcoming.length > 0 && (
+            <Card className="p-4">
+              <h3 className="text-sm font-bold text-white mb-3">Upcoming</h3>
+              <div className="space-y-2">{upcoming.map((e) => <EventCard key={e.id} e={e} />)}</div>
+            </Card>
+          )}
+
+          {todayEvents.length === 0 && upcoming.length === 0 && past.length === 0 && (
+            <Card className="p-8 text-center text-slate-500 text-sm">No upcoming events.</Card>
+          )}
+
+          {past.length > 0 && (
+            <Card className="p-4">
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <h3 className="text-sm font-bold text-slate-500">Past Events</h3>
+                {past.length > 5 && (
+                  <button type="button" onClick={() => setShowAllPast((v) => !v)} className="text-xs text-cyan-400 hover:text-cyan-300 font-semibold touch-manipulation">
+                    {showAllPast ? "Show less" : `Show all (${past.length})`}
+                  </button>
+                )}
+              </div>
+              <div className="space-y-2 opacity-50">{visiblePast.map((e) => <EventCard key={e.id} e={e} />)}</div>
+            </Card>
+          )}
+        </>
       )}
 
-      {upcoming.length > 0 && (
-        <Card className="p-4">
-          <h3 className="text-sm font-bold text-white mb-3">Upcoming</h3>
-          <div className="space-y-2">{upcoming.map(e => <EventCard key={e.id} e={e} />)}</div>
-        </Card>
-      )}
-
-      {past.length > 0 && (
-        <Card className="p-4">
-          <h3 className="text-sm font-bold text-slate-500 mb-3">Past Events</h3>
-          <div className="space-y-2 opacity-50">{past.slice(0, 5).map(e => <EventCard key={e.id} e={e} />)}</div>
-        </Card>
-      )}
-
-      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Event" size="sm">
+      <Modal
+        open={formOpen}
+        onClose={closeEventForm}
+        title={isEditing ? "Edit Event" : "Add Event"}
+        size="sm"
+      >
         <div className="space-y-4">
-          <Input label="Title" value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} required />
+          <Input label="Title" value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} required />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Input label="Date" type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
-            <Input label="Time" type="time" value={form.time} onChange={e => setForm(f => ({ ...f, time: e.target.value }))} />
+            <Input label="Date" type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} required />
+            <Input label="Time" type="time" value={form.time} onChange={(e) => setForm((f) => ({ ...f, time: e.target.value }))} />
           </div>
-          <Select label="Type" value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))} options={["maintenance", "feeding", "purchase", "customer", "other"]} />
-          <Textarea label="Note" value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} rows={2} />
+          <Select label="Type" value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))} options={EVENT_TYPE_OPTIONS} />
+          <Textarea label="Note" value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} rows={2} />
         </div>
         <div className="modal-actions">
-          <Btn variant="secondary" onClick={() => setShowAdd(false)}>Cancel</Btn>
-          <Btn onClick={addEvent}><Plus size={14} />Add Event</Btn>
+          {isEditing && (
+            <Btn
+              variant="danger"
+              onClick={() => {
+                const e = events.find((x) => String(x.id) === String(editEventId));
+                if (e) deleteEvent(e);
+              }}
+              className="mr-auto"
+            >
+              <Trash2 size={14} />Delete
+            </Btn>
+          )}
+          <Btn variant="secondary" onClick={closeEventForm}>Cancel</Btn>
+          <Btn onClick={saveEvent}><Plus size={14} />{isEditing ? "Save Changes" : "Add Event"}</Btn>
         </div>
       </Modal>
     </div>
@@ -2371,18 +2840,18 @@ function ChangePinModal({ open, onClose, currentUser, users, setUsers, cloudMode
       if (isSupabaseConfigured) {
         await auth.changeMyPin({ currentPin, newPin });
       } else {
-        const me = users.find((u) => u.id === currentUser.id);
+        const me = users.find((u) => String(u.id) === String(currentUser.id));
         if (!me || me.pin !== currentPin) {
           setError("Current PIN is incorrect.");
           setSaving(false);
           return;
         }
-        if (users.some((u) => u.pin === newPin && u.id !== currentUser.id)) {
+        if (users.some((u) => u.pin === newPin && String(u.id) !== String(currentUser.id))) {
           setError("This PIN is already assigned to another user.");
           setSaving(false);
           return;
         }
-        setUsers((prev) => prev.map((u) => (u.id === currentUser.id ? { ...u, pin: newPin } : u)));
+        setUsers((prev) => prev.map((u) => (String(u.id) === String(currentUser.id) ? { ...u, pin: newPin } : u)));
       }
       addNotification({ type: "success", title: "PIN Updated", message: "Your login PIN has been changed successfully." });
       handleClose();
@@ -2489,7 +2958,7 @@ function AiUsageStatsPanel({ isOwner, cloudMode }) {
             </p>
           )}
           <div className="space-y-2 max-h-48 overflow-y-auto">
-            {stats.today.map((row) => (
+            {(stats.today || []).map((row) => (
               <div key={row.userId}>
                 <div className="flex justify-between text-xs mb-0.5">
                   <span className="text-slate-300 truncate">
@@ -2506,7 +2975,7 @@ function AiUsageStatsPanel({ isOwner, cloudMode }) {
                 </p>
               </div>
             ))}
-            {stats.today.every((r) => r.tokens === 0) && (
+            {(stats.today || []).every((r) => r.tokens === 0) && (
               <p className="text-slate-500 text-sm">No AI usage recorded today yet.</p>
             )}
           </div>
@@ -2519,7 +2988,9 @@ function AiUsageStatsPanel({ isOwner, cloudMode }) {
 function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUserUpdate, cloudMode, apiEnabled, onOpenChangePin }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editUser, setEditUser] = useState(null);
+  const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ name: "", role: "staff", pin: "", permissions: [...DEFAULT_PERMISSIONS.staff], active: true });
+  const sameUserId = (a, b) => String(a) === String(b);
 
   if (!hasPermission(currentUser, "users")) return <AccessDenied moduleName="Team & Permissions" />;
 
@@ -2576,16 +3047,21 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
 
     if (editUser) {
       const isLastOwner = editUser.role === "owner" && users.filter((u) => u.role === "owner" && u.active !== false).length === 1;
-      if (isLastOwner && editUser.id === currentUser.id && form.role !== "owner") {
-        addNotification({ type: "error", title: "Cannot Change", message: "You are the only active owner." });
+      if (isLastOwner && form.role !== "owner") {
+        addNotification({ type: "error", title: "Cannot Change", message: "At least one active owner must remain." });
         return;
       }
       if (isLastOwner && !form.permissions.includes("users")) {
         addNotification({ type: "error", title: "Cannot Remove", message: "Last owner must keep Team permission." });
         return;
       }
+      if (editUser.isSystem && form.role !== "owner") {
+        addNotification({ type: "error", title: "Cannot Change", message: "The system owner account must remain an owner." });
+        return;
+      }
     }
 
+    setSaving(true);
     try {
       if (apiEnabled) {
         if (editUser) {
@@ -2599,8 +3075,8 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
           });
           const refreshed = await db.fetchUsers();
           if (refreshed) setUsers(refreshed);
-          else if (saved) setUsers((prev) => prev.map((u) => u.id === saved.id ? saved : u));
-          if (editUser.id === currentUser.id && onCurrentUserUpdate) {
+          else if (saved) setUsers((prev) => prev.map((u) => (sameUserId(u.id, saved.id) ? saved : u)));
+          if (sameUserId(editUser.id, currentUser.id) && onCurrentUserUpdate) {
             onCurrentUserUpdate({
               name: form.name.trim(),
               role: form.role,
@@ -2624,11 +3100,19 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
         }
       } else if (editUser) {
         setUsers((prev) => prev.map((u) => {
-          if (u.id !== editUser.id) return u;
+          if (!sameUserId(u.id, editUser.id)) return u;
           const next = { ...u, name: form.name.trim(), role: form.role, permissions: form.permissions, active: form.active };
           if (pinChanging) next.pin = form.pin;
           return next;
         }));
+        if (sameUserId(editUser.id, currentUser.id) && onCurrentUserUpdate) {
+          onCurrentUserUpdate({
+            name: form.name.trim(),
+            role: form.role,
+            permissions: form.permissions,
+            active: form.active,
+          });
+        }
         addNotification({ type: "success", title: "User Updated", message: `${form.name} saved locally.` });
       } else {
         const newUser = { id: Date.now(), ...form, name: form.name.trim() };
@@ -2639,11 +3123,13 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
       setEditUser(null);
     } catch (err) {
       addNotification({ type: "error", title: editUser ? "Update Failed" : "Add Failed", message: err?.message || "Could not save user to server." });
+    } finally {
+      setSaving(false);
     }
   };
 
   const deleteUser = async (user) => {
-    if (user.id === currentUser.id) {
+    if (sameUserId(user.id, currentUser.id)) {
       addNotification({ type: "error", title: "Cannot Delete", message: "You cannot delete your own account." });
       return;
     }
@@ -2662,9 +3148,9 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
         await db.deleteUser(user.id);
         const data = await db.fetchAllData();
         if (data?.users) setUsers(data.users);
-        else setUsers((prev) => prev.filter((u) => u.id !== user.id));
+        else setUsers((prev) => prev.filter((u) => !sameUserId(u.id, user.id)));
       } else {
-        setUsers((prev) => prev.filter((u) => u.id !== user.id));
+        setUsers((prev) => prev.filter((u) => !sameUserId(u.id, user.id)));
       }
       addNotification({ type: "info", title: "User Removed", message: `${user.name} has been permanently removed.` });
     } catch (err) {
@@ -2673,7 +3159,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
   };
 
   const toggleActive = async (user) => {
-    if (user.id === currentUser.id) {
+    if (sameUserId(user.id, currentUser.id)) {
       addNotification({ type: "error", title: "Cannot Deactivate", message: "You cannot deactivate your own account." });
       return;
     }
@@ -2694,7 +3180,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
         const refreshed = await db.fetchUsers();
         if (refreshed) setUsers(refreshed);
       } else {
-        setUsers((prev) => prev.map((u) => u.id === user.id ? { ...u, active: nextActive } : u));
+        setUsers((prev) => prev.map((u) => (sameUserId(u.id, user.id) ? { ...u, active: nextActive } : u)));
       }
       addNotification({ type: "info", title: nextActive ? "User Activated" : "User Deactivated", message: user.name });
     } catch (err) {
@@ -2730,7 +3216,13 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
       </div>
 
       <div className="space-y-3">
-        {users.map((user) => (
+        {users.length === 0 ? (
+          <Card className="p-10 text-center">
+            <UserCog size={40} className="mx-auto text-slate-600 mb-3" />
+            <p className="text-slate-400 text-sm">No team accounts yet.</p>
+            <Btn className="mt-4 mx-auto" onClick={openAdd}><UserPlus size={14} />Add first user</Btn>
+          </Card>
+        ) : users.map((user) => (
           <Card key={user.id} className={`p-4 ${user.active === false ? "opacity-50" : ""}`}>
             <div className="flex items-start justify-between gap-4 flex-wrap">
               <div className="flex items-center gap-3">
@@ -2740,7 +3232,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
                 <div>
                   <p className="text-white font-bold flex items-center gap-2">
                     {user.name}
-                    {user.id === currentUser.id && <Badge className="bg-cyan-500/20 text-cyan-300">You</Badge>}
+                    {sameUserId(user.id, currentUser.id) && <Badge className="bg-cyan-500/20 text-cyan-300">You</Badge>}
                     {user.active === false && <Badge className="bg-red-500/20 text-red-300">Inactive</Badge>}
                   </p>
                   <p className="text-slate-500 text-xs flex items-center gap-2 mt-0.5">
@@ -2770,7 +3262,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
 
       <Modal open={showAdd} onClose={() => { setShowAdd(false); setEditUser(null); }} title={editUser ? `Edit — ${editUser.name}` : "Add User"} size="lg">
         <div className="space-y-4">
-          {editUser?.id === currentUser.id && (
+          {editUser && sameUserId(editUser.id, currentUser.id) && (
             <div className="bg-cyan-500/10 border border-cyan-500/20 rounded-xl p-3 text-sm text-slate-300">
               To change <span className="text-white font-semibold">your own login PIN</span>, use{" "}
               <button type="button" onClick={() => { setShowAdd(false); setEditUser(null); onOpenChangePin?.(); }}
@@ -2815,7 +3307,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
         </div>
         <div className="modal-actions">
           <Btn variant="secondary" onClick={() => { setShowAdd(false); setEditUser(null); }}>Cancel</Btn>
-          <Btn onClick={saveUser}><Check size={14} />{editUser ? "Save Changes" : "Add User"}</Btn>
+          <Btn onClick={saveUser} disabled={saving}><Check size={14} />{saving ? "Saving..." : editUser ? "Save Changes" : "Add User"}</Btn>
         </div>
       </Modal>
     </div>
@@ -2831,11 +3323,25 @@ const INITIAL_CHAT_MESSAGES = [
   },
 ];
 
+const CHAT_HISTORY_MAX = 50;
+
+function sanitizeChatMessages(parsed) {
+  if (!Array.isArray(parsed)) return null;
+  const clean = parsed
+    .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string" && m.content.trim())
+    .map((m) => ({
+      role: m.role,
+      content: m.content,
+      ...(Array.isArray(m.executed) && m.executed.length ? { executed: m.executed } : {}),
+    }));
+  return clean.length ? clean.slice(-CHAT_HISTORY_MAX) : null;
+}
+
 function loadChatHistory() {
   try {
     const raw = sessionStorage.getItem(CHAT_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
-    return Array.isArray(parsed) && parsed.length ? parsed : INITIAL_CHAT_MESSAGES;
+    return sanitizeChatMessages(parsed) || INITIAL_CHAT_MESSAGES;
   } catch {
     return INITIAL_CHAT_MESSAGES;
   }
@@ -2880,6 +3386,8 @@ function ChatModule({ aiContext, messages, setMessages }) {
   const endRef = useRef(null);
   const warnNotified = useRef(false);
   const limitNotified = useRef(false);
+
+  if (!hasPermission(aiContext.currentUser, "chat")) return <AccessDenied moduleName="AI Chat" />;
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
@@ -2927,24 +3435,46 @@ function ChatModule({ aiContext, messages, setMessages }) {
     }
 
     applyUsageResult(result);
-    setMessages(prev => [...prev, {
+    const replyText = result.text?.trim()
+      || (result.executed?.length
+        ? result.executed.map((a) => (a.success ? `✓ ${a.message || a.name}` : `✗ ${a.error || a.name}`)).join("\n")
+        : "Done.");
+    setMessages((prev) => [...prev.slice(-CHAT_HISTORY_MAX), {
       role: "assistant",
-      content: result.text,
+      content: replyText,
       executed: result.executed?.length ? result.executed : undefined,
     }]);
   };
 
+  const clearChat = () => {
+    if (!confirm("Clear this chat history?")) return;
+    setMessages(INITIAL_CHAT_MESSAGES);
+    setPendingThread(null);
+    setConfirmOpen(false);
+    warnNotified.current = false;
+    limitNotified.current = false;
+  };
+
   const sendMessage = async () => {
-    if (!input.trim() || loading) return;
-    const userMsg = { role: "user", content: input };
-    const thread = [...messages.filter((m) => m.role === "user" || m.role === "assistant"), userMsg];
-    setMessages(prev => [...prev, userMsg]);
+    const text = input.trim();
+    if (!text || loading) return;
+    if (!isSupabaseConfigured) {
+      aiContextRef.current.addNotification?.({
+        type: "error",
+        title: "AI Chat Unavailable",
+        message: "Supabase and gemini-chat must be configured for AI Chat.",
+      });
+      return;
+    }
+    const userMsg = { role: "user", content: text };
+    const thread = [...messages.filter((m) => m.role === "user" || m.role === "assistant"), userMsg].slice(-CHAT_HISTORY_MAX);
+    setMessages((prev) => [...prev.slice(-CHAT_HISTORY_MAX - 1), userMsg]);
     setInput("");
     setLoading(true);
     try {
       await runChat(thread);
     } catch (err) {
-      setMessages(prev => [...prev, { role: "assistant", content: err?.message || "Connection error. Please log in and try again." }]);
+      setMessages((prev) => [...prev, { role: "assistant", content: err?.message || "Connection error. Please log in and try again." }]);
     }
     setLoading(false);
   };
@@ -2965,8 +3495,20 @@ function ChatModule({ aiContext, messages, setMessages }) {
   return (
     <div className="flex flex-col h-[calc(100dvh-12rem)] sm:h-[calc(100vh-180px)] min-h-[320px]">
       <div className="mb-3 sm:mb-4">
-        <h2 className="text-xl sm:text-2xl font-black text-white">AI Assistant</h2>
-        <p className="text-slate-400 text-sm">Powered by Gemini · {formatTokens(AI_DAILY_FREE_TOKENS)} free tokens/day</p>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="text-xl sm:text-2xl font-black text-white">AI Assistant</h2>
+            <p className="text-slate-400 text-sm">Powered by Gemini · {formatTokens(AI_DAILY_FREE_TOKENS)} free tokens/day</p>
+          </div>
+          <Btn variant="secondary" size="sm" onClick={clearChat} className="w-full sm:w-auto justify-center shrink-0">
+            <Trash2 size={14} />Clear chat
+          </Btn>
+        </div>
+        {!isSupabaseConfigured && (
+          <Card className="mt-3 p-3 border-amber-500/30 bg-amber-500/10 text-amber-200 text-xs">
+            AI Chat requires Supabase. Configure VITE_SUPABASE_URL and deploy the gemini-chat edge function.
+          </Card>
+        )}
         <AiUsageBar usage={usage} />
       </div>
 
@@ -2985,7 +3527,7 @@ function ChatModule({ aiContext, messages, setMessages }) {
       <Card className="flex-1 overflow-hidden flex flex-col min-h-0">
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {messages.map((m, i) => (
-            <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+            <div key={`${m.role}-${i}-${m.content.slice(0, 24)}`} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
               {m.role === "assistant" && (
                 <AppLogo size="sm" className="mr-2 mt-1 ring-1 ring-slate-600" />
               )}
@@ -3017,15 +3559,32 @@ function ChatModule({ aiContext, messages, setMessages }) {
         <div className="border-t border-slate-700 p-4">
           <div className="flex gap-3 flex-wrap mb-2">
             {["Who hasn't paid yet?", "Pellets came in, add 20kg", "Sarah paid already", "What's running low?"].map(q => (
-              <button key={q} onClick={() => setInput(q)}
-                className="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-full transition-colors">{q}</button>
+              <button
+                key={q}
+                type="button"
+                disabled={loading}
+                onClick={() => setInput(q)}
+                className="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-full transition-colors disabled:opacity-40"
+              >
+                {q}
+              </button>
             ))}
           </div>
           <div className="flex gap-2">
-            <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && !e.shiftKey && sendMessage()}
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  sendMessage();
+                }
+              }}
               placeholder="Ask a question..."
-              className="flex-1 min-w-0 bg-slate-900/50 border border-slate-600 rounded-xl px-4 py-3 text-white text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/50" />
-            <Btn onClick={sendMessage} disabled={loading || !input.trim()} className="px-4 py-3 min-w-[48px] justify-center shrink-0"><Send size={16} /></Btn>
+              disabled={loading}
+              className="flex-1 min-w-0 bg-slate-900/50 border border-slate-600 rounded-xl px-4 py-3 text-white text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/50 disabled:opacity-60"
+            />
+            <Btn onClick={sendMessage} disabled={loading || !input.trim() || !isSupabaseConfigured} className="px-4 py-3 min-w-[48px] justify-center shrink-0"><Send size={16} /></Btn>
           </div>
         </div>
       </Card>
@@ -3202,7 +3761,7 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState(loadChatHistory);
 
   useEffect(() => {
-    sessionStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatMessages));
+    sessionStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatMessages.slice(-CHAT_HISTORY_MAX)));
   }, [chatMessages]);
 
   const handleKoiSold = useCallback((koi, customer, soldPrice, soldDate, options = {}) => {
@@ -3231,7 +3790,7 @@ export default function App() {
       pondName: keepPondName,
       purchaseDate: soldDate || today(),
       purchasePrice: soldPrice,
-      status: "in_pond",
+      status: CUSTOMER_KOI_STATUS.IN_POND,
       collectedDate: null,
       notes: `Purchased from Marugen Farm. Kept at ${keepPondName}. Original KOI ID: ${koi.id}`,
       deathDate: null,
@@ -3314,7 +3873,29 @@ export default function App() {
   };
 
   const handleUserUpdate = (updatedFields) => {
-    setCurrentUser((prev) => prev ? { ...prev, ...updatedFields, displayName: updatedFields.role === "owner" ? `🐟 ${updatedFields.name}` : `👤 ${updatedFields.name}` } : prev);
+    setCurrentUser((prev) => {
+      if (!prev) return prev;
+      const role = updatedFields.role ?? prev.role;
+      const name = updatedFields.name ?? prev.name;
+      const next = {
+        ...prev,
+        ...updatedFields,
+        displayName: role === "owner" ? `🐟 ${name}` : `👤 ${name}`,
+      };
+      const session = auth.getSession();
+      if (session?.token && session.user) {
+        auth.setSession({
+          token: session.token,
+          user: {
+            ...session.user,
+            name: next.name,
+            role: next.role,
+            permissions: next.permissions,
+          },
+        });
+      }
+      return next;
+    });
   };
 
   if (!dataReady) {

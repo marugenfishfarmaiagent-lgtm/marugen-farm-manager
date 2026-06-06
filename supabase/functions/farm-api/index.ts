@@ -136,8 +136,13 @@ Deno.serve(async (req) => {
       ].map((r) => r.error).filter(Boolean);
       if (errors.length) return jsonResponse({ error: errors[0]!.message }, 500);
 
+      const canManageUsers = hasPermission(user, "users");
+      const usersPayload = canManageUsers
+        ? (users.data || [])
+        : (users.data || []).filter((u) => Number(u.id) === Number(user.id));
+
       return jsonResponse({
-        users: mapUsers(users.data || []),
+        users: mapUsers(usersPayload),
         customers: customers.data || [],
         products: products.data || [],
         invoices: invoices.data || [],
@@ -219,13 +224,16 @@ Deno.serve(async (req) => {
         })), "id");
       } else if (entity === "deliveries") {
         await upsertSync("deliveries", (data || []).map((d: Record<string, unknown>) => ({
-          id: d.id, invoice_id: d.invoiceId ?? "", customer_id: d.customerId, customer_name: d.customerName, area: d.area,
+          id: d.id, invoice_id: d.invoiceId ?? "",
+          customer_id: d.customerId != null && d.customerId !== "" ? d.customerId : null,
+          customer_name: d.customerName, area: d.area,
           postal_code: d.postalCode, address: d.address, schedule: d.schedule, status: d.status, items: d.items,
-          driver: d.driver, notes: d.notes,
+          driver: d.driver, notes: d.notes, created_by: d.createdBy ?? "",
         })), "id");
       } else if (entity === "events") {
         await upsertSync("events", (data || []).map((e: Record<string, unknown>) => ({
           id: e.id, title: e.title, date: e.date, time: e.time, type: e.type, note: e.note,
+          created_by: e.createdBy ?? "",
         })), "id");
       } else if (entity === "stock_activity") {
         await upsertSync("stock_activity", (data || []).map((l: Record<string, unknown>) => ({
@@ -305,12 +313,12 @@ Deno.serve(async (req) => {
         await db.from("deliveries").insert(seed.deliveries.map((d: Record<string, unknown>) => ({
           id: d.id, customer_id: d.customerId, customer_name: d.customerName, area: d.area,
           postal_code: d.postalCode, address: d.address, schedule: d.schedule, status: d.status, items: d.items,
-          driver: d.driver, notes: d.notes,
+          driver: d.driver, notes: d.notes, created_by: d.createdBy ?? "",
         })));
       }
       if (seed?.events?.length) {
         await db.from("events").insert(seed.events.map((e: Record<string, unknown>) => ({
-          title: e.title, date: e.date, time: e.time, type: e.type, note: e.note,
+          title: e.title, date: e.date, time: e.time, type: e.type, note: e.note, created_by: e.createdBy ?? "",
         })));
       }
       return jsonResponse({ ok: true });
@@ -360,13 +368,18 @@ Deno.serve(async (req) => {
         .maybeSingle();
       if (fetchErr || !target) return jsonResponse({ error: "User not found" }, 404);
 
-      if (target.role === "owner" && target.active !== false && role !== "owner") {
+      if (target.role === "owner" && target.active !== false) {
         const { count } = await db.from("farm_users")
           .select("*", { count: "exact", head: true })
           .eq("role", "owner")
           .eq("active", true);
         if ((count || 0) <= 1) {
-          return jsonResponse({ error: "At least one active owner is required" }, 400);
+          if (role !== "owner") {
+            return jsonResponse({ error: "At least one active owner is required" }, 400);
+          }
+          if (!permissions?.includes("users")) {
+            return jsonResponse({ error: "Last owner must keep Team permission" }, 400);
+          }
         }
       }
 

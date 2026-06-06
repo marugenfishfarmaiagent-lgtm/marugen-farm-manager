@@ -104,7 +104,7 @@ export function buildDeliveryWhatsAppRecipients(delivery, customers = [], groups
   )
 
   for (const c of customers) {
-    if (deliveryCustomer && c.id === deliveryCustomer.id) continue
+    if (deliveryCustomer && String(c.id) === String(deliveryCustomer.id)) continue
     pushPhone(`customer-${c.id}`, c.name, c.whatsapp || c.phone, c.area || 'Customer contact')
   }
 

@@ -1,5 +1,6 @@
 import {
-  calcCustomerTier, EXPENSE_CATEGORIES, formatSGD, genId, genInvoiceId, getInvoiceStatus, today,
+  calcCustomerTier, customerDeliveryFields, EXPENSE_CATEGORIES, formatSGD, genId, genInvoiceId,
+  getInvoiceStatus, today,
 } from '../data/constants'
 import { calcInvoiceAmounts } from './invoiceDesign'
 import { formatCustomerAddress, resolveInvoiceCustomer } from './invoiceWhatsApp'
@@ -266,11 +267,12 @@ Products (use these prices when billing): ${products.map((p) => `${p.name} S$${p
 
 Invoices — pending: ${pending.map((i) => `${i.id} ${i.customerName} ${formatSGD(i.total)}`).join('; ') || 'none'}
 Invoices — overdue: ${overdue.map((i) => `${i.id} ${i.customerName}`).join('; ') || 'none'}
-Revenue (paid): ${formatSGD(paid.reduce((s, i) => s + i.total, 0))} | Expenses: ${formatSGD(expenses.reduce((s, e) => s + e.amount, 0))}
+Revenue (paid): ${formatSGD(paid.reduce((s, i) => s + i.total, 0))} | Expense receipts: ${expenses.length}
 
 Low stock: ${lowStock.length ? lowStock.map((p) => p.name).join(', ') : 'none'}
 Active deliveries: ${deliveries.filter((d) => d.status === 'scheduled' || d.status === 'transit').map((d) => `${d.id} ${d.customerName} ${d.schedule}`).join('; ') || 'none'}
-Events: ${events.slice(0, 6).map((e) => `${e.title} (${e.date})`).join('; ') || 'none'}
+Today's events: ${events.filter((e) => e.date === now).map((e) => `${e.time || ''} ${e.title}`.trim()).join('; ') || 'none'}
+Upcoming events: ${events.filter((e) => e.date > now).slice(0, 6).map((e) => `${e.title} (${e.date})`).join('; ') || 'none'}
 
 Fish expertise: Koi care, Arowana care, Singapore areas, pond management.`
 }
@@ -312,6 +314,13 @@ export function executeAiAction(name, args, ctx) {
           const d = today()
           data.todayDeliveries = ctx.deliveries.filter((x) => x.schedule?.startsWith(d))
         }
+        if (q === 'summary' || q === 'today_events') {
+          const d = today()
+          data.todayEvents = ctx.events
+            .filter((x) => x.date === d)
+            .sort((a, b) => `${a.time || ''}`.localeCompare(`${b.time || ''}`))
+            .map((x) => ({ title: x.title, time: x.time, type: x.type, note: x.note }))
+        }
         if (q === 'summary' || q === 'customers') {
           data.customers = ctx.customers.map((c) => ({ name: c.name, tier: c.tier, area: c.area }))
         }
@@ -322,10 +331,23 @@ export function executeAiAction(name, args, ctx) {
           data.totals = {
             customers: ctx.customers.length,
             revenue: ctx.invoices.filter((i) => i.status === 'paid').reduce((s, i) => s + i.total, 0),
-            expenses: ctx.expenses.reduce((s, e) => s + e.amount, 0),
+            expenseReceipts: ctx.expenses.length,
           }
         }
-        return { success: true, data }
+        const summaryParts = []
+        if (data.lowStock?.length) summaryParts.push(`Low stock: ${data.lowStock.map((p) => p.name).join(', ')}`)
+        if (data.pendingInvoices?.length) summaryParts.push(`${data.pendingInvoices.length} pending invoice(s)`)
+        if (data.overdueInvoices?.length) summaryParts.push(`${data.overdueInvoices.length} overdue invoice(s)`)
+        if (data.todayDeliveries?.length) summaryParts.push(`${data.todayDeliveries.length} delivery(ies) today`)
+        if (data.todayEvents?.length) summaryParts.push(`${data.todayEvents.length} event(s) today`)
+        if (data.totals) {
+          summaryParts.push(`${data.totals.customers} customers, ${formatSGD(data.totals.revenue)} paid revenue`)
+        }
+        return {
+          success: true,
+          data,
+          message: summaryParts.length ? summaryParts.join(' · ') : `Loaded ${q} data`,
+        }
       }
 
       case 'create_invoice': {
@@ -457,12 +479,21 @@ export function executeAiAction(name, args, ctx) {
         }
         const customer = findCustomer(ctx, customerName)
         const displayName = customer?.name || customerName
+        const fromCustomer = customerDeliveryFields(customer)
+        const address = (a.address || fromCustomer.address || '').trim()
+        if (!address) {
+          return {
+            success: false,
+            error: 'Need a delivery address — add it to the customer profile or include it in your message.',
+          }
+        }
         const d = {
           id: genId('DEL'),
-          customerId: customer?.id || '',
+          customerId: fromCustomer.customerId || null,
           customerName: displayName,
-          area: a.area || customer?.area || 'Tampines',
-          address: a.address,
+          area: a.area || fromCustomer.area || 'Tampines',
+          postalCode: a.postalCode || fromCustomer.postalCode || '',
+          address,
           schedule: a.schedule,
           status: 'scheduled',
           items: a.items || '',
@@ -484,7 +515,7 @@ export function executeAiAction(name, args, ctx) {
         if (!['scheduled', 'transit', 'delivered', 'cancelled'].includes(status)) {
           return { success: false, error: `Unknown status: ${a.status}` }
         }
-        ctx.setDeliveries((prev) => prev.map((d) => (d.id === del.id ? { ...d, status } : d)))
+        ctx.setDeliveries((prev) => prev.map((d) => (String(d.id) === String(del.id) ? { ...d, status } : d)))
         if (status === 'delivered') {
           addNotification?.({ type: 'success', title: 'Delivery Completed (AI)', message: `${del.id} delivered` })
         }
@@ -503,6 +534,7 @@ export function executeAiAction(name, args, ctx) {
           time: a.time || '09:00',
           type: a.type || 'other',
           note: a.note || '',
+          createdBy: currentUser.name,
         }
         ctx.setEvents((prev) => [...prev, ev])
         addNotification?.({ type: 'info', title: 'Event Added (AI)', message: title })

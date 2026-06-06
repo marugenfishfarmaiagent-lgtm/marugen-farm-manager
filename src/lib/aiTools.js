@@ -7,8 +7,8 @@ export const AI_TOOL_DEFINITIONS = [
       properties: {
         section: {
           type: 'string',
-          enum: ['dashboard', 'inventory', 'invoices', 'customers', 'expenses', 'deliveries', 'calendar'],
-          description: 'dashboard=home/overview, inventory=stock/products, invoices=billing, customers=CRM, expenses=costs, deliveries=shipping, calendar=events',
+          enum: ['dashboard', 'inventory', 'koifish', 'customerkoi', 'ponds', 'invoices', 'customers', 'expenses', 'deliveries', 'calendar', 'chat'],
+          description: 'dashboard=home; inventory=stock; koifish/customerkoi=fish; ponds=pond mgmt; invoices/customers/expenses/deliveries/calendar; chat=this assistant',
         },
       },
       required: ['section'],
@@ -22,8 +22,8 @@ export const AI_TOOL_DEFINITIONS = [
       properties: {
         query: {
           type: 'string',
-          enum: ['summary', 'low_stock', 'pending_invoices', 'overdue_invoices', 'today_deliveries', 'customers', 'products'],
-          description: 'low_stock=items below minimum; pending_invoices=unpaid bills; overdue_invoices=late payments',
+          enum: ['summary', 'low_stock', 'pending_invoices', 'overdue_invoices', 'today_deliveries', 'today_events', 'customers', 'products'],
+          description: 'low_stock=items below minimum; pending_invoices=unpaid bills; overdue_invoices=late payments; today_events=calendar for today',
         },
       },
       required: ['query'],

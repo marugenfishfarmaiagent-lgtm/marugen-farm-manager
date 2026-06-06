@@ -1,7 +1,12 @@
+const MAX_RECEIPT_BYTES = 10 * 1024 * 1024
+
 /** Resize and compress receipt photos for local / cloud storage. */
 export async function compressReceiptImage(file, { maxWidth = 1400, quality = 0.82 } = {}) {
   if (!file?.type?.startsWith('image/')) {
     throw new Error('Please choose an image file (JPG, PNG, etc.).')
+  }
+  if (file.size > MAX_RECEIPT_BYTES) {
+    throw new Error('Image is too large. Please use a photo under 10 MB.')
   }
 
   const bitmap = await createImageBitmap(file)

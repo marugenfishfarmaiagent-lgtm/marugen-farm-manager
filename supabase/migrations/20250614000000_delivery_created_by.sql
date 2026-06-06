@@ -1,0 +1,1 @@
+ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS created_by TEXT DEFAULT '';

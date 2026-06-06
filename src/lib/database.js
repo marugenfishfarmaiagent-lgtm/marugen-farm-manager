@@ -85,7 +85,7 @@ function mapDelivery(row) {
   return {
     id: row.id,
     invoiceId: row.invoice_id ?? row.invoiceId ?? '',
-    customerId: row.customer_id ?? row.customerId,
+    customerId: row.customer_id ?? row.customerId ?? null,
     customerName: row.customer_name ?? row.customerName,
     area: row.area,
     postalCode: row.postal_code ?? row.postalCode ?? '',
@@ -95,6 +95,7 @@ function mapDelivery(row) {
     items: row.items || '',
     driver: row.driver || '',
     notes: row.notes || '',
+    createdBy: row.created_by ?? row.createdBy ?? '',
   }
 }
 
@@ -106,6 +107,7 @@ function mapEvent(row) {
     time: row.time,
     type: row.type,
     note: row.note || '',
+    createdBy: row.created_by ?? row.createdBy ?? '',
   }
 }
 

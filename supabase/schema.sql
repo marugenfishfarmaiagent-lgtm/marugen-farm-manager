@@ -92,7 +92,8 @@ CREATE TABLE IF NOT EXISTS deliveries (
   status TEXT DEFAULT 'scheduled',
   items TEXT DEFAULT '',
   driver TEXT DEFAULT '',
-  notes TEXT DEFAULT ''
+  notes TEXT DEFAULT '',
+  created_by TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -101,7 +102,8 @@ CREATE TABLE IF NOT EXISTS events (
   date DATE,
   time TEXT,
   type TEXT DEFAULT 'other',
-  note TEXT DEFAULT ''
+  note TEXT DEFAULT '',
+  created_by TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS stock_activity (

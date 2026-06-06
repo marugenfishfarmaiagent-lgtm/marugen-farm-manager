@@ -70,7 +70,7 @@ export async function sendChatMessage({
     const data = await callGeminiChat({
       systemPrompt,
       messages: thread,
-      tools: round === 0 ? tools : undefined,
+      tools,
       confirmOverage: round === 0 ? confirmOverage : true,
     })
 

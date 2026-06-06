@@ -162,7 +162,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
     if (selectedCustomerId !== 'all' && String(r.customerId) !== String(selectedCustomerId)) return false
     if (statusFilter !== 'all' && r.status !== statusFilter) return false
     const q = search.toLowerCase()
-    return !q || [r.fishName, r.customerName, r.pondName, r.variety, formatCustomerKoiStatus(r.status)].some((x) => String(x || '').toLowerCase().includes(q))
+    return !q || [r.fishName, r.customerName, r.pondName, r.variety, r.koiId, formatCustomerKoiStatus(r.status)].some((x) => String(x || '').toLowerCase().includes(q))
   })
 
   const stats = useMemo(() => ({
@@ -189,6 +189,10 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
     }
     if (form.status === CUSTOMER_KOI_STATUS.IN_POND && !form.pondName?.trim()) {
       addNotification({ type: 'error', title: 'Pond Required', message: 'Enter which pond the koi is in.' })
+      return
+    }
+    if (+form.purchasePrice < 0) {
+      addNotification({ type: 'error', title: 'Invalid Price', message: 'Sale price cannot be negative.' })
       return
     }
     if (form.koiId) {
@@ -233,7 +237,11 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       addNotification({ type: 'error', title: 'Pond Required', message: 'Enter which pond the koi is in.' })
       return
     }
-    const updated = {
+    if (+editRec.purchasePrice < 0) {
+      addNotification({ type: 'error', title: 'Invalid Price', message: 'Sale price cannot be negative.' })
+      return
+    }
+    let updated = {
       ...editRec,
       fishName: editRec.fishName?.trim() || '',
       size: sizeCm,
@@ -242,6 +250,18 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       collectedDate: editRec.status === CUSTOMER_KOI_STATUS.COLLECTED
         ? (editRec.collectedDate || today())
         : null,
+    }
+    if (updated.status !== CUSTOMER_KOI_STATUS.DECEASED) {
+      updated = {
+        ...updated,
+        deathDate: null,
+        deathCause: null,
+        deathPhoto: null,
+        deathNotes: '',
+      }
+    }
+    if (updated.status === CUSTOMER_KOI_STATUS.COLLECTED && !updated.collectedDate) {
+      updated.collectedDate = today()
     }
     setRecords((prev) => prev.map((r) => (r.id === editRec.id ? updated : r)))
     addNotification({ type: 'success', title: 'Updated', message: `${displayFishName(updated)} — ${formatCustomerKoiStatus(updated.status)}` })
@@ -271,6 +291,17 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
   }
 
   const linkFarmKoi = (koi) => {
+    const duplicate = records.find(
+      (r) => r.koiId === koi.id && r.status !== CUSTOMER_KOI_STATUS.DECEASED,
+    )
+    if (duplicate) {
+      addNotification({
+        type: 'warning',
+        title: 'Already Tracked',
+        message: `${koi.id} is already in Customer Koi for ${duplicate.customerName}.`,
+      })
+      return
+    }
     const buyer = koi.soldTo
       ? customers.find((c) => String(c.id) === String(koi.soldTo))
       : null
@@ -374,9 +405,23 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
         <div className="flex-1 min-w-0 space-y-4">
           {selectedCustomerId === 'all' ? (
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-              {[['Total', stats.total], ['In pond', stats.inPond], ['Taken away', stats.collected], ['Deceased', stats.deceased], ['Top variety', stats.topVariety]].map(([l, v]) => (
-                <Card key={l} className="p-4"><p className="text-slate-500 text-xs">{l}</p><p className="text-white font-black text-lg">{v}</p></Card>
+              {[
+                ['all', 'Total', stats.total, 'text-white'],
+                [CUSTOMER_KOI_STATUS.IN_POND, 'In pond', stats.inPond, 'text-emerald-400'],
+                [CUSTOMER_KOI_STATUS.COLLECTED, 'Taken away', stats.collected, 'text-blue-400'],
+                [CUSTOMER_KOI_STATUS.DECEASED, 'Deceased', stats.deceased, 'text-slate-400'],
+              ].map(([value, label, count, color]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setStatusFilter(value)}
+                  className={`p-4 rounded-xl border text-left transition-colors touch-manipulation ${statusFilter === value ? 'border-cyan-500/50 bg-cyan-500/10' : 'border-slate-700/50 bg-slate-800/40 hover:bg-slate-800'}`}
+                >
+                  <p className="text-slate-500 text-xs">{label}</p>
+                  <p className={`font-black text-lg ${color}`}>{count}</p>
+                </button>
               ))}
+              <Card className="p-4"><p className="text-slate-500 text-xs">Top variety</p><p className="text-white font-black text-lg truncate">{stats.topVariety}</p></Card>
             </div>
           ) : selectedCustomer && (
             <div className="flex flex-wrap items-center gap-2">
@@ -403,7 +448,11 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {filteredRecords.length === 0 ? <Card className="p-8 text-center text-slate-500 md:col-span-2">No koi records</Card> : filteredRecords.map((r) => (
+            {filteredRecords.length === 0 ? (
+              <Card className="p-8 text-center text-slate-500 md:col-span-2">
+                {records.length === 0 ? 'No customer koi records — tap Add Koi Record to get started.' : 'No records match your search or filters.'}
+              </Card>
+            ) : filteredRecords.map((r) => (
               <Card key={r.id} className={`overflow-hidden ${STATUS_STYLE[r.status]?.border || ''}`}>
                 <div className="aspect-video bg-slate-900 relative">
                   {r.photo ? <img src={r.photo} alt="" className={`w-full h-full object-cover ${r.status === CUSTOMER_KOI_STATUS.DECEASED ? 'grayscale' : ''}`} /> : <div className="w-full h-full flex items-center justify-center"><Fish size={40} className="text-slate-600" /></div>}
@@ -442,8 +491,14 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
 
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Customer Koi" size="lg">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Select label="Customer" value={form.customerId} onChange={(e) => setForm((f) => ({ ...f, customerId: e.target.value }))} required className="sm:col-span-2"
-            options={[{ value: '', label: '-- Select --' }, ...customers.map((c) => ({ value: String(c.id), label: c.name }))]} />
+          {customers.length === 0 ? (
+            <p className="text-amber-300 text-sm bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 sm:col-span-2">
+              No customers yet. Add a customer first before tracking customer koi.
+            </p>
+          ) : (
+            <Select label="Customer" value={form.customerId} onChange={(e) => setForm((f) => ({ ...f, customerId: e.target.value }))} required className="sm:col-span-2"
+              options={[{ value: '', label: '-- Select --' }, ...customers.map((c) => ({ value: String(c.id), label: c.name }))]} />
+          )}
           <PhotoPicker photo={form.photo} onPick={(p) => setForm((f) => ({ ...f, photo: p }))} />
           <Input label="Fish name (optional)" value={form.fishName} onChange={(e) => setForm((f) => ({ ...f, fishName: e.target.value }))} placeholder="Leave blank to use variety" />
           <Select label="Variety" value={form.variety} onChange={(e) => setForm((f) => ({ ...f, variety: e.target.value }))} options={KOI_VARIETIES.map((v) => ({ value: v, label: v }))} required />
@@ -470,7 +525,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
         </div>
         <div className="modal-actions mt-4 flex justify-end gap-2">
           <Btn variant="secondary" onClick={() => setShowAdd(false)}>Cancel</Btn>
-          <Btn onClick={saveRecord}>Save</Btn>
+          <Btn onClick={saveRecord} disabled={customers.length === 0}>Save</Btn>
         </div>
       </Modal>
 
@@ -479,7 +534,14 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
           <>
             <PhotoPicker photo={editRec.photo} onPick={(p) => setEditRec((r) => ({ ...r, photo: p }))} />
             <Input label="Fish name (optional)" value={editRec.fishName} onChange={(e) => setEditRec((r) => ({ ...r, fishName: e.target.value }))} className="mt-3" placeholder="Leave blank to use variety" />
+            <Select label="Variety" value={editRec.variety} onChange={(e) => setEditRec((r) => ({ ...r, variety: e.target.value }))} className="mt-3"
+              options={KOI_VARIETIES.map((v) => ({ value: v, label: v }))} />
             <Input label="Size (cm, optional)" type="number" value={editRec.size ?? ''} onChange={(e) => setEditRec((r) => ({ ...r, size: e.target.value }))} min="1" step="0.1" className="mt-3" placeholder="e.g. 35" />
+            <Input label="Purchase / sold date" type="date" value={editRec.purchaseDate || today()} onChange={(e) => setEditRec((r) => ({ ...r, purchaseDate: e.target.value }))} className="mt-3" />
+            <Input label="Sale price (S$)" type="number" value={editRec.purchasePrice} onChange={(e) => setEditRec((r) => ({ ...r, purchasePrice: e.target.value }))} step="0.01" className="mt-3" />
+            {editRec.koiId && (
+              <p className="text-cyan-400 text-xs font-mono mt-3">Koi Code: {editRec.koiId}</p>
+            )}
             <Select label="Status" value={editRec.status} onChange={(e) => setEditRec((r) => ({ ...r, status: e.target.value }))} className="mt-3"
               options={editRec.status === CUSTOMER_KOI_STATUS.DECEASED
                 ? CUSTOMER_KOI_STATUS_OPTIONS
