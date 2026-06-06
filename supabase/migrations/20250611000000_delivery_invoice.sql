@@ -1,0 +1,1 @@
+ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS invoice_id TEXT DEFAULT '';

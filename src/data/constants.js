@@ -20,12 +20,35 @@ export const SG_AREAS = [
 
 export const PAYNOW_UEN = '53468842B'
 
+export const INVOICE_COMPANY = {
+  name: 'Marugen Koi Farm',
+  address: '21 Neo Tiew Lane 1, Singapore 718788',
+  phone: '+65 9745 9730',
+  email: 'koi@marugenfishfarm.com',
+  website: 'marugenfishfarm.com',
+}
+
+export function formatInvoiceDate(dateStr) {
+  if (!dateStr) return '—'
+  const d = new Date(`${dateStr}T12:00:00`)
+  if (Number.isNaN(d.getTime())) return dateStr
+  return d.toLocaleDateString('en-SG', { day: 'numeric', month: 'long', year: 'numeric' })
+}
+
+export function formatInvoiceMoney(v) {
+  return Number(v).toLocaleString('en-SG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
 export const ALL_PERMISSIONS = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'inventory', label: 'Inventory' },
+  { id: 'koifish', label: 'Koi Fish' },
+  { id: 'customerkoi', label: 'Customer Koi' },
+  { id: 'ponds', label: 'Pond Management' },
   { id: 'invoices', label: 'Invoices' },
   { id: 'customers', label: 'Customers' },
   { id: 'expenses', label: 'Expenses' },
+  { id: 'accounting', label: 'Accounting marks' },
   { id: 'deliveries', label: 'Deliveries' },
   { id: 'calendar', label: 'Calendar' },
   { id: 'chat', label: 'AI Chat' },
@@ -34,7 +57,147 @@ export const ALL_PERMISSIONS = [
 
 export const DEFAULT_PERMISSIONS = {
   owner: ALL_PERMISSIONS.map((p) => p.id),
-  staff: ['dashboard', 'inventory', 'invoices', 'customers', 'deliveries', 'calendar', 'chat'],
+  staff: ['dashboard', 'inventory', 'koifish', 'customerkoi', 'ponds', 'invoices', 'customers', 'deliveries', 'calendar', 'chat'],
+}
+
+export const KOI_VARIETIES = [
+  'Kohaku', 'Sanke', 'Showa', 'Butterfly Koi', 'Ghost Koi', 'Ogon', 'Tancho', 'Utsuri',
+  'Bekko', 'Asagi', 'Shusui', 'Goshiki',
+]
+
+export const KOI_GRADES = ['A Grade', 'B Grade', 'C Grade', 'Show Grade', 'Jumbo']
+
+/** Fish length in cm — stored as number; legacy inch-range strings still display as-is. */
+export function normalizeKoiSizeCm(value) {
+  const n = parseFloat(value)
+  if (Number.isNaN(n) || n <= 0) return null
+  return Math.round(n * 10) / 10
+}
+
+export function formatKoiSize(size) {
+  if (size == null || size === '') return '—'
+  const n = Number(size)
+  if (!Number.isNaN(n) && n > 0) return `${n} cm`
+  return String(size)
+}
+
+export const KOI_STATUS = {
+  AVAILABLE: 'available',
+  SOLD: 'sold',
+  RESERVED: 'reserved',
+  SICK: 'sick',
+  DECEASED: 'deceased',
+}
+
+export const KOI_DEATH_CAUSES = [
+  'Unknown', 'Disease', 'Water quality', 'Age', 'Injury', 'Parasite', 'Bacterial infection', 'Other',
+]
+
+export const CUSTOMER_KOI_DEATH_CAUSES = [
+  'Unknown', 'Disease', 'Water quality issue', 'Old age', 'Injury', 'Parasite', 'Jumping out', 'Predator', 'Other',
+]
+
+/** Sold koi custody: held in a pond, taken away by customer, or deceased. */
+export const CUSTOMER_KOI_STATUS = {
+  IN_POND: 'in_pond',
+  COLLECTED: 'collected',
+  DECEASED: 'deceased',
+}
+
+export const CUSTOMER_KOI_STATUS_OPTIONS = [
+  { value: CUSTOMER_KOI_STATUS.IN_POND, label: 'In pond' },
+  { value: CUSTOMER_KOI_STATUS.COLLECTED, label: 'Taken away' },
+  { value: CUSTOMER_KOI_STATUS.DECEASED, label: 'Deceased' },
+]
+
+export function normalizeCustomerKoiStatus(status) {
+  if (status === 'alive' || !status) return CUSTOMER_KOI_STATUS.IN_POND
+  return status
+}
+
+export function formatCustomerKoiStatus(status) {
+  const normalized = normalizeCustomerKoiStatus(status)
+  return CUSTOMER_KOI_STATUS_OPTIONS.find((o) => o.value === normalized)?.label || '—'
+}
+
+export function normalizeCustomerKoiRecord(record) {
+  if (!record) return record
+  return {
+    ...record,
+    status: normalizeCustomerKoiStatus(record.status),
+    collectedDate: record.collectedDate || null,
+    pondName: record.pondName || '',
+    deathDate: record.deathDate || null,
+    deathCause: record.deathCause || null,
+    deathPhoto: record.deathPhoto || null,
+    deathNotes: record.deathNotes || null,
+  }
+}
+
+export const FARM_POND_GROUPS = [
+  { label: 'A', count: 8 },
+  { label: 'B', count: 8 },
+  { label: 'C', count: 4 },
+  { label: 'D', count: 4 },
+  { label: 'Q', count: 14 },
+]
+
+export const FARM_POND_NAMES = FARM_POND_GROUPS.flatMap(({ label, count }) =>
+  Array.from({ length: count }, (_, i) => `${label}${i + 1}`),
+)
+
+/** Standard farm ponds first, then any custom names from data. */
+export function mergePondNames(...lists) {
+  const seen = new Set()
+  const out = []
+  for (const list of lists) {
+    for (const name of list) {
+      const n = String(name || '').trim()
+      if (!n || seen.has(n)) continue
+      seen.add(n)
+      out.push(n)
+    }
+  }
+  const order = new Map(FARM_POND_NAMES.map((n, i) => [n, i]))
+  return out.sort((a, b) => {
+    const oa = order.has(a) ? order.get(a) : 10000
+    const ob = order.has(b) ? order.get(b) : 10000
+    if (oa !== ob) return oa - ob
+    return a.localeCompare(b)
+  })
+}
+
+export const POND_TYPES = [
+  { value: 'koi', label: 'Koi pond' },
+  { value: 'arowana', label: 'Arowana' },
+  { value: 'quarantine', label: 'Quarantine' },
+  { value: 'display', label: 'Display' },
+]
+
+export const MAINTENANCE_TYPES = [
+  { value: 'filter_wash', label: 'Filter wash' },
+  { value: 'water_change', label: 'Water change' },
+  { value: 'water_test', label: 'Water test' },
+  { value: 'feeding', label: 'Feeding check' },
+  { value: 'other', label: 'Other' },
+]
+
+export const DEFAULT_TREATMENT_GUIDES = [
+  { id: 'guide-salt', title: 'Salt dip (0.3%)', category: 'Parasite', steps: 'Dissolve pond salt to 0.3%. Monitor fish 30 min. Ensure good aeration.', warning: 'Do not use with plants.' },
+  { id: 'guide-melafix', title: 'Melafix treatment', category: 'Bacterial', steps: '5ml per 40L daily for 7 days. Water change 25% before starting.', warning: 'Remove carbon from filter.' },
+  { id: 'guide-pp', title: 'Potassium Permanganate', category: 'Parasite', steps: '2mg/L dip for 10-15 min in separate tank. Never overdose.', warning: 'Wear gloves. PP stains everything.' },
+]
+
+export const INITIAL_KOI_FISH = []
+
+export const INITIAL_CUSTOMER_KOI = []
+
+export const INITIAL_POND_DATA = {
+  ponds: [],
+  maintenanceLogs: [],
+  treatmentLogs: [],
+  reminders: [],
+  treatmentGuides: [],
 }
 
 export function formatSGD(v) {
@@ -47,6 +210,20 @@ export function today() {
 
 export function genId(prefix) {
   return `${prefix}-${Date.now().toString(36).toUpperCase()}`
+}
+
+/** Invoice number: INV + issue date (YYYYMMDD) + daily sequence, e.g. INV20260606-01 */
+export function genInvoiceId(invoices = [], issueDate) {
+  const dateKey = (issueDate || today()).replace(/-/g, '')
+  const prefix = `INV${dateKey}-`
+  let maxSeq = 0
+  for (const inv of invoices) {
+    const id = String(inv?.id || '')
+    if (!id.startsWith(prefix)) continue
+    const num = parseInt(id.slice(prefix.length), 10)
+    if (!Number.isNaN(num) && num > maxSeq) maxSeq = num
+  }
+  return `${prefix}${String(maxSeq + 1).padStart(2, '0')}`
 }
 
 export function getInvoiceStatus(inv) {
@@ -72,58 +249,67 @@ export const PAYNOW_QR_PATTERN = [
   1, 0, 1, 0, 1, 0, 1,
 ]
 
-export const INITIAL_PRODUCTS = [
-  { id: 1, name: 'Koi Pellets (Premium)', category: 'Fish Food', sku: 'FF001', price: 28.5, cost: 14, unit: 'kg', stock: 45, minStock: 10, description: 'High protein koi pellets' },
-  { id: 2, name: 'Arowana Sticks', category: 'Fish Food', sku: 'FF002', price: 55, cost: 28, unit: 'kg', stock: 20, minStock: 5, description: 'Premium arowana floating sticks' },
-  { id: 3, name: 'Water Conditioner 500ml', category: 'Water Treatment', sku: 'WT001', price: 18, cost: 8, unit: 'bottle', stock: 30, minStock: 8, description: 'Removes chlorine & chloramine' },
-  { id: 4, name: 'Pond Salt 2kg', category: 'Water Treatment', sku: 'WT002', price: 12, cost: 5, unit: 'bag', stock: 60, minStock: 15, description: 'Natural pond salt' },
-  { id: 5, name: 'Air Pump (Large)', category: 'Equipment', sku: 'EQ001', price: 85, cost: 42, unit: 'unit', stock: 8, minStock: 2, description: 'High output air pump' },
-  { id: 6, name: 'Fish Net (Medium)', category: 'Accessories', sku: 'AC001', price: 8.5, cost: 3.5, unit: 'unit', stock: 15, minStock: 5, description: 'Soft nylon fish net' },
-  { id: 7, name: 'Anti-Parasite Treatment', category: 'Medicine', sku: 'MD001', price: 32, cost: 16, unit: 'bottle', stock: 12, minStock: 4, description: 'Broad spectrum treatment' },
-  { id: 8, name: 'Pond Filter Media', category: 'Pond Supplies', sku: 'PS001', price: 45, cost: 20, unit: 'set', stock: 6, minStock: 2, description: 'Biological filter media set' },
-]
+export const INITIAL_PRODUCTS = []
 
-export const INITIAL_CUSTOMERS = [
-  { id: 1, name: 'Tan Wei Ming', phone: '+65 9123 4567', whatsapp: '+65 9123 4567', area: 'Tampines', fishTypes: ['Koi', 'Arowana'], tier: 'Gold', notes: 'Prefers weekend delivery', totalSpent: 3450 },
-  { id: 2, name: 'Sarah Lim', phone: '+65 8234 5678', whatsapp: '+65 8234 5678', area: 'Bukit Timah', fishTypes: ['Arowana'], tier: 'Platinum', notes: 'Super Red specialist', totalSpent: 12800 },
-  { id: 3, name: 'Ahmad Razif', phone: '+65 9345 6789', whatsapp: '+65 9345 6789', area: 'Jurong West', fishTypes: ['Koi'], tier: 'Silver', notes: 'Pond keeper', totalSpent: 1200 },
-]
+export const INITIAL_CUSTOMERS = []
 
-export const INITIAL_INVOICES = [
-  { id: 'INV-001', customerId: 1, customerName: 'Tan Wei Ming', items: [{ name: 'Super Red Arowana 12"', qty: 1, price: 850 }], total: 850, status: 'paid', date: '2025-05-10', due: '2025-05-17', notes: '' },
-  { id: 'INV-002', customerId: 2, customerName: 'Sarah Lim', items: [{ name: 'Cross Back Golden 18"', qty: 1, price: 3200 }], total: 3200, status: 'pending', date: '2025-06-01', due: '2025-06-08', notes: 'Hold for collection' },
-  { id: 'INV-003', customerId: 3, customerName: 'Ahmad Razif', items: [{ name: 'Kohaku Koi 8"', qty: 3, price: 120 }, { name: 'Koi Pellets 1kg', qty: 2, price: 28.5 }], total: 417, status: 'pending', date: '2025-06-03', due: '2025-06-10', notes: '' },
-]
-
-export const INITIAL_EXPENSES = [
-  { id: 1, category: 'Feed', amount: 680, date: '2025-06-01', note: 'Monthly fish feed stock', addedBy: 'owner' },
-  { id: 2, category: 'Utilities', amount: 320, date: '2025-06-01', note: 'Water & electricity', addedBy: 'owner' },
-  { id: 3, category: 'Transport', amount: 150, date: '2025-06-03', note: 'Delivery fuel', addedBy: 'staff' },
-]
-
-export const INITIAL_DELIVERIES = [
-  { id: 'DEL-001', customerId: 1, customerName: 'Tan Wei Ming', area: 'Tampines', address: 'Blk 123 Tampines St 12 #04-56', schedule: '2025-06-07 10:00', status: 'scheduled', items: '1x Super Red Arowana', driver: 'Ali', notes: '' },
-  { id: 'DEL-002', customerId: 3, customerName: 'Ahmad Razif', area: 'Jurong West', address: 'Blk 456 Jurong West Ave 6 #02-11', schedule: '2025-06-08 14:00', status: 'scheduled', items: '3x Koi, 2x Feed', driver: 'Raju', notes: 'Call before arriving' },
-]
-
-export const INITIAL_EVENTS = [
-  { id: 1, title: 'Water Quality Check - All Tanks', date: '2025-06-07', time: '08:00', type: 'maintenance', note: 'Check pH, ammonia, nitrite' },
-  { id: 2, title: 'Feeding Schedule - Arowana Section', date: '2025-06-07', time: '09:00', type: 'feeding', note: '3x daily, morning feed' },
-  { id: 3, title: 'Restock: Koi Pellets', date: '2025-06-10', time: '10:00', type: 'purchase', note: 'Order 50kg from supplier' },
-  { id: 4, title: 'Customer Visit - Sarah Lim', date: '2025-06-09', time: '15:00', type: 'customer', note: 'View new Cross Back Golden arrivals' },
-]
-
-export const LOCAL_DEMO_USERS = [
-  { id: 1, name: 'Marugen Owner', role: 'owner', pin: '1234', active: true, permissions: DEFAULT_PERMISSIONS.owner, isSystem: true },
-  { id: 2, name: 'Ali', role: 'staff', pin: '0000', active: true, permissions: DEFAULT_PERMISSIONS.staff },
-  { id: 3, name: 'Raju', role: 'staff', pin: '1111', active: true, permissions: ['dashboard', 'inventory', 'deliveries', 'calendar'] },
-]
-
-export const DEMO_SEED = {
-  customers: INITIAL_CUSTOMERS,
-  products: INITIAL_PRODUCTS,
-  invoices: INITIAL_INVOICES,
-  expenses: INITIAL_EXPENSES,
-  deliveries: INITIAL_DELIVERIES,
-  events: INITIAL_EVENTS,
+/** Delivery fields copied from a customer record. */
+export function customerDeliveryFields(customer) {
+  if (!customer) {
+    return { customerId: '', customerName: '', area: 'Tampines', postalCode: '', address: '' }
+  }
+  return {
+    customerId: String(customer.id),
+    customerName: customer.name || '',
+    area: customer.area || 'Tampines',
+    postalCode: customer.postalCode || '',
+    address: customer.address || '',
+  }
 }
+
+export function formatInvoiceItemsForDelivery(items = []) {
+  return (items || [])
+    .filter((it) => it?.name)
+    .map((it) => `${Number(it.qty) || 1}x ${it.name}`)
+    .join(', ')
+}
+
+/** Delivery fields filled from a linked invoice + customer profile. */
+export function invoiceDeliveryFields(invoice, customers = []) {
+  if (!invoice) {
+    return { invoiceId: '', customerId: '', customerName: '', area: 'Tampines', postalCode: '', address: '', items: '' }
+  }
+  const customer = invoice.customerId != null && invoice.customerId !== ''
+    ? customers.find((c) => String(c.id) === String(invoice.customerId))
+    : customers.find((c) => c.name?.trim().toLowerCase() === invoice.customerName?.trim().toLowerCase())
+  const fromCustomer = customerDeliveryFields(customer)
+  return {
+    invoiceId: invoice.id,
+    customerId: fromCustomer.customerId || (invoice.customerId != null && invoice.customerId !== '' ? String(invoice.customerId) : ''),
+    customerName: invoice.customerName || fromCustomer.customerName,
+    area: fromCustomer.area,
+    postalCode: fromCustomer.postalCode,
+    address: invoice.customerAddress || fromCustomer.address,
+    items: formatInvoiceItemsForDelivery(invoice.items),
+  }
+}
+
+export const INITIAL_INVOICES = []
+
+export const INITIAL_EXPENSES = []
+
+/** Mark whether a record was entered in external accounting software. */
+export function makeBookedPatch(booked, userName) {
+  return booked
+    ? { booked: true, bookedAt: new Date().toISOString(), bookedBy: userName || '' }
+    : { booked: false, bookedAt: null, bookedBy: '' }
+}
+
+export const INITIAL_DELIVERIES = []
+
+export const INITIAL_EVENTS = []
+
+/** Local-only login when Supabase is not configured. */
+export const LOCAL_DEMO_USERS = [
+  { id: 1, name: 'Owner', role: 'owner', pin: '1234', active: true, permissions: DEFAULT_PERMISSIONS.owner, isSystem: true },
+]

@@ -1,17 +1,50 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { Users, FileText, TrendingUp, Truck, Calendar, MessageSquare, Bell, LogOut, Plus, Search, X, Check, AlertTriangle, Home, BarChart2, Menu, DollarSign, Boxes, Eye, Send, Phone, MapPin, Star, Activity, ArrowUp, ArrowDown, Zap, Clock, CheckCircle, XCircle, Info, Archive, ShoppingBag, Shield, UserCog, UserPlus, Edit2, Trash2, Lock } from "lucide-react";
-import { sendChatMessage } from "./lib/gemini";
+import { Users, Users2, Fish, Droplets, FileText, TrendingUp, Truck, Calendar, MessageSquare, Bell, LogOut, Plus, Search, X, Check, AlertTriangle, Home, BarChart2, Menu, DollarSign, Boxes, Eye, Send, Phone, MapPin, Star, Activity, Zap, Clock, CheckCircle, XCircle, Info, Archive, ShoppingBag, Shield, UserCog, UserPlus, Edit2, Trash2, Lock, Printer, BookCheck, ImagePlus, Images, Camera } from "lucide-react";
+import KoiFish from "./modules/KoiFish";
+import CustomerKoi from "./modules/CustomerKoi";
+import PondManagement from "./modules/PondManagement";
+import { loadKoiFish, saveKoiFish, loadCustomerKoi, saveCustomerKoi, loadPondData, savePondData } from "./lib/koiStorage";
+import { loadProducts, saveProducts, loadStockLog, saveStockLog } from "./lib/farmStorage";
+import {
+  clearLocalOnlyStorage, emptyPondData, resolveCloudKoiPayload, resolveCloudWhatsappGroups,
+} from "./lib/cloudData";
+import { deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem } from "./lib/inventoryStock";
+import InvoiceDocument from "./components/InvoiceDocument";
+import { downloadInvoicePdf } from "./lib/generateInvoicePdf";
+import { calcInvoiceAmounts } from "./lib/invoiceDesign";
+import { compressReceiptImage, expenseImageSrc } from "./lib/compressImage";
+import { enrichInvoiceCustomer, findCustomerWhatsApp, formatCustomerAddress, findCustomerRecord, openWhatsAppChat, resolveInvoiceCustomer, resolveInvoiceWhatsApp } from "./lib/invoiceWhatsApp";
+import {
+  buildDeliveryWhatsAppRecipients, formatDeliveryRecipientLabel, loadWhatsappGroups,
+  saveWhatsappGroups, sendDeliveryToRecipient,
+} from "./lib/deliveryWhatsApp";
+import { normalizeWhatsAppGroupLink } from "./lib/invoiceWhatsApp";
+import { fetchAiUsage, fetchAiUsageStats, sendChatMessage } from "./lib/gemini";
+import { AI_DAILY_FREE_TOKENS, AI_WARN_AT_TOKENS, formatTokens } from "./lib/aiUsage";
+import { AI_TOOL_DEFINITIONS } from "./lib/aiTools";
+import { buildBusinessContext, executeAiActions } from "./lib/aiActions";
 import * as db from "./lib/database";
 import { isSupabaseConfigured } from "./lib/supabase";
 import * as auth from "./lib/auth";
 import {
-  FISH_TYPES, AROWANA_TYPES, KOI_TYPES, SG_AREAS, PRODUCT_CATEGORIES, EXPENSE_CATEGORIES,
+  FISH_TYPES, SG_AREAS, PRODUCT_CATEGORIES,
   CUSTOMER_TIERS, PAYNOW_UEN, PAYNOW_QR_PATTERN, ALL_PERMISSIONS, DEFAULT_PERMISSIONS,
-  formatSGD, today, genId, getInvoiceStatus, calcCustomerTier,
+  formatSGD, today, genId, genInvoiceId, getInvoiceStatus, calcCustomerTier, KOI_STATUS, CUSTOMER_KOI_STATUS,
   INITIAL_PRODUCTS, INITIAL_CUSTOMERS, INITIAL_INVOICES, INITIAL_EXPENSES,
-  INITIAL_DELIVERIES, INITIAL_EVENTS, LOCAL_DEMO_USERS, DEMO_SEED,
+  INITIAL_DELIVERIES, INITIAL_EVENTS, LOCAL_DEMO_USERS, customerDeliveryFields, invoiceDeliveryFields, makeBookedPatch,
 } from "./data/constants";
 import logo from "./assets/logo.png";
+
+function BookedBadge({ booked, bookedBy }) {
+  if (booked) {
+    return (
+      <Badge className="bg-emerald-500/15 text-emerald-300 text-[10px]" title={bookedBy ? `Entered by ${bookedBy}` : "Entered in external accounts"}>
+        <BookCheck size={10} className="inline mr-0.5" />In accounts
+      </Badge>
+    );
+  }
+  return <Badge className="bg-amber-500/15 text-amber-300 text-[10px]">Pending accounts</Badge>;
+}
 
 function AppLogo({ size = "md", className = "" }) {
   const sizes = { sm: "w-8 h-8", md: "w-10 h-10", lg: "w-20 h-20" };
@@ -25,8 +58,13 @@ function AppLogo({ size = "md", className = "" }) {
 }
 
 function hasPermission(user, permission) {
-  if (!user?.permissions) return false;
-  return user.permissions.includes(permission);
+  if (!user) return false;
+  if (user.role === "owner") return true;
+  return user.permissions?.includes(permission) ?? false;
+}
+
+function canMarkAccounting(user) {
+  return hasPermission(user, "accounting");
 }
 
 function useIsMobile(breakpoint = 1024) {
@@ -55,11 +93,11 @@ function Card({ children, className = "" }) {
 
 function Modal({ open, onClose, title, children, size = "md" }) {
   if (!open) return null;
-  const sizes = { sm: "max-w-sm", md: "max-w-lg", lg: "max-w-2xl", xl: "max-w-4xl" };
+  const sizes = { sm: "max-w-sm", md: "max-w-lg", lg: "max-w-2xl", xl: "max-w-4xl", full: "max-w-[900px]" };
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm" onClick={onClose}>
       <div
-        className={`bg-slate-800 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full ${sizes[size]} max-h-[92dvh] sm:max-h-[90vh] flex flex-col shadow-2xl`}
+        className={`bg-slate-800 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full ${sizes[size]} max-h-[92dvh] sm:max-h-[90vh] flex flex-col shadow-2xl safe-top`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-700 shrink-0">
@@ -72,19 +110,28 @@ function Modal({ open, onClose, title, children, size = "md" }) {
   );
 }
 
-function Input({ label, value, onChange, type = "text", placeholder, className = "", required, min, step }) {
+function Input({ label, value, onChange, type = "text", placeholder, className = "", required, min, step, readOnly, inputMode }) {
+  const isDateTimeField = type === "date" || type === "time" || type === "datetime-local";
+  const fieldClass = "w-full max-w-full min-w-0 box-border bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-3 sm:py-2.5 text-white text-base sm:text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 transition-all";
   return (
-    <div className={className}>
+    <div className={`min-w-0 max-w-full overflow-hidden ${className}`}>
       {label && <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wide">{label}{required && <span className="text-red-400 ml-1">*</span>}</label>}
-      <input type={type} value={value} onChange={onChange} placeholder={placeholder} min={min} step={step}
-        className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-3 sm:py-2.5 text-white text-base sm:text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 transition-all" />
+      {isDateTimeField ? (
+        <div className="w-full max-w-full min-w-0 overflow-hidden">
+          <input type={type} value={value} onChange={onChange} placeholder={placeholder} min={min} step={step} readOnly={readOnly} inputMode={inputMode}
+            className={`datetime-field ${fieldClass} ${readOnly ? "opacity-80 cursor-default" : ""}`} />
+        </div>
+      ) : (
+        <input type={type} value={value} onChange={onChange} placeholder={placeholder} min={min} step={step} readOnly={readOnly} inputMode={inputMode}
+          className={`${fieldClass} ${readOnly ? "opacity-80 cursor-default" : ""}`} />
+      )}
     </div>
   );
 }
 
 function Select({ label, value, onChange, options, className = "", required }) {
   return (
-    <div className={className}>
+    <div className={`min-w-0 ${className}`}>
       {label && <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wide">{label}{required && <span className="text-red-400 ml-1">*</span>}</label>}
       <select value={value} onChange={onChange}
         className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-3 sm:py-2.5 text-white text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 transition-all">
@@ -96,7 +143,7 @@ function Select({ label, value, onChange, options, className = "", required }) {
 
 function Textarea({ label, value, onChange, placeholder, rows = 3, className = "" }) {
   return (
-    <div className={className}>
+    <div className={`min-w-0 ${className}`}>
       {label && <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wide">{label}</label>}
       <textarea value={value} onChange={onChange} placeholder={placeholder} rows={rows}
         className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-3 sm:py-2.5 text-white text-base sm:text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 transition-all resize-none" />
@@ -279,61 +326,136 @@ function LoginScreen({ onLogin, users, cloudMode }) {
   );
 }
 
-function Dashboard({ invoices, expenses, customers, products, events, deliveries, currentUser }) {
-  const totalRevenue = invoices.filter(i => i.status === "paid").reduce((s, i) => s + i.total, 0);
-  const pendingRevenue = invoices.filter(i => i.status === "pending").reduce((s, i) => s + i.total, 0);
-  const totalExpenses = expenses.reduce((s, e) => s + e.amount, 0);
-  const lowStock = products.filter(p => p.stock <= p.minStock);
+function Dashboard({ invoices, expenses, customers, products, events, deliveries, koiFishList, customerKoiList, currentUser, onNavigate }) {
+  const can = (perm) => hasPermission(currentUser, perm);
+  const go = (tab) => { if (can(tab)) onNavigate?.(tab); };
+
+  const totalRevenue = invoices.filter((i) => i.status === "paid").reduce((s, i) => s + (Number(i.total) || 0), 0);
+  const openInvoices = invoices.filter((i) => {
+    const status = getInvoiceStatus(i);
+    return status === "pending" || status === "overdue";
+  });
+  const pendingRevenue = openInvoices.reduce((s, i) => s + (Number(i.total) || 0), 0);
+  const unbookedExpenses = expenses.filter((e) => !e.booked).length;
+  const unbookedInvoices = invoices.filter((i) => !i.booked && getInvoiceStatus(i) !== "cancelled").length;
+  const lowStock = products.filter((p) => p.minStock > 0 && p.stock <= p.minStock);
   const todayStr = today();
-  const todayEvents = events.filter(e => e.date === todayStr);
-  const scheduledDeliveries = deliveries.filter(d => d.status === "scheduled").length;
+  const todayEvents = events.filter((e) => e.date === todayStr);
+  const scheduledDeliveries = deliveries.filter((d) => d.status === "scheduled").length;
+  const todayDeliveries = deliveries.filter((d) => d.schedule?.startsWith(todayStr)).length;
+  const recentInvoices = [...invoices].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 5);
+  const recentCustomers = [...customers].sort((a, b) => (Number(b.totalSpent) || 0) - (Number(a.totalSpent) || 0)).slice(0, 5);
+  const koiAvailable = koiFishList.filter((k) => k.status === KOI_STATUS.AVAILABLE).length;
+  const koiSold = koiFishList.filter((k) => k.status === KOI_STATUS.SOLD).length;
+  const koiInPond = customerKoiList.filter((r) => r.status === CUSTOMER_KOI_STATUS.IN_POND).length;
+  const showKoiSummary = can("koifish") || can("customerkoi");
 
   const stats = [
-    { label: "Revenue (Paid)", value: formatSGD(totalRevenue), icon: DollarSign, color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20" },
-    { label: "Pending Amount", value: formatSGD(pendingRevenue), icon: Clock, color: "text-amber-400", bg: "bg-amber-500/10 border-amber-500/20" },
-    { label: "Total Expenses", value: formatSGD(totalExpenses), icon: TrendingUp, color: "text-red-400", bg: "bg-red-500/10 border-red-500/20" },
-    { label: "Net Profit", value: formatSGD(totalRevenue - totalExpenses), icon: Activity, color: "text-cyan-400", bg: "bg-cyan-500/10 border-cyan-500/20" },
+    { label: "Revenue (Paid)", value: formatSGD(totalRevenue), icon: DollarSign, color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20", tab: can("invoices") ? "invoices" : null },
+    { label: "Pending / Overdue", value: formatSGD(pendingRevenue), icon: Clock, color: "text-amber-400", bg: "bg-amber-500/10 border-amber-500/20", tab: can("invoices") ? "invoices" : null },
+    { label: "Expense Receipts", value: String(expenses.length), icon: ImagePlus, color: "text-purple-400", bg: "bg-purple-500/10 border-purple-500/20", tab: can("expenses") ? "expenses" : null },
+    { label: "Pending Accounts", value: String(unbookedExpenses + unbookedInvoices), icon: BookCheck, color: "text-cyan-400", bg: "bg-cyan-500/10 border-cyan-500/20", tab: can("accounting") ? "invoices" : null },
   ];
 
-  const expBreakdown = EXPENSE_CATEGORIES.map(c => ({ cat: c, total: expenses.filter(e => e.category === c).reduce((s, e) => s + e.amount, 0) })).filter(x => x.total > 0).sort((a, b) => b.total - a.total);
+  const sectionLink = (tab, label) => can(tab) ? (
+    <button type="button" onClick={() => go(tab)} className="text-xs text-cyan-400 hover:text-cyan-300 font-semibold touch-manipulation">{label}</button>
+  ) : null;
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-xl sm:text-2xl font-black text-white">Dashboard</h2>
-          <p className="text-slate-400 text-sm mt-0.5">Welcome back, {currentUser.displayName}</p>
+          <p className="text-slate-400 text-sm mt-0.5">Welcome back, {currentUser.displayName || currentUser.name}</p>
         </div>
         <p className="text-xs text-slate-500 shrink-0">{new Date().toLocaleDateString("en-SG", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</p>
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map(s => (
-          <Card key={s.label} className={`p-4 border ${s.bg}`}>
-            <div className={`w-9 h-9 rounded-lg flex items-center justify-center mb-3 ${s.bg}`}><s.icon size={18} className={s.color} /></div>
-            <p className={`text-xl font-black ${s.color}`}>{s.value}</p>
-            <p className="text-slate-400 text-xs mt-1">{s.label}</p>
-          </Card>
-        ))}
+        {stats.map((s) => {
+          const inner = (
+            <>
+              <div className={`w-9 h-9 rounded-lg flex items-center justify-center mb-3 ${s.bg}`}><s.icon size={18} className={s.color} /></div>
+              <p className={`text-xl font-black ${s.color}`}>{s.value}</p>
+              <p className="text-slate-400 text-xs mt-1">{s.label}</p>
+            </>
+          );
+          return s.tab ? (
+            <button key={s.label} type="button" onClick={() => go(s.tab)} className={`text-left p-4 border rounded-xl transition-colors hover:brightness-110 touch-manipulation ${s.bg}`}>
+              {inner}
+            </button>
+          ) : (
+            <Card key={s.label} className={`p-4 border ${s.bg}`}>{inner}</Card>
+          );
+        })}
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card className="p-4 lg:col-span-2">
-          <h3 className="text-sm font-bold text-white mb-4 flex items-center gap-2"><BarChart2 size={16} className="text-cyan-400" />Expense Breakdown</h3>
-          <div className="space-y-2">
-            {expBreakdown.length === 0 ? <p className="text-slate-500 text-sm">No expenses recorded</p> : expBreakdown.map(e => (
-              <div key={e.cat}>
-                <div className="flex justify-between text-xs mb-1"><span className="text-slate-300">{e.cat}</span><span className="text-slate-400">{formatSGD(e.total)}</span></div>
-                <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-                  <div className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full" style={{ width: `${(e.total / Math.max(...expBreakdown.map(x => x.total))) * 100}%` }} />
-                </div>
-              </div>
-            ))}
+      {showKoiSummary && (
+        <Card className="p-4 border-cyan-500/20 bg-cyan-500/5">
+          <div className="flex items-center justify-between mb-4 gap-2">
+            <h3 className="text-sm font-bold text-white flex items-center gap-2"><Fish size={16} className="text-cyan-400" />Koi Summary</h3>
+            <div className="flex gap-3">
+              {can("koifish") && sectionLink("koifish", "Farm stock →")}
+              {can("customerkoi") && sectionLink("customerkoi", "Customer koi →")}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {can("koifish") && (
+              <button type="button" onClick={() => go("koifish")} className="bg-slate-900/50 rounded-xl p-4 text-center hover:bg-slate-800/80 transition-colors touch-manipulation">
+                <p className="text-2xl font-black text-emerald-400">{koiAvailable}</p>
+                <p className="text-slate-400 text-xs mt-1">Available</p>
+                <p className="text-slate-500 text-[10px] mt-0.5">Farm stock</p>
+              </button>
+            )}
+            {can("koifish") && (
+              <button type="button" onClick={() => go("koifish")} className="bg-slate-900/50 rounded-xl p-4 text-center hover:bg-slate-800/80 transition-colors touch-manipulation">
+                <p className="text-2xl font-black text-blue-400">{koiSold}</p>
+                <p className="text-slate-400 text-xs mt-1">Sold</p>
+                <p className="text-slate-500 text-[10px] mt-0.5">Farm stock</p>
+              </button>
+            )}
+            {can("customerkoi") && (
+              <button type="button" onClick={() => go("customerkoi")} className="bg-slate-900/50 rounded-xl p-4 text-center hover:bg-slate-800/80 transition-colors touch-manipulation sm:col-span-1">
+                <p className="text-2xl font-black text-cyan-400">{koiInPond}</p>
+                <p className="text-slate-400 text-xs mt-1">In Pond</p>
+                <p className="text-slate-500 text-[10px] mt-0.5">Customer koi</p>
+              </button>
+            )}
           </div>
         </Card>
+      )}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {can("invoices") && (
+          <Card className="p-4 lg:col-span-2">
+            <div className="flex items-center justify-between mb-4 gap-2">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2"><FileText size={16} className="text-cyan-400" />Recent Invoices</h3>
+              {sectionLink("invoices", "View all →")}
+            </div>
+            <div className="space-y-2">
+              {recentInvoices.length === 0 ? <p className="text-slate-500 text-sm">No invoices yet</p> : recentInvoices.map((inv) => (
+                <button key={inv.id} type="button" onClick={() => go("invoices")} className="w-full flex items-center justify-between text-sm py-1.5 border-b border-slate-700/40 last:border-0 hover:bg-slate-700/20 rounded-lg px-1 -mx-1 touch-manipulation text-left">
+                  <div className="min-w-0">
+                    <p className="text-white font-medium truncate">{inv.customerName}</p>
+                    <p className="text-slate-500 text-xs font-mono">{inv.id} · {inv.date || "—"}</p>
+                  </div>
+                  <div className="text-right shrink-0 ml-3 space-y-1">
+                    <p className="text-emerald-400 font-bold">{formatSGD(inv.total)}</p>
+                    <div className="flex flex-wrap justify-end gap-1">
+                      <Badge className={statusColor[getInvoiceStatus(inv)]}>{getInvoiceStatus(inv)}</Badge>
+                      <BookedBadge booked={inv.booked} bookedBy={inv.bookedBy} />
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </Card>
+        )}
         <div className="space-y-4">
-          {lowStock.length > 0 && (
+          {can("inventory") && lowStock.length > 0 && (
             <Card className="p-4 border-amber-500/20 bg-amber-500/5">
-              <h3 className="text-sm font-bold text-amber-300 mb-3 flex items-center gap-2"><AlertTriangle size={14} />Low Stock Alert ({lowStock.length})</h3>
-              {lowStock.slice(0, 4).map(p => (
+              <div className="flex items-center justify-between mb-3 gap-2">
+                <h3 className="text-sm font-bold text-amber-300 flex items-center gap-2"><AlertTriangle size={14} />Low Stock ({lowStock.length})</h3>
+                {sectionLink("inventory", "Inventory →")}
+              </div>
+              {lowStock.slice(0, 4).map((p) => (
                 <div key={p.id} className="flex justify-between text-xs mb-1">
                   <span className="text-slate-300 truncate">{p.name}</span>
                   <span className="text-amber-400 font-bold ml-2">{p.stock} {p.unit}</span>
@@ -341,46 +463,73 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
               ))}
             </Card>
           )}
-          <Card className="p-4">
-            <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2"><Calendar size={14} className="text-cyan-400" />Today&apos;s Schedule</h3>
-            {todayEvents.length === 0 ? <p className="text-slate-500 text-xs">No events today</p> : todayEvents.map(e => (
-              <div key={e.id} className={`text-xs p-2 rounded-lg border mb-2 ${eventTypeColor[e.type]}`}>
-                <p className="font-semibold">{e.time} - {e.title}</p>
+          {can("calendar") && (
+            <Card className="p-4">
+              <div className="flex items-center justify-between mb-3 gap-2">
+                <h3 className="text-sm font-bold text-white flex items-center gap-2"><Calendar size={14} className="text-cyan-400" />Today&apos;s Schedule</h3>
+                {sectionLink("calendar", "Calendar →")}
               </div>
-            ))}
-          </Card>
-          <Card className="p-4">
-            <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2"><Truck size={14} className="text-cyan-400" />Deliveries</h3>
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 bg-blue-500/20 rounded-xl flex items-center justify-center">
-                <span className="text-blue-300 text-xl font-black">{scheduledDeliveries}</span>
+              {todayEvents.length === 0 ? <p className="text-slate-500 text-xs">No events today</p> : todayEvents.map((e) => (
+                <div key={e.id} className={`text-xs p-2 rounded-lg border mb-2 ${eventTypeColor[e.type] || eventTypeColor.other}`}>
+                  <p className="font-semibold">{e.time || "—"} — {e.title}</p>
+                </div>
+              ))}
+            </Card>
+          )}
+          {can("deliveries") && (
+            <Card className="p-4">
+              <div className="flex items-center justify-between mb-3 gap-2">
+                <h3 className="text-sm font-bold text-white flex items-center gap-2"><Truck size={14} className="text-cyan-400" />Deliveries</h3>
+                {sectionLink("deliveries", "View all →")}
               </div>
-              <div><p className="text-white font-bold">Scheduled</p><p className="text-slate-400 text-xs">Upcoming deliveries</p></div>
-            </div>
-          </Card>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-blue-500/20 rounded-xl flex items-center justify-center">
+                    <span className="text-blue-300 text-lg font-black">{scheduledDeliveries}</span>
+                  </div>
+                  <div><p className="text-white font-bold text-sm">Scheduled</p><p className="text-slate-400 text-xs">Upcoming</p></div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-cyan-500/20 rounded-xl flex items-center justify-center">
+                    <span className="text-cyan-300 text-lg font-black">{todayDeliveries}</span>
+                  </div>
+                  <div><p className="text-white font-bold text-sm">Today</p><p className="text-slate-400 text-xs">On schedule</p></div>
+                </div>
+              </div>
+            </Card>
+          )}
         </div>
       </div>
-      <Card className="p-4">
-        <h3 className="text-sm font-bold text-white mb-4 flex items-center gap-2"><Users size={14} className="text-cyan-400" />Recent Customers</h3>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead><tr className="text-slate-500 text-xs border-b border-slate-700">
-              <th className="text-left pb-2">Name</th><th className="text-left pb-2">Area</th><th className="text-left pb-2">Fish</th><th className="text-left pb-2">Tier</th><th className="text-right pb-2">Total Spent</th>
-            </tr></thead>
-            <tbody className="divide-y divide-slate-700/50">
-              {customers.slice(0, 5).map(c => (
-                <tr key={c.id} className="text-slate-300">
-                  <td className="py-2 font-medium">{c.name}</td>
-                  <td className="py-2 text-slate-400">{c.area}</td>
-                  <td className="py-2"><div className="flex flex-wrap gap-1">{c.fishTypes.slice(0, 2).map(f => <Badge key={f} className="bg-slate-700 text-slate-300">{f}</Badge>)}</div></td>
-                  <td className="py-2"><span className={`font-bold ${tierColor[c.tier]}`}>{c.tier}</span></td>
-                  <td className="py-2 text-right font-bold text-emerald-400">{formatSGD(c.totalSpent)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+      {can("customers") && (
+        <Card className="p-4">
+          <div className="flex items-center justify-between mb-4 gap-2">
+            <h3 className="text-sm font-bold text-white flex items-center gap-2"><Users size={14} className="text-cyan-400" />Top Customers</h3>
+            {sectionLink("customers", "View all →")}
+          </div>
+          <div className="overflow-x-auto">
+            {recentCustomers.length === 0 ? (
+              <p className="text-slate-500 text-sm">No customers yet</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead><tr className="text-slate-500 text-xs border-b border-slate-700">
+                  <th className="text-left pb-2">Name</th><th className="text-left pb-2">Area</th><th className="text-left pb-2">Fish</th><th className="text-left pb-2">Tier</th><th className="text-right pb-2">Total Spent</th>
+                </tr></thead>
+                <tbody className="divide-y divide-slate-700/50">
+                  {recentCustomers.map((c) => (
+                    <tr key={c.id} className="text-slate-300">
+                      <td className="py-2 font-medium">{c.name}</td>
+                      <td className="py-2 text-slate-400">{c.area || "—"}</td>
+                      <td className="py-2"><div className="flex flex-wrap gap-1">{(c.fishTypes || []).slice(0, 2).map((f) => <Badge key={f} className="bg-slate-700 text-slate-300">{f}</Badge>)}</div></td>
+                      <td className="py-2"><span className={`font-bold ${tierColor[c.tier] || "text-slate-300"}`}>{c.tier || "—"}</span></td>
+                      <td className="py-2 text-right font-bold text-emerald-400">{formatSGD(c.totalSpent)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
@@ -388,9 +537,13 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
 // ─────────────────────────────────────────────
 // INVENTORY / PRODUCTS MODULE
 // ─────────────────────────────────────────────
+const EMPTY_PRODUCT_FORM = { name: "", category: "Fish Food", sku: "", price: "", unit: "kg", stock: "", minStock: "", description: "" };
+
 function InventoryModule({ products, setProducts, stockLog, setStockLog, addNotification, currentUser }) {
   const [tab, setTab] = useState("stock");
   const [showAdd, setShowAdd] = useState(false);
+  const [editProduct, setEditProduct] = useState(null);
+  const [deleteProduct, setDeleteProduct] = useState(null);
   const [showUse, setShowUse] = useState(null);
   const [showSell, setShowSell] = useState(null);
   const [showRestock, setShowRestock] = useState(null);
@@ -401,26 +554,75 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
   const [useNote, setUseNote] = useState("");
   const [sellQty, setSellQty] = useState(1);
   const [sellPrice, setSellPrice] = useState("");
-  const [form, setForm] = useState({ name: "", category: "Fish Food", sku: "", price: "", cost: "", unit: "kg", stock: "", minStock: "", description: "" });
+  const [form, setForm] = useState(EMPTY_PRODUCT_FORM);
 
-  const filtered = products.filter(p =>
+  const filtered = products.filter((p) =>
     (catFilter === "All" || p.category === catFilter) &&
-    (p.name.toLowerCase().includes(search.toLowerCase()) || p.sku.toLowerCase().includes(search.toLowerCase()))
+    ((p.name || "").toLowerCase().includes(search.toLowerCase()) || (p.sku || "").toLowerCase().includes(search.toLowerCase()))
   );
 
+  const stockLogEntry = (product, type, extra = {}) => ({
+    id: Date.now(),
+    productId: product.id,
+    productName: product.name,
+    type,
+    date: today(),
+    by: currentUser?.name || "Staff",
+    ...extra,
+  });
+
   const addProduct = () => {
-    if (!form.name || !form.price || !form.stock) return;
-    const p = { ...form, id: Date.now(), price: +form.price, cost: +form.cost || 0, stock: +form.stock, minStock: +form.minStock || 0 };
+    if (!form.name?.trim() || form.price === "" || form.stock === "") {
+      addNotification({ type: "error", title: "Missing Fields", message: "Enter product name, price, and stock." });
+      return;
+    }
+    if (+form.price < 0 || +form.stock < 0) {
+      addNotification({ type: "error", title: "Invalid Values", message: "Price and stock cannot be negative." });
+      return;
+    }
+    const p = { ...form, id: Date.now(), name: form.name.trim(), price: +form.price, stock: +form.stock, minStock: +form.minStock || 0 };
     setProducts(prev => [...prev, p]);
     addNotification({ type: "success", title: "Product Added", message: `${p.name} added to inventory` });
     setShowAdd(false);
-    setForm({ name: "", category: "Fish Food", sku: "", price: "", cost: "", unit: "kg", stock: "", minStock: "", description: "" });
+    setForm(EMPTY_PRODUCT_FORM);
+  };
+
+  const saveEditProduct = () => {
+    if (!editProduct?.name?.trim() || editProduct.price === "" || editProduct.stock === "") {
+      addNotification({ type: "error", title: "Missing Fields", message: "Enter product name, price, and stock." });
+      return;
+    }
+    if (+editProduct.price < 0 || +editProduct.stock < 0) {
+      addNotification({ type: "error", title: "Invalid Values", message: "Price and stock cannot be negative." });
+      return;
+    }
+    const prevName = products.find((p) => p.id === editProduct.id)?.name;
+    const updated = {
+      ...editProduct,
+      name: editProduct.name.trim(),
+      price: +editProduct.price,
+      stock: +editProduct.stock,
+      minStock: +editProduct.minStock || 0,
+    };
+    setProducts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+    if (prevName && prevName !== updated.name) {
+      setStockLog((prev) => prev.map((l) => (l.productId === updated.id ? { ...l, productName: updated.name } : l)));
+    }
+    addNotification({ type: "success", title: "Product Updated", message: `${updated.name} saved` });
+    setEditProduct(null);
+  };
+
+  const confirmDeleteProduct = () => {
+    if (!deleteProduct) return;
+    setProducts((prev) => prev.filter((p) => p.id !== deleteProduct.id));
+    addNotification({ type: "info", title: "Product Deleted", message: `${deleteProduct.name} removed from inventory` });
+    setDeleteProduct(null);
   };
 
   const confirmUseStock = (product) => {
     if (useQty <= 0 || useQty > product.stock) return;
     setProducts(prev => prev.map(p => p.id === product.id ? { ...p, stock: p.stock - useQty } : p));
-    setStockLog(prev => [{ id: Date.now(), productId: product.id, productName: product.name, type: "use", qty: useQty, note: useNote, date: today(), by: currentUser.name }, ...prev]);
+    setStockLog((prev) => [stockLogEntry(product, "use", { qty: useQty, note: useNote }), ...prev]);
     if (product.stock - useQty <= product.minStock) addNotification({ type: "warning", title: "Low Stock", message: `${product.name} stock is low (${product.stock - useQty} ${product.unit} remaining)` });
     setShowUse(null); setUseQty(1); setUseNote("");
   };
@@ -429,20 +631,19 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
     if (sellQty <= 0 || sellQty > product.stock) return;
     setProducts(prev => prev.map(p => p.id === product.id ? { ...p, stock: p.stock - sellQty } : p));
     const price = +sellPrice || product.price;
-    setStockLog(prev => [{ id: Date.now(), productId: product.id, productName: product.name, type: "sell", qty: sellQty, price, total: sellQty * price, note: "", date: today(), by: currentUser.name }, ...prev]);
+    setStockLog((prev) => [stockLogEntry(product, "sell", { qty: sellQty, price, total: sellQty * price }), ...prev]);
     addNotification({ type: "success", title: "Sale Recorded", message: `Sold ${sellQty}x ${product.name} for ${formatSGD(sellQty * price)}` });
     setShowSell(null); setSellQty(1); setSellPrice("");
   };
 
   const restock = (product, qty) => {
     setProducts(prev => prev.map(p => p.id === product.id ? { ...p, stock: p.stock + qty } : p));
-    setStockLog(prev => [{ id: Date.now(), productId: product.id, productName: product.name, type: "restock", qty, note: "Manual restock", date: today(), by: currentUser.name }, ...prev]);
+    setStockLog((prev) => [stockLogEntry(product, "restock", { qty, note: "Manual restock" }), ...prev]);
     addNotification({ type: "info", title: "Restocked", message: `${product.name} restocked by ${qty} ${product.unit}` });
   };
 
-  const totalStockValue = products.reduce((s, p) => s + p.stock * p.cost, 0);
-  const totalRetailValue = products.reduce((s, p) => s + p.stock * p.price, 0);
-  const lowStockItems = products.filter(p => p.stock <= p.minStock);
+  const totalStockValue = products.reduce((s, p) => s + p.stock * p.price, 0);
+  const lowStockItems = products.filter((p) => p.minStock > 0 && p.stock <= p.minStock);
 
   return (
     <div className="space-y-4">
@@ -454,12 +655,11 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
         <Btn onClick={() => setShowAdd(true)} className="w-full sm:w-auto justify-center"><Plus size={16} />Add Product</Btn>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
         {[
           { label: "Total Products", value: products.length, icon: Boxes, color: "text-cyan-400" },
           { label: "Low Stock Items", value: lowStockItems.length, icon: AlertTriangle, color: lowStockItems.length > 0 ? "text-amber-400" : "text-emerald-400" },
-          { label: "Stock Cost Value", value: formatSGD(totalStockValue), icon: DollarSign, color: "text-blue-400" },
-          { label: "Retail Value", value: formatSGD(totalRetailValue), icon: TrendingUp, color: "text-emerald-400" },
+          { label: "Stock Value (Selling)", value: formatSGD(totalStockValue), icon: TrendingUp, color: "text-emerald-400" },
         ].map(s => (
           <Card key={s.label} className="p-4">
             <s.icon size={20} className={`${s.color} mb-2`} />
@@ -495,29 +695,33 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {filtered.map(p => {
-              const isLow = p.stock <= p.minStock;
+            {filtered.length === 0 ? (
+              <Card className="p-8 text-center text-slate-500 md:col-span-2 xl:col-span-3">
+                {products.length === 0 ? "No products yet — tap Add Product to get started." : "No products match your search or filter."}
+              </Card>
+            ) : filtered.map((p) => {
+              const isLow = p.minStock > 0 && p.stock <= p.minStock;
               return (
                 <Card key={p.id} className={`p-4 ${isLow ? "border-amber-500/30 bg-amber-500/5" : ""}`}>
-                  <div className="flex items-start justify-between mb-3">
-                    <div>
+                  <div className="flex items-start justify-between mb-3 gap-2">
+                    <div className="min-w-0">
                       <p className="text-white font-bold text-sm">{p.name}</p>
-                      <p className="text-slate-500 text-xs">{p.sku} · {p.category}</p>
+                      <p className="text-slate-500 text-xs">{p.sku || "—"} · {p.category || "—"}</p>
                     </div>
-                    {isLow && <Badge className="bg-amber-500/20 text-amber-300">Low Stock</Badge>}
+                    <div className="flex items-center gap-1 shrink-0">
+                      {isLow && <Badge className="bg-amber-500/20 text-amber-300">Low Stock</Badge>}
+                      <Btn variant="ghost" size="sm" onClick={() => setEditProduct({ ...p })} title="Edit"><Edit2 size={12} /></Btn>
+                      <Btn variant="danger" size="sm" onClick={() => setDeleteProduct(p)} title="Delete"><Trash2 size={12} /></Btn>
+                    </div>
                   </div>
-                  <div className="grid grid-cols-3 gap-2 mb-4 text-center">
+                  <div className="grid grid-cols-2 gap-2 mb-4 text-center">
                     <div className="bg-slate-900/50 rounded-lg p-2">
                       <p className={`text-lg font-black ${isLow ? "text-amber-400" : "text-white"}`}>{p.stock}</p>
-                      <p className="text-slate-500 text-xs">{p.unit}</p>
+                      <p className="text-slate-500 text-xs">In stock ({p.unit})</p>
                     </div>
                     <div className="bg-slate-900/50 rounded-lg p-2">
                       <p className="text-lg font-black text-cyan-400">{formatSGD(p.price)}</p>
-                      <p className="text-slate-500 text-xs">Sell</p>
-                    </div>
-                    <div className="bg-slate-900/50 rounded-lg p-2">
-                      <p className="text-lg font-black text-slate-400">{formatSGD(p.cost)}</p>
-                      <p className="text-slate-500 text-xs">Cost</p>
+                      <p className="text-slate-500 text-xs">Selling price</p>
                     </div>
                   </div>
                   {p.minStock > 0 && (
@@ -544,11 +748,11 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
           <table className="w-full text-sm min-w-[520px]">
             <thead><tr className="bg-slate-700/30 text-slate-400 text-xs">
               <th className="text-left p-3">Date</th><th className="text-left p-3">Product</th><th className="text-left p-3">Type</th>
-              <th className="text-right p-3">Qty</th><th className="text-right p-3">Value</th><th className="text-left p-3">By</th>
+              <th className="text-right p-3">Qty</th><th className="text-right p-3">Value</th><th className="text-left p-3">Note</th><th className="text-left p-3">By</th>
             </tr></thead>
             <tbody className="divide-y divide-slate-700/30">
               {stockLog.length === 0 ? (
-                <tr><td colSpan={6} className="text-center py-8 text-slate-500">No activity yet</td></tr>
+                <tr><td colSpan={7} className="text-center py-8 text-slate-500">No activity yet</td></tr>
               ) : stockLog.map(l => (
                 <tr key={l.id} className="text-slate-300 hover:bg-slate-700/20">
                   <td className="p-3 text-slate-500 text-xs">{l.date}</td>
@@ -556,6 +760,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
                   <td className="p-3"><Badge className={l.type === "sell" ? "bg-emerald-500/20 text-emerald-300" : l.type === "use" ? "bg-blue-500/20 text-blue-300" : "bg-purple-500/20 text-purple-300"}>{l.type}</Badge></td>
                   <td className="p-3 text-right font-bold">{l.qty}</td>
                   <td className="p-3 text-right text-emerald-400">{l.total ? formatSGD(l.total) : "-"}</td>
+                  <td className="p-3 text-slate-500 text-xs max-w-[10rem] truncate" title={l.note || ""}>{l.note || "—"}</td>
                   <td className="p-3 text-slate-400 text-xs">{l.by}</td>
                 </tr>
               ))}
@@ -571,17 +776,54 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
           <Input label="Product Name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required className="sm:col-span-2" />
           <Select label="Category" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} options={PRODUCT_CATEGORIES} />
           <Input label="SKU" value={form.sku} onChange={e => setForm(f => ({ ...f, sku: e.target.value }))} placeholder="FF001" />
-          <Input label="Sell Price (S$)" type="number" value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))} step="0.01" required />
-          <Input label="Cost Price (S$)" type="number" value={form.cost} onChange={e => setForm(f => ({ ...f, cost: e.target.value }))} step="0.01" />
+          <Input label="Selling Price (S$)" type="number" value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))} step="0.01" required />
           <Input label="Current Stock" type="number" value={form.stock} onChange={e => setForm(f => ({ ...f, stock: e.target.value }))} required />
           <Input label="Min Stock Alert" type="number" value={form.minStock} onChange={e => setForm(f => ({ ...f, minStock: e.target.value }))} />
           <Input label="Unit" value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} placeholder="kg / bottle / unit" />
-          <Textarea label="Description" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} className="col-span-2" />
+          <Textarea label="Description" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} className="sm:col-span-2" />
         </div>
-        <div className="flex justify-end gap-2 mt-5">
+        <div className="modal-actions">
           <Btn variant="secondary" onClick={() => setShowAdd(false)}>Cancel</Btn>
           <Btn onClick={addProduct}><Plus size={14} />Add Product</Btn>
         </div>
+      </Modal>
+
+      {/* Edit Product Modal */}
+      <Modal open={!!editProduct} onClose={() => setEditProduct(null)} title="Edit Product" size="lg">
+        {editProduct && (
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input label="Product Name" value={editProduct.name} onChange={e => setEditProduct(p => ({ ...p, name: e.target.value }))} required className="sm:col-span-2" />
+              <Select label="Category" value={editProduct.category} onChange={e => setEditProduct(p => ({ ...p, category: e.target.value }))} options={PRODUCT_CATEGORIES} />
+              <Input label="SKU" value={editProduct.sku} onChange={e => setEditProduct(p => ({ ...p, sku: e.target.value }))} placeholder="FF001" />
+              <Input label="Selling Price (S$)" type="number" value={editProduct.price} onChange={e => setEditProduct(p => ({ ...p, price: e.target.value }))} step="0.01" required />
+              <Input label="Current Stock" type="number" value={editProduct.stock} onChange={e => setEditProduct(p => ({ ...p, stock: e.target.value }))} required />
+              <Input label="Min Stock Alert" type="number" value={editProduct.minStock} onChange={e => setEditProduct(p => ({ ...p, minStock: e.target.value }))} />
+              <Input label="Unit" value={editProduct.unit} onChange={e => setEditProduct(p => ({ ...p, unit: e.target.value }))} placeholder="kg / bottle / unit" />
+              <Textarea label="Description" value={editProduct.description} onChange={e => setEditProduct(p => ({ ...p, description: e.target.value }))} className="sm:col-span-2" />
+            </div>
+            <div className="modal-actions">
+              <Btn variant="secondary" onClick={() => setEditProduct(null)}>Cancel</Btn>
+              <Btn onClick={saveEditProduct}><Check size={14} />Save Changes</Btn>
+            </div>
+          </>
+        )}
+      </Modal>
+
+      {/* Delete Product Modal */}
+      <Modal open={!!deleteProduct} onClose={() => setDeleteProduct(null)} title="Delete Product" size="sm">
+        {deleteProduct && (
+          <div className="space-y-4">
+            <p className="text-slate-300 text-sm">
+              Remove <strong className="text-white">{deleteProduct.name}</strong> from inventory?
+              Activity log history for this product will be kept.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Btn variant="secondary" onClick={() => setDeleteProduct(null)}>Cancel</Btn>
+              <Btn variant="danger" onClick={confirmDeleteProduct}><Trash2 size={14} />Delete</Btn>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {/* Use Stock Modal */}
@@ -609,7 +851,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       <Modal open={!!showSell} onClose={() => setShowSell(null)} title={`Sell: ${showSell?.name}`} size="sm">
         <p className="text-slate-400 text-sm mb-4">Available: <span className="text-white font-bold">{showSell?.stock} {showSell?.unit}</span></p>
         <Input label="Quantity to Sell" type="number" value={sellQty} onChange={e => setSellQty(+e.target.value)} min="1" className="mb-3" />
-        <Input label="Sell Price (S$)" type="number" value={sellPrice} onChange={e => setSellPrice(e.target.value)} step="0.01" className="mb-1" />
+        <Input label="Selling Price (S$)" type="number" value={sellPrice} onChange={e => setSellPrice(e.target.value)} step="0.01" className="mb-1" />
         <p className="text-xs text-slate-500 mb-4">Default: {showSell ? formatSGD(showSell.price) : ""} per {showSell?.unit}</p>
         <div className="bg-slate-900/50 rounded-lg p-3 mb-4">
           <p className="text-sm text-slate-400">Total: <span className="text-emerald-400 font-black text-lg">{formatSGD(sellQty * (+sellPrice || showSell?.price || 0))}</span></p>
@@ -626,31 +868,163 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
 // ─────────────────────────────────────────────
 // INVOICE MODULE
 // ─────────────────────────────────────────────
-function InvoiceModule({ invoices, setInvoices, setCustomers, customers, addNotification, currentUser }) {
+function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setStockLog, customers, products, addNotification, currentUser }) {
   const [showNew, setShowNew] = useState(false);
   const [viewInv, setViewInv] = useState(null);
   const [filter, setFilter] = useState("all");
-  const [form, setForm] = useState({ customerId: "", customerName: "", items: [{ name: "", qty: 1, price: "" }], notes: "", due: "" });
+  const [bookedFilter, setBookedFilter] = useState("all");
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [showWhatsappInput, setShowWhatsappInput] = useState(false);
+  const [whatsappDraft, setWhatsappDraft] = useState("");
+  const emptyItem = () => ({ name: "", qty: 1, price: "", productId: "", manual: true });
+  const [form, setForm] = useState({
+    customerId: "", customerName: "", manualCustomer: false, items: [emptyItem()], notes: "", due: "",
+    discountType: "none", discountValue: "",
+  });
 
-  const filtered = invoices.filter(i => filter === "all" || getInvoiceStatus(i) === filter);
+  const filtered = invoices.filter((i) => {
+    if (filter !== "all" && getInvoiceStatus(i) !== filter) return false;
+    if (bookedFilter === "booked" && !i.booked) return false;
+    if (bookedFilter === "unbooked" && i.booked) return false;
+    return true;
+  });
+  const unbookedInvoiceCount = invoices.filter((i) => !i.booked && i.status !== "cancelled").length;
+  const activeViewInv = viewInv ? invoices.find((i) => i.id === viewInv.id) || viewInv : null;
+  const canCancelInvoice = (inv) => ["pending", "overdue"].includes(getInvoiceStatus(inv));
 
-  const addItem = () => setForm(f => ({ ...f, items: [...f.items, { name: "", qty: 1, price: "" }] }));
-  const removeItem = (idx) => setForm(f => ({ ...f, items: f.items.filter((_, i) => i !== idx) }));
+  const toggleInvoiceBooked = (id) => {
+    if (!canMarkAccounting(currentUser)) {
+      addNotification({ type: "error", title: "Permission Denied", message: "Accounting marks permission is required." });
+      return;
+    }
+    setInvoices((prev) => prev.map((inv) => {
+      if (inv.id !== id) return inv;
+      const patch = makeBookedPatch(!inv.booked, currentUser.name);
+      return { ...inv, ...patch };
+    }));
+    setViewInv((prev) => {
+      if (prev?.id !== id) return prev;
+      const patch = makeBookedPatch(!prev.booked, currentUser.name);
+      return { ...prev, ...patch };
+    });
+  };
+
+  const patchInvoice = (id, patch) => {
+    setInvoices((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)));
+    setViewInv((prev) => (prev?.id === id ? { ...prev, ...patch } : prev));
+  };
+
+  const applyInvoiceDiscount = (inv, discountType, discountValueRaw) => {
+    if (discountType === "percent" && (+discountValueRaw <= 0 || +discountValueRaw > 100)) {
+      addNotification({ type: "error", title: "Invalid Discount", message: "Percentage must be between 1 and 100." });
+      return false;
+    }
+    if (discountType === "fixed" && +discountValueRaw <= 0) {
+      addNotification({ type: "error", title: "Invalid Discount", message: "Enter a discount amount greater than zero." });
+      return false;
+    }
+    const discountValue = discountType === "none" ? 0 : +discountValueRaw || 0;
+    const amounts = calcInvoiceAmounts({ ...inv, discountType, discountValue });
+    patchInvoice(inv.id, { discountType, discountValue, total: amounts.total });
+    addNotification({ type: "success", title: "Discount Updated", message: `Total is now ${formatSGD(amounts.total)}` });
+    return true;
+  };
+
+  const addManualItem = () => setForm(f => ({ ...f, items: [...f.items, emptyItem()] }));
+  const addProductItem = (productId) => {
+    const p = products.find((x) => String(x.id) === String(productId));
+    if (!p) return;
+    setForm(f => ({
+      ...f,
+      items: [...f.items, { name: p.name, qty: 1, price: p.price, productId: p.id, manual: false }],
+    }));
+  };
+  const removeItem = (idx) => setForm(f => ({ ...f, items: f.items.length > 1 ? f.items.filter((_, i) => i !== idx) : [emptyItem()] }));
   const updateItem = (idx, field, val) => setForm(f => ({ ...f, items: f.items.map((it, i) => i === idx ? { ...it, [field]: val } : it) }));
+  const convertToManualItem = (idx) => setForm(f => ({
+    ...f,
+    items: f.items.map((it, i) => i === idx ? { ...it, productId: "", manual: true } : it),
+  }));
 
-  const formTotal = form.items.reduce((s, it) => s + (+it.qty || 0) * (+it.price || 0), 0);
+  const formSubtotal = form.items.reduce((s, it) => s + (+it.qty || 0) * (+it.price || 0), 0);
+  const formAmounts = calcInvoiceAmounts({
+    items: form.items.map((it) => ({ name: it.name, qty: +it.qty || 0, price: +it.price || 0 })),
+    discountType: form.discountType,
+    discountValue: form.discountType === "none" ? 0 : +form.discountValue || 0,
+  });
 
-  const createInvoice = () => {
-    if (!form.customerName || form.items.some(it => !it.name || !it.price)) return;
+  const createInvoice = async () => {
+    setFormError("");
+    if (!form.customerName?.trim()) {
+      setFormError("Please select or enter a customer name.");
+      return;
+    }
+    if (form.items.some(it => !it.name?.trim() || !it.price)) {
+      setFormError("Each item needs a name and price.");
+      return;
+    }
+    if (form.discountType === "percent" && (+form.discountValue <= 0 || +form.discountValue > 100)) {
+      setFormError("Discount percentage must be between 1 and 100.");
+      return;
+    }
+    if (form.discountType === "fixed" && +form.discountValue <= 0) {
+      setFormError("Enter a discount amount greater than zero.");
+      return;
+    }
+    const customerRecord = findCustomerRecord(customers, form.customerId, form.customerName);
+    const customerDetails = resolveInvoiceCustomer({ customerId: form.customerId, customerName: form.customerName }, customers);
+    const discountValue = form.discountType === "none" ? 0 : +form.discountValue || 0;
+    const issueDate = today();
+    const invId = genInvoiceId(invoices, issueDate);
+    const invoiceItems = form.items.map(serializeInvoiceItem);
+    const stockCheck = deductStockForInvoice(setProducts, setStockLog, products, invoiceItems, {
+      invoiceId: invId,
+      by: currentUser?.name || "Staff",
+    });
+    if (!stockCheck.ok) {
+      setFormError(stockCheck.message);
+      addNotification({ type: "error", title: "Insufficient Stock", message: stockCheck.message });
+      return;
+    }
     const inv = {
-      id: genId("INV"), customerId: form.customerId, customerName: form.customerName,
-      items: form.items.map(it => ({ name: it.name, qty: +it.qty, price: +it.price })),
-      total: formTotal, status: "pending", date: today(), due: form.due || today(), notes: form.notes, createdBy: currentUser.name
+      id: invId, customerId: form.customerId, customerName: form.customerName,
+      customerWhatsapp: customerDetails.phone,
+      customerPhone: customerDetails.phone,
+      customerAddress: customerDetails.address || formatCustomerAddress(customerRecord),
+      items: invoiceItems,
+      discountType: form.discountType,
+      discountValue,
+      total: formAmounts.total, status: "pending", date: issueDate, due: form.due || issueDate, notes: form.notes, createdBy: currentUser.name,
+      booked: false, bookedAt: null, bookedBy: "",
     };
     setInvoices(prev => [inv, ...prev]);
-    addNotification({ type: "success", title: "Invoice Created", message: `${inv.id} for ${inv.customerName} - ${formatSGD(inv.total)}` });
     setShowNew(false);
-    setForm({ customerId: "", customerName: "", items: [{ name: "", qty: 1, price: "" }], notes: "", due: "" });
+    setViewInv(inv);
+    setFormError("");
+    setForm({
+      customerId: "", customerName: "", manualCustomer: false, items: [emptyItem()], notes: "", due: "",
+      discountType: "none", discountValue: "",
+    });
+
+    addNotification({ type: "success", title: "Invoice Created", message: `${inv.id} for ${inv.customerName} - ${formatSGD(inv.total)}` });
+
+    if (!customerDetails.phone && !form.manualCustomer && form.customerId) {
+      addNotification({ type: "info", title: "No WhatsApp Number", message: "Add a WhatsApp number to this customer, then use Send WhatsApp when ready." });
+    }
+  };
+
+  const cancelInvoice = (id) => {
+    const inv = invoices.find((i) => i.id === id);
+    if (!inv || !canCancelInvoice(inv)) return;
+    if (!confirm(`Cancel ${id} for ${inv.customerName}? This cannot be undone.`)) return;
+    restoreStockForInvoice(setProducts, setStockLog, products, inv.items || [], {
+      invoiceId: id,
+      by: currentUser?.name || "Staff",
+    });
+    setInvoices((prev) => prev.map((i) => (i.id === id ? { ...i, status: "cancelled" } : i)));
+    setViewInv((prev) => (prev?.id === id ? null : prev));
+    addNotification({ type: "info", title: "Invoice Cancelled", message: `${id} has been cancelled. Inventory stock restored where applicable.` });
   };
 
   const markPaid = (id) => {
@@ -667,24 +1041,85 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, customers, addNoti
     addNotification({ type: "success", title: "Payment Received", message: `${id} marked as paid - ${formatSGD(inv.total)}` });
   };
 
+  const downloadPdf = async (inv) => {
+    setPdfLoading(true);
+    try {
+      const filename = await downloadInvoicePdf(enrichInvoiceCustomer(inv, customers));
+      addNotification({ type: "success", title: "PDF Downloaded", message: `${filename} saved to your device.` });
+    } catch (err) {
+      addNotification({ type: "error", title: "PDF Failed", message: err?.message || "Could not generate PDF." });
+    } finally {
+      setPdfLoading(false);
+    }
+  };
+
+  const persistInvoiceWhatsapp = (invId, phone) => {
+    setInvoices((prev) => prev.map((i) => (i.id === invId ? { ...i, customerWhatsapp: phone } : i)));
+    setViewInv((prev) => (prev?.id === invId ? { ...prev, customerWhatsapp: phone } : prev));
+  };
+
+  const sendWhatsApp = (inv, phoneOverride) => {
+    const phone = phoneOverride || resolveInvoiceWhatsApp(inv, customers);
+    if (!phone?.trim()) {
+      setShowWhatsappInput(true);
+      setWhatsappDraft("");
+      return;
+    }
+    setShowWhatsappInput(false);
+    try {
+      openWhatsAppChat(phone);
+      persistInvoiceWhatsapp(inv.id, phone);
+      addNotification({ type: "success", title: "WhatsApp Opened", message: `Chat opened for ${inv.customerName}. Send your message and invoice from there.` });
+    } catch (err) {
+      addNotification({ type: "error", title: "WhatsApp Failed", message: err?.message || "Could not open WhatsApp." });
+    }
+  };
+
+  const submitWhatsappDraft = () => {
+    if (!viewInv) return;
+    if (!whatsappDraft.trim()) {
+      addNotification({ type: "error", title: "WhatsApp Required", message: "Enter a WhatsApp number (e.g. +65 9123 4567)." });
+      return;
+    }
+    sendWhatsApp(viewInv, whatsappDraft.trim());
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div><h2 className="text-xl sm:text-2xl font-black text-white">Invoices</h2><p className="text-slate-400 text-sm">Manage billing & payments</p></div>
+        <div>
+          <h2 className="text-xl sm:text-2xl font-black text-white">Invoices</h2>
+          <p className="text-slate-400 text-sm">Record invoices — mark when entered in your accounting app</p>
+          {unbookedInvoiceCount > 0 && (
+            <p className="text-amber-400/90 text-xs mt-1">{unbookedInvoiceCount} not yet entered in accounts</p>
+          )}
+        </div>
         <Btn onClick={() => setShowNew(true)} className="w-full sm:w-auto justify-center"><Plus size={16} />New Invoice</Btn>
       </div>
 
       <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
-        {["all", "pending", "paid", "overdue"].map(s => (
+        {["all", "pending", "paid", "overdue", "cancelled"].map(s => (
           <button key={s} onClick={() => setFilter(s)}
             className={`px-3 py-2 rounded-lg text-xs font-bold capitalize transition-all shrink-0 touch-manipulation ${filter === s ? "bg-cyan-500 text-slate-900" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>{s}</button>
+        ))}
+      </div>
+      <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
+        {[
+          { id: "all", label: "All records" },
+          { id: "unbooked", label: "Pending accounts" },
+          { id: "booked", label: "In accounts" },
+        ].map((s) => (
+          <button key={s.id} onClick={() => setBookedFilter(s.id)}
+            className={`px-3 py-2 rounded-lg text-xs font-bold transition-all shrink-0 touch-manipulation ${bookedFilter === s.id ? "bg-purple-500 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>{s.label}</button>
         ))}
       </div>
 
       <div className="md:hidden space-y-3">
         {filtered.length === 0 ? (
           <Card className="p-8 text-center text-slate-500">No invoices</Card>
-        ) : filtered.map(inv => (
+        ) : filtered.map(inv => {
+          const invAmounts = calcInvoiceAmounts(inv);
+          return (
           <Card key={inv.id} className="p-4">
             <div className="flex items-start justify-between gap-3 mb-3">
               <div className="min-w-0">
@@ -692,17 +1127,35 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, customers, addNoti
                 <p className="text-white font-bold truncate">{inv.customerName}</p>
                 <p className="text-slate-500 text-xs">{inv.date}</p>
               </div>
-              <Badge className={statusColor[getInvoiceStatus(inv)]}>{getInvoiceStatus(inv)}</Badge>
+              <div className="flex flex-col items-end gap-1">
+                <Badge className={statusColor[getInvoiceStatus(inv)]}>{getInvoiceStatus(inv)}</Badge>
+                <BookedBadge booked={inv.booked} bookedBy={inv.bookedBy} />
+              </div>
             </div>
             <div className="flex items-center justify-between gap-3">
-              <p className="text-xl font-black text-white">{formatSGD(inv.total)}</p>
+              <div>
+                <p className="text-xl font-black text-white">{formatSGD(invAmounts.total)}</p>
+                {invAmounts.discountAmount > 0 && (
+                  <p className="text-xs text-emerald-400">-{formatSGD(invAmounts.discountAmount)} discount</p>
+                )}
+              </div>
               <div className="flex gap-2">
-                <Btn variant="ghost" size="sm" onClick={() => setViewInv(inv)}><Eye size={14} /></Btn>
+                <Btn variant="ghost" size="sm" onClick={() => setViewInv(inv)} title="View"><Eye size={14} /></Btn>
+                <Btn variant="ghost" size="sm" onClick={() => { setViewInv(inv); sendWhatsApp(inv); }} title="Send WhatsApp" disabled={pdfLoading}><MessageSquare size={14} /></Btn>
+                <Btn variant="ghost" size="sm" onClick={() => downloadPdf(inv)} title="Download PDF" disabled={pdfLoading}><Printer size={14} /></Btn>
+                {canMarkAccounting(currentUser) && (
+                  <Btn variant="ghost" size="sm" onClick={() => toggleInvoiceBooked(inv.id)} title={inv.booked ? "Undo accounts entry mark" : "Mark entered in accounts"}>
+                    <BookCheck size={14} className={inv.booked ? "text-emerald-400" : "text-slate-500"} />
+                  </Btn>
+                )}
+                {canCancelInvoice(inv) && (
+                  <Btn variant="ghost" size="sm" onClick={() => cancelInvoice(inv.id)} title="Cancel invoice"><XCircle size={14} className="text-red-400" /></Btn>
+                )}
                 {["pending", "overdue"].includes(getInvoiceStatus(inv)) && <Btn variant="success" size="sm" onClick={() => markPaid(inv.id)}><Check size={12} />Paid</Btn>}
               </div>
             </div>
           </Card>
-        ))}
+        );})}
       </div>
 
       <Card className="overflow-hidden hidden md:block">
@@ -714,21 +1167,43 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, customers, addNoti
           </tr></thead>
           <tbody className="divide-y divide-slate-700/30">
             {filtered.length === 0 ? <tr><td colSpan={6} className="text-center py-8 text-slate-500">No invoices</td></tr> :
-              filtered.map(inv => (
+              filtered.map(inv => {
+                const invAmounts = calcInvoiceAmounts(inv);
+                return (
                 <tr key={inv.id} className="text-slate-300 hover:bg-slate-700/20">
                   <td className="p-3 font-mono text-cyan-400 font-bold text-xs">{inv.id}</td>
                   <td className="p-3 font-medium">{inv.customerName}</td>
                   <td className="p-3 text-slate-500 text-xs">{inv.date}</td>
-                  <td className="p-3 text-right font-black text-white">{formatSGD(inv.total)}</td>
-                  <td className="p-3 text-center"><Badge className={statusColor[getInvoiceStatus(inv)]}>{getInvoiceStatus(inv)}</Badge></td>
+                  <td className="p-3 text-right">
+                    <p className="font-black text-white">{formatSGD(invAmounts.total)}</p>
+                    {invAmounts.discountAmount > 0 && (
+                      <p className="text-[10px] text-emerald-400">-{formatSGD(invAmounts.discountAmount)}</p>
+                    )}
+                  </td>
+                  <td className="p-3 text-center">
+                    <div className="flex flex-col items-center gap-1">
+                      <Badge className={statusColor[getInvoiceStatus(inv)]}>{getInvoiceStatus(inv)}</Badge>
+                      <BookedBadge booked={inv.booked} bookedBy={inv.bookedBy} />
+                    </div>
+                  </td>
                   <td className="p-3">
                     <div className="flex gap-1 justify-center">
-                      <Btn variant="ghost" size="sm" onClick={() => setViewInv(inv)}><Eye size={12} /></Btn>
+                      <Btn variant="ghost" size="sm" onClick={() => setViewInv(inv)} title="View"><Eye size={12} /></Btn>
+                      <Btn variant="ghost" size="sm" onClick={() => { setViewInv(inv); sendWhatsApp(inv); }} title="Send WhatsApp" disabled={pdfLoading}><MessageSquare size={12} /></Btn>
+                      <Btn variant="ghost" size="sm" onClick={() => downloadPdf(inv)} title="Download PDF" disabled={pdfLoading}><Printer size={12} /></Btn>
+                      {canMarkAccounting(currentUser) && (
+                        <Btn variant="ghost" size="sm" onClick={() => toggleInvoiceBooked(inv.id)} title={inv.booked ? "Undo accounts mark" : "Mark in accounts"}>
+                          <BookCheck size={12} className={inv.booked ? "text-emerald-400" : "text-slate-500"} />
+                        </Btn>
+                      )}
+                      {canCancelInvoice(inv) && (
+                        <Btn variant="ghost" size="sm" onClick={() => cancelInvoice(inv.id)} title="Cancel invoice"><XCircle size={12} className="text-red-400" /></Btn>
+                      )}
                       {["pending", "overdue"].includes(getInvoiceStatus(inv)) && <Btn variant="success" size="sm" onClick={() => markPaid(inv.id)}><Check size={12} />Paid</Btn>}
                     </div>
                   </td>
                 </tr>
-              ))
+              );})
             }
           </tbody>
         </table>
@@ -736,86 +1211,295 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, customers, addNoti
       </Card>
 
       {/* New Invoice Modal */}
-      <Modal open={showNew} onClose={() => setShowNew(false)} title="Create Invoice" size="lg">
+      <Modal open={showNew} onClose={() => { setShowNew(false); setFormError(""); }} title="Create Invoice" size="lg">
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <Select label="Select Customer" value={form.customerId}
-                onChange={e => { const c = customers.find(c => c.id === +e.target.value); setForm(f => ({ ...f, customerId: e.target.value, customerName: c?.name || "" })); }}
-                options={[{ value: "", label: "-- Select --" }, ...customers.map(c => ({ value: c.id, label: c.name }))]} />
+              <Select label="Customer" value={form.manualCustomer ? "manual" : form.customerId}
+                onChange={e => {
+                  if (e.target.value === "manual") {
+                    setForm(f => ({ ...f, manualCustomer: true, customerId: "", customerName: "" }));
+                  } else {
+                    const c = customers.find(c => c.id === +e.target.value);
+                    setForm(f => ({ ...f, manualCustomer: false, customerId: e.target.value, customerName: c?.name || "" }));
+                  }
+                }}
+                options={[
+                  { value: "", label: "-- Select customer --" },
+                  ...customers.map(c => ({ value: c.id, label: c.name })),
+                  { value: "manual", label: "Walk-in / Other customer" },
+                ]} />
             </div>
             <Input label="Due Date" type="date" value={form.due} onChange={e => setForm(f => ({ ...f, due: e.target.value }))} />
           </div>
-          {form.customerName && !customers.find(c => c.id === +form.customerId) && (
-            <Input label="Customer Name (Manual)" value={form.customerName} onChange={e => setForm(f => ({ ...f, customerName: e.target.value }))} />
+          {form.manualCustomer && (
+            <Input label="Customer Name" value={form.customerName} onChange={e => setForm(f => ({ ...f, customerName: e.target.value }))} placeholder="Enter customer name" required />
           )}
+          {!form.manualCustomer && form.customerId && findCustomerWhatsApp(customers, form.customerId) && (
+            <p className="text-xs text-emerald-400 flex items-center gap-1.5">
+              <MessageSquare size={12} />
+              Invoice will be sent via WhatsApp to {findCustomerWhatsApp(customers, form.customerId)} after creation.
+            </p>
+          )}
+
           <div>
-            <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wide">Items</label>
-            {form.items.map((it, idx) => (
-              <div key={idx} className="flex gap-2 mb-2">
-                <input value={it.name} onChange={e => updateItem(idx, "name", e.target.value)} placeholder="Item name"
-                  className="flex-1 bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/50" />
-                <input type="number" value={it.qty} onChange={e => updateItem(idx, "qty", e.target.value)} placeholder="Qty" min="1"
-                  className="w-16 bg-slate-900/50 border border-slate-600 rounded-lg px-2 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/50 text-center" />
-                <input type="number" value={it.price} onChange={e => updateItem(idx, "price", e.target.value)} placeholder="Price" step="0.01"
-                  className="w-24 bg-slate-900/50 border border-slate-600 rounded-lg px-2 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/50" />
-                <button onClick={() => removeItem(idx)} className="text-red-400 hover:text-red-300 px-2"><X size={14} /></button>
+            <div className="flex flex-col gap-1 mb-3">
+              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Invoice Items</label>
+              <p className="text-xs text-slate-500">Pick from inventory, or add a <span className="text-slate-400">Manual item</span> for products not in your list.</p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2 mb-3">
+              {products.length > 0 && (
+                <select
+                  className="flex-1 bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+                  defaultValue=""
+                  onChange={e => {
+                    if (e.target.value) { addProductItem(e.target.value); e.target.value = ""; }
+                  }}
+                >
+                  <option value="">+ Add from Inventory</option>
+                  {PRODUCT_CATEGORIES.map(cat => {
+                    const catProducts = products.filter(p => p.category === cat);
+                    if (!catProducts.length) return null;
+                    return (
+                      <optgroup key={cat} label={cat}>
+                        {catProducts.map(p => (
+                          <option key={p.id} value={p.id}>{p.name} — {formatSGD(p.price)} ({p.stock} {p.unit})</option>
+                        ))}
+                      </optgroup>
+                    );
+                  })}
+                </select>
+              )}
+              <Btn variant="ghost" size="sm" onClick={addManualItem} className="shrink-0 justify-center">
+                <Plus size={12} />Manual Item
+              </Btn>
+            </div>
+
+            <div className="space-y-3">
+              {form.items.map((it, idx) => {
+                const fromInventory = !it.manual && !!it.productId;
+                return (
+                  <Card key={idx} className={`p-3 border-slate-700/50 ${it.manual ? "border-amber-500/20" : "border-cyan-500/20"}`}>
+                    <div className="flex items-center justify-between mb-2 gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-xs font-bold text-slate-500 shrink-0">Line {idx + 1}</span>
+                        <Badge className={fromInventory ? "bg-cyan-500/20 text-cyan-300" : "bg-amber-500/20 text-amber-300"}>
+                          {fromInventory ? "Inventory" : "Manual"}
+                        </Badge>
+                      </div>
+                      <button type="button" onClick={() => removeItem(idx)} className="text-red-400 hover:text-red-300 p-1 touch-manipulation shrink-0"><X size={14} /></button>
+                    </div>
+                    <div className="space-y-2">
+                      {it.manual ? (
+                        <Input
+                          label="Item Name"
+                          value={it.name}
+                          onChange={e => updateItem(idx, "name", e.target.value)}
+                          placeholder="Type item name (not in inventory list)"
+                          required
+                        />
+                      ) : (
+                        <div>
+                          <p className="text-[10px] font-semibold text-slate-500 mb-1 uppercase">Item Name</p>
+                          <p className="text-white font-medium text-sm bg-slate-900/40 border border-slate-700/50 rounded-lg px-3 py-2.5">{it.name}</p>
+                          <button
+                            type="button"
+                            onClick={() => convertToManualItem(idx)}
+                            className="mt-1 text-xs text-amber-400 hover:text-amber-300 touch-manipulation"
+                          >
+                            Edit name manually
+                          </button>
+                        </div>
+                      )}
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        <Input label="Qty" type="number" value={it.qty} onChange={e => updateItem(idx, "qty", e.target.value)} min="1" />
+                        <Input label="Price (S$)" type="number" value={it.price} onChange={e => updateItem(idx, "price", e.target.value)} step="0.01" className="sm:col-span-2" />
+                      </div>
+                      <p className="text-right text-sm text-emerald-400 font-bold">
+                        {formatSGD((+it.qty || 0) * (+it.price || 0))}
+                      </p>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-700/50 overflow-hidden">
+            <div className="bg-slate-900/40 px-4 py-3 border-b border-slate-700/50">
+              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Discount</label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
+                <Select
+                  label=""
+                  value={form.discountType}
+                  onChange={(e) => setForm((f) => ({
+                    ...f,
+                    discountType: e.target.value,
+                    discountValue: e.target.value === "none" ? "" : f.discountValue,
+                  }))}
+                  options={[
+                    { value: "none", label: "No discount" },
+                    { value: "fixed", label: "Fixed amount (S$)" },
+                    { value: "percent", label: "Percentage (%)" },
+                  ]}
+                />
+                {form.discountType !== "none" && (
+                  <Input
+                    label={form.discountType === "percent" ? "Discount %" : "Discount amount (S$)"}
+                    type="number"
+                    value={form.discountValue}
+                    onChange={(e) => setForm((f) => ({ ...f, discountValue: e.target.value }))}
+                    min="0"
+                    max={form.discountType === "percent" ? "100" : undefined}
+                    step={form.discountType === "percent" ? "1" : "0.01"}
+                    placeholder={form.discountType === "percent" ? "e.g. 10" : "e.g. 50.00"}
+                  />
+                )}
               </div>
-            ))}
-            <Btn variant="ghost" size="sm" onClick={addItem}><Plus size={12} />Add Item</Btn>
+            </div>
+            <div className="bg-slate-900/50 p-4 space-y-2 text-sm">
+              <div className="flex justify-between text-slate-400">
+                <span>Subtotal ({form.items.length} item{form.items.length !== 1 ? "s" : ""})</span>
+                <span className="text-slate-200">{formatSGD(formSubtotal)}</span>
+              </div>
+              {formAmounts.discountAmount > 0 && (
+                <div className="flex justify-between text-emerald-400">
+                  <span>{form.discountType === "percent" ? `Discount (${+form.discountValue || 0}%)` : "Discount"}</span>
+                  <span>-{formatSGD(formAmounts.discountAmount)}</span>
+                </div>
+              )}
+              <div className="flex justify-between items-center pt-2 border-t border-slate-700/50">
+                <span className="text-slate-300 font-semibold">Total due</span>
+                <span className="text-2xl font-black text-cyan-400">{formatSGD(formAmounts.total)}</span>
+              </div>
+            </div>
           </div>
-          <div className="bg-slate-900/50 rounded-xl p-4 flex justify-between items-center">
-            <span className="text-slate-400">Total</span>
-            <span className="text-2xl font-black text-cyan-400">{formatSGD(formTotal)}</span>
-          </div>
+          {formError && (
+            <div className="bg-red-500/20 border border-red-500/30 rounded-lg p-3 text-red-300 text-sm flex items-center gap-2">
+              <AlertTriangle size={14} />{formError}
+            </div>
+          )}
           <Textarea label="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} rows={2} />
         </div>
-        <div className="flex justify-end gap-2 mt-5">
-          <Btn variant="secondary" onClick={() => setShowNew(false)}>Cancel</Btn>
+        <div className="modal-actions">
+          <Btn variant="secondary" onClick={() => { setShowNew(false); setFormError(""); }}>Cancel</Btn>
           <Btn onClick={createInvoice}><FileText size={14} />Create Invoice</Btn>
         </div>
       </Modal>
 
       {/* View Invoice Modal */}
-      <Modal open={!!viewInv} onClose={() => setViewInv(null)} title={`Invoice ${viewInv?.id}`} size="md">
-        {viewInv && (
+      <Modal open={!!activeViewInv} onClose={() => { setViewInv(null); setShowWhatsappInput(false); }} title={`Invoice ${activeViewInv?.id}`} size="full">
+        {activeViewInv && (() => {
+          const viewAmounts = calcInvoiceAmounts(activeViewInv);
+          const canEditDiscount = ["pending", "overdue"].includes(getInvoiceStatus(activeViewInv));
+          const docInv = enrichInvoiceCustomer(activeViewInv, customers);
+          return (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div><p className="text-slate-500 text-xs">Customer</p><p className="text-white font-bold">{viewInv.customerName}</p></div>
-              <div><p className="text-slate-500 text-xs">Status</p><Badge className={statusColor[getInvoiceStatus(viewInv)]}>{getInvoiceStatus(viewInv)}</Badge></div>
-              <div><p className="text-slate-500 text-xs">Date</p><p className="text-white">{viewInv.date}</p></div>
-              <div><p className="text-slate-500 text-xs">Due</p><p className="text-white">{viewInv.due}</p></div>
-            </div>
-            <div>
-              <p className="text-slate-500 text-xs mb-2">ITEMS</p>
-              {viewInv.items.map((it, i) => (
-                <div key={i} className="flex justify-between py-2 border-b border-slate-700/50 text-sm">
-                  <span className="text-slate-300">{it.name} <span className="text-slate-500">×{it.qty}</span></span>
-                  <span className="text-white font-bold">{formatSGD(it.qty * it.price)}</span>
-                </div>
-              ))}
-              <div className="flex justify-between pt-3 font-black text-lg">
-                <span className="text-slate-400">Total</span>
-                <span className="text-cyan-400">{formatSGD(viewInv.total)}</span>
+            <div className="no-print flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <Badge className={statusColor[getInvoiceStatus(activeViewInv)]}>{getInvoiceStatus(activeViewInv)}</Badge>
+                <span className="text-slate-400">{activeViewInv.customerName}</span>
+                <span className="text-cyan-400 font-bold">{formatSGD(viewAmounts.total)}</span>
+                {viewAmounts.discountAmount > 0 && (
+                  <Badge className="bg-emerald-500/20 text-emerald-300 text-[10px]">-{formatSGD(viewAmounts.discountAmount)}</Badge>
+                )}
+                {resolveInvoiceWhatsApp(activeViewInv, customers) && (
+                  <span className="text-emerald-400/80 text-xs hidden sm:inline">{resolveInvoiceWhatsApp(activeViewInv, customers)}</span>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+                <Btn variant="success" onClick={() => sendWhatsApp(activeViewInv)} className="flex-1 sm:flex-none justify-center">
+                  <MessageSquare size={14} />Open WhatsApp
+                </Btn>
+                <Btn onClick={() => downloadPdf(activeViewInv)} disabled={pdfLoading} className="flex-1 sm:flex-none justify-center">
+                  <Printer size={14} />{pdfLoading ? "Generating..." : "Download PDF"}
+                </Btn>
+                {canCancelInvoice(activeViewInv) && (
+                  <Btn variant="danger" onClick={() => cancelInvoice(activeViewInv.id)} className="flex-1 sm:flex-none justify-center">
+                    <XCircle size={14} />Cancel Invoice
+                  </Btn>
+                )}
               </div>
             </div>
-            {viewInv.notes && <div className="bg-slate-900/50 rounded-lg p-3"><p className="text-slate-500 text-xs">Notes</p><p className="text-slate-300 text-sm">{viewInv.notes}</p></div>}
-            <div className="bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-600 rounded-xl p-4">
-              <div className="flex items-center gap-2 mb-3"><Zap size={16} className="text-cyan-400" /><span className="text-white font-bold text-sm">PayNow Details</span></div>
-              <div className="bg-white rounded-lg p-3 flex items-center justify-center mb-3">
-                <div className="grid grid-cols-7 gap-0.5 w-28 h-28">
-                  {PAYNOW_QR_PATTERN.map((dark, i) => (
-                    <div key={i} className={`rounded-sm ${dark ? "bg-slate-900" : "bg-white"}`} />
-                  ))}
+            {canEditDiscount && (
+              <Card className="no-print p-4 border-slate-700/50">
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Discount</p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <Select
+                    label="Type"
+                    value={activeViewInv.discountType || "none"}
+                    onChange={(e) => {
+                      const discountType = e.target.value;
+                      if (discountType === "none") {
+                        applyInvoiceDiscount(activeViewInv, "none", 0);
+                      } else {
+                        patchInvoice(activeViewInv.id, { discountType, discountValue: activeViewInv.discountValue || "" });
+                      }
+                    }}
+                    options={[
+                      { value: "none", label: "No discount" },
+                      { value: "fixed", label: "Fixed (S$)" },
+                      { value: "percent", label: "Percentage (%)" },
+                    ]}
+                  />
+                  {(activeViewInv.discountType && activeViewInv.discountType !== "none") && (
+                    <Input
+                      label={activeViewInv.discountType === "percent" ? "Discount %" : "Amount (S$)"}
+                      type="number"
+                      value={activeViewInv.discountValue || ""}
+                      onChange={(e) => patchInvoice(activeViewInv.id, { discountValue: e.target.value })}
+                      min="0"
+                      max={activeViewInv.discountType === "percent" ? "100" : undefined}
+                      step={activeViewInv.discountType === "percent" ? "1" : "0.01"}
+                    />
+                  )}
+                  {(activeViewInv.discountType && activeViewInv.discountType !== "none") && (
+                    <div className="flex items-end">
+                      <Btn
+                        className="w-full justify-center"
+                        onClick={() => applyInvoiceDiscount(activeViewInv, activeViewInv.discountType, activeViewInv.discountValue)}
+                      >
+                        <Check size={14} />Apply
+                      </Btn>
+                    </div>
+                  )}
                 </div>
-              </div>
-              <p className="text-slate-400 text-xs text-center">Enter in your banking app:</p>
-              <p className="text-white font-bold text-center text-sm mt-1">UEN: {PAYNOW_UEN}</p>
-              <p className="text-cyan-400 font-bold text-center text-lg">{formatSGD(viewInv.total)}</p>
-              <p className="text-slate-500 text-xs text-center mt-1">Reference: {viewInv.id}</p>
+                <div className="flex flex-wrap gap-4 mt-3 text-xs text-slate-400">
+                  <span>Subtotal: <span className="text-slate-200">{formatSGD(viewAmounts.subtotal)}</span></span>
+                  {viewAmounts.discountAmount > 0 && (
+                    <span>Discount: <span className="text-emerald-400">-{formatSGD(viewAmounts.discountAmount)}</span></span>
+                  )}
+                  <span>Total due: <span className="text-cyan-400 font-bold">{formatSGD(viewAmounts.total)}</span></span>
+                </div>
+              </Card>
+            )}
+            {showWhatsappInput && (
+              <Card className="no-print p-4 border-emerald-500/30 bg-emerald-500/5">
+                <p className="text-sm text-emerald-200 mb-3">Enter customer WhatsApp number to send this invoice.</p>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <Input
+                    label="WhatsApp number"
+                    value={whatsappDraft}
+                    onChange={(e) => setWhatsappDraft(e.target.value)}
+                    placeholder="+65 9123 4567"
+                    className="flex-1"
+                  />
+                  <div className="flex gap-2 sm:items-end shrink-0">
+                    <Btn variant="success" onClick={submitWhatsappDraft} disabled={pdfLoading}><Send size={14} />Send</Btn>
+                    <Btn variant="secondary" onClick={() => setShowWhatsappInput(false)}>Cancel</Btn>
+                  </div>
+                </div>
+              </Card>
+            )}
+            <div className="no-print rounded-xl border border-slate-600 bg-[#d4d4d4] p-4 sm:p-6 overflow-y-auto max-h-[min(80vh,920px)]">
+              <InvoiceDocument invoice={docInv} className="shadow-2xl" />
             </div>
+            <p className="no-print text-xs text-slate-500 text-center">
+              Open WhatsApp goes straight to the customer chat. Send your own message and attach the invoice with Download PDF.
+            </p>
           </div>
-        )}
+        );})()}
       </Modal>
     </div>
   );
@@ -829,11 +1513,14 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
   const [view, setView] = useState(null);
   const [search, setSearch] = useState("");
   const [tierFilter, setTierFilter] = useState("All");
-  const [form, setForm] = useState({ name: "", phone: "", whatsapp: "", area: "Tampines", fishTypes: [], tier: "Bronze", notes: "" });
+  const [form, setForm] = useState({ name: "", phone: "", whatsapp: "", area: "Tampines", postalCode: "", address: "", fishTypes: [], tier: "Bronze", notes: "" });
 
   const filtered = customers.filter(c =>
     (tierFilter === "All" || c.tier === tierFilter) &&
-    (c.name.toLowerCase().includes(search.toLowerCase()) || c.area.toLowerCase().includes(search.toLowerCase()))
+    (c.name.toLowerCase().includes(search.toLowerCase())
+      || c.area.toLowerCase().includes(search.toLowerCase())
+      || c.postalCode?.includes(search)
+      || c.address?.toLowerCase().includes(search.toLowerCase()))
   );
 
   const addCustomer = () => {
@@ -842,7 +1529,7 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
     setCustomers(prev => [...prev, c]);
     addNotification({ type: "success", title: "Customer Added", message: `${c.name} added to CRM` });
     setShowAdd(false);
-    setForm({ name: "", phone: "", whatsapp: "", area: "Tampines", fishTypes: [], tier: "Bronze", notes: "" });
+    setForm({ name: "", phone: "", whatsapp: "", area: "Tampines", postalCode: "", address: "", fishTypes: [], tier: "Bronze", notes: "" });
   };
 
   const toggleFishType = (ft) => {
@@ -881,7 +1568,8 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
             <div className="flex items-start justify-between mb-3">
               <div>
                 <p className="text-white font-bold">{c.name}</p>
-                <p className="text-slate-500 text-xs flex items-center gap-1"><MapPin size={10} />{c.area}</p>
+                <p className="text-slate-500 text-xs flex items-center gap-1"><MapPin size={10} />{c.area}{c.postalCode ? ` · ${c.postalCode}` : ""}</p>
+                {c.address && <p className="text-slate-600 text-xs mt-0.5 truncate">{c.address}</p>}
               </div>
               <span className={`font-black text-sm ${tierColor[c.tier]}`}>{c.tier}</span>
             </div>
@@ -902,12 +1590,14 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
 
       {/* Add Customer */}
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Customer" size="lg">
-        <div className="grid grid-cols-2 gap-4">
-          <Input label="Full Name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required className="col-span-2" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Input label="Full Name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required className="sm:col-span-2" />
           <Input label="Phone" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="+65 9XXX XXXX" required />
           <Input label="WhatsApp" value={form.whatsapp} onChange={e => setForm(f => ({ ...f, whatsapp: e.target.value }))} placeholder="+65 9XXX XXXX" />
           <Select label="Area" value={form.area} onChange={e => setForm(f => ({ ...f, area: e.target.value }))} options={SG_AREAS} />
           <Select label="Tier" value={form.tier} onChange={e => setForm(f => ({ ...f, tier: e.target.value }))} options={CUSTOMER_TIERS} />
+          <Input label="Postal Code" value={form.postalCode} onChange={e => setForm(f => ({ ...f, postalCode: e.target.value.replace(/\D/g, "").slice(0, 6) }))} placeholder="e.g. 521123" inputMode="numeric" />
+          <Input label="Address Details" value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} placeholder="Blk / Unit / Street" className="sm:col-span-2" />
         </div>
         <div className="mt-4">
           <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wide">Fish Interests</label>
@@ -919,7 +1609,7 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
           </div>
         </div>
         <Textarea label="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="mt-4" rows={2} />
-        <div className="flex justify-end gap-2 mt-5">
+        <div className="modal-actions">
           <Btn variant="secondary" onClick={() => setShowAdd(false)}>Cancel</Btn>
           <Btn onClick={addCustomer}><Plus size={14} />Add Customer</Btn>
         </div>
@@ -929,10 +1619,12 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
       <Modal open={!!view} onClose={() => setView(null)} title={view?.name} size="md">
         {view && (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4 text-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
               <div><p className="text-slate-500 text-xs">Phone</p><p className="text-white flex items-center gap-1"><Phone size={12} />{view.phone}</p></div>
               <div><p className="text-slate-500 text-xs">WhatsApp</p><p className="text-white">{view.whatsapp}</p></div>
               <div><p className="text-slate-500 text-xs">Area</p><p className="text-white">{view.area}</p></div>
+              <div><p className="text-slate-500 text-xs">Postal Code</p><p className="text-white">{view.postalCode || "—"}</p></div>
+              <div className="sm:col-span-2"><p className="text-slate-500 text-xs">Address</p><p className="text-white">{view.address || "—"}</p></div>
               <div><p className="text-slate-500 text-xs">Tier</p><p className={`font-black ${tierColor[view.tier]}`}><Star size={12} className="inline mr-1" />{view.tier}</p></div>
               <div><p className="text-slate-500 text-xs">Total Spent</p><p className="text-emerald-400 font-black text-lg">{formatSGD(view.totalSpent)}</p></div>
             </div>
@@ -951,107 +1643,255 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
 }
 
 // ─────────────────────────────────────────────
-// EXPENSE TRACKER
+// EXPENSE RECEIPTS (image records for external accounting)
 // ─────────────────────────────────────────────
-function ExpenseModule({ expenses, setExpenses, invoices, addNotification, currentUser }) {
+function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) {
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ category: "Feed", amount: "", date: today(), note: "" });
+  const [viewExpense, setViewExpense] = useState(null);
+  const [bookedFilter, setBookedFilter] = useState("all");
+  const [uploadPreview, setUploadPreview] = useState(null);
+  const [uploadName, setUploadName] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const albumInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
 
   if (!hasPermission(currentUser, "expenses")) return <AccessDenied moduleName="Expenses" />;
 
-  const totalRevenue = invoices.filter(i => i.status === "paid").reduce((s, i) => s + i.total, 0);
-  const totalExpenses = expenses.reduce((s, e) => s + e.amount, 0);
-  const netProfit = totalRevenue - totalExpenses;
+  const unbookedExpenseCount = expenses.filter((e) => !e.booked).length;
+  const visibleExpenses = [...expenses].reverse().filter((e) => {
+    if (bookedFilter === "booked") return e.booked;
+    if (bookedFilter === "unbooked") return !e.booked;
+    return true;
+  });
 
-  const addExpense = () => {
-    if (!form.amount) return;
-    const e = { ...form, id: Date.now(), amount: +form.amount, addedBy: currentUser.name };
-    setExpenses(prev => [...prev, e]);
-    addNotification({ type: "info", title: "Expense Added", message: `${e.category}: ${formatSGD(e.amount)}` });
-    setShowAdd(false);
-    setForm({ category: "Feed", amount: "", date: today(), note: "" });
+  const resetUpload = () => {
+    setUploadPreview(null);
+    setUploadName("");
+    if (albumInputRef.current) albumInputRef.current.value = "";
+    if (cameraInputRef.current) cameraInputRef.current.value = "";
   };
 
-  const catBreakdown = EXPENSE_CATEGORIES.map(c => ({ cat: c, total: expenses.filter(e => e.category === c).reduce((s, e) => s + e.amount, 0) })).filter(x => x.total > 0).sort((a, b) => b.total - a.total);
-  const maxCat = Math.max(...catBreakdown.map(c => c.total), 1);
+  const handleImagePick = async (file) => {
+    if (!file) return;
+    try {
+      setUploading(true);
+      const { dataUrl, name } = await compressReceiptImage(file);
+      setUploadPreview(dataUrl);
+      setUploadName(name);
+    } catch (err) {
+      addNotification({ type: "error", title: "Upload Failed", message: err?.message || "Could not process image." });
+      resetUpload();
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const toggleExpenseBooked = (id) => {
+    if (!canMarkAccounting(currentUser)) {
+      addNotification({ type: "error", title: "Permission Denied", message: "Accounting marks permission is required." });
+      return;
+    }
+    setExpenses((prev) => prev.map((e) => {
+      if (e.id !== id) return e;
+      return { ...e, ...makeBookedPatch(!e.booked, currentUser.name) };
+    }));
+    setViewExpense((prev) => (prev?.id === id ? { ...prev, ...makeBookedPatch(!prev.booked, currentUser.name) } : prev));
+  };
+
+  const deleteExpense = (expense) => {
+    const label = expense.imageName || expense.date || "this receipt";
+    if (!confirm(`Delete ${label}? This cannot be undone.`)) return;
+    setExpenses((prev) => prev.filter((e) => e.id !== expense.id));
+    setViewExpense((prev) => (prev?.id === expense.id ? null : prev));
+    addNotification({ type: "info", title: "Receipt Deleted", message: "Expense receipt removed." });
+  };
+
+  const saveReceipt = () => {
+    if (!uploadPreview) {
+      addNotification({ type: "error", title: "Image Required", message: "Upload an expense invoice or receipt photo." });
+      return;
+    }
+    const e = {
+      id: Date.now(),
+      date: today(),
+      imageData: uploadPreview,
+      imageName: uploadName,
+      imageUrl: "",
+      addedBy: currentUser.name,
+      booked: false,
+      bookedAt: null,
+      bookedBy: "",
+    };
+    setExpenses((prev) => [...prev, e]);
+    addNotification({ type: "success", title: "Receipt Saved", message: "Expense invoice photo recorded." });
+    setShowAdd(false);
+    resetUpload();
+  };
 
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div><h2 className="text-xl sm:text-2xl font-black text-white">Expenses</h2><p className="text-slate-400 text-sm">Track costs & profitability</p></div>
-        <Btn onClick={() => setShowAdd(true)} className="w-full sm:w-auto justify-center"><Plus size={16} />Add Expense</Btn>
+        <div>
+          <h2 className="text-xl sm:text-2xl font-black text-white">Expense Receipts</h2>
+          <p className="text-slate-400 text-sm">Upload invoice photos — enter amounts in your accounting app separately</p>
+          {unbookedExpenseCount > 0 && (
+            <p className="text-amber-400/90 text-xs mt-1">{unbookedExpenseCount} not yet entered in accounts</p>
+          )}
+        </div>
+        <Btn onClick={() => { resetUpload(); setShowAdd(true); }} className="w-full sm:w-auto justify-center">
+          <ImagePlus size={16} />Upload Receipt
+        </Btn>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card className="p-4 border-emerald-500/20 bg-emerald-500/5">
-          <p className="text-slate-400 text-xs mb-1">Total Revenue</p>
-          <p className="text-2xl font-black text-emerald-400">{formatSGD(totalRevenue)}</p>
-        </Card>
-        <Card className="p-4 border-red-500/20 bg-red-500/5">
-          <p className="text-slate-400 text-xs mb-1">Total Expenses</p>
-          <p className="text-2xl font-black text-red-400">{formatSGD(totalExpenses)}</p>
-        </Card>
-        <Card className={`p-4 ${netProfit >= 0 ? "border-cyan-500/20 bg-cyan-500/5" : "border-red-500/20 bg-red-500/5"}`}>
-          <p className="text-slate-400 text-xs mb-1">Net Profit</p>
-          <p className={`text-2xl font-black flex items-center gap-1 ${netProfit >= 0 ? "text-cyan-400" : "text-red-400"}`}>
-            {netProfit >= 0 ? <ArrowUp size={20} /> : <ArrowDown size={20} />}{formatSGD(Math.abs(netProfit))}
-          </p>
-        </Card>
+      <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
+        {[
+          { id: "all", label: "All records" },
+          { id: "unbooked", label: "Pending accounts" },
+          { id: "booked", label: "In accounts" },
+        ].map((s) => (
+          <button key={s.id} onClick={() => setBookedFilter(s.id)}
+            className={`px-3 py-2 rounded-lg text-xs font-bold transition-all shrink-0 touch-manipulation ${bookedFilter === s.id ? "bg-purple-500 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>{s.label}</button>
+        ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <Card className="p-4">
-          <h3 className="text-sm font-bold text-white mb-4">Category Breakdown</h3>
-          <div className="space-y-3">
-            {catBreakdown.map(c => (
-              <div key={c.cat}>
-                <div className="flex justify-between text-sm mb-1">
-                  <span className="text-slate-300 font-medium">{c.cat}</span>
-                  <span className="text-white font-bold">{formatSGD(c.total)}</span>
-                </div>
-                <div className="h-2.5 bg-slate-700 rounded-full overflow-hidden">
-                  <div className="h-full bg-gradient-to-r from-red-500 to-orange-400 rounded-full" style={{ width: `${(c.total / maxCat) * 100}%` }} />
-                </div>
-                <p className="text-slate-500 text-xs mt-0.5">{((c.total / totalExpenses) * 100).toFixed(1)}% of total</p>
-              </div>
-            ))}
-          </div>
+      {visibleExpenses.length === 0 ? (
+        <Card className="p-10 text-center">
+          <ImagePlus size={40} className="mx-auto text-slate-600 mb-3" />
+          <p className="text-slate-400 text-sm">No expense receipts yet</p>
+          <Btn className="mt-4 mx-auto" onClick={() => { resetUpload(); setShowAdd(true); }}><ImagePlus size={14} />Upload first receipt</Btn>
         </Card>
-
-        <Card className="overflow-hidden">
-          <div className="p-4 border-b border-slate-700">
-            <h3 className="text-sm font-bold text-white">Expense Log</h3>
-          </div>
-          <div className="divide-y divide-slate-700/50 max-h-80 overflow-y-auto">
-            {expenses.length === 0 ? <p className="text-slate-500 text-sm p-4">No expenses</p> :
-              [...expenses].reverse().map(e => (
-                <div key={e.id} className="flex items-center justify-between p-3 hover:bg-slate-700/20">
-                  <div>
-                    <p className="text-white text-sm font-medium">{e.category}</p>
-                    <p className="text-slate-500 text-xs">{e.date} · {e.note || "—"}</p>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
+          {visibleExpenses.map((e) => {
+            const src = expenseImageSrc(e);
+            return (
+              <Card key={e.id} className="overflow-hidden hover:border-slate-600 transition-colors cursor-pointer" onClick={() => setViewExpense(e)}>
+                <div className="aspect-[3/4] bg-slate-900 relative">
+                  {src ? (
+                    <img src={src} alt={e.imageName || "Expense receipt"} className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full flex flex-col items-center justify-center p-3 text-center text-slate-500 text-xs">
+                      <FileText size={28} className="mb-2 opacity-50" />
+                      <span>Legacy record{e.category ? `: ${e.category}` : ""}</span>
+                      {e.amount > 0 && <span className="text-red-400 mt-1">{formatSGD(e.amount)}</span>}
+                    </div>
+                  )}
+                  <div className="absolute top-2 right-2 flex items-center gap-1">
+                    <BookedBadge booked={e.booked} bookedBy={e.bookedBy} />
+                    <button
+                      type="button"
+                      onClick={(ev) => { ev.stopPropagation(); deleteExpense(e); }}
+                      className="p-1.5 rounded-lg bg-slate-900/80 text-red-400 hover:text-red-300 hover:bg-slate-800 touch-manipulation"
+                      title="Delete receipt"
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </div>
-                  <div className="text-right">
-                    <p className="text-red-400 font-bold">{formatSGD(e.amount)}</p>
-                    <p className="text-slate-500 text-xs">{e.addedBy}</p>
-                  </div>
                 </div>
-              ))
-            }
-          </div>
-        </Card>
-      </div>
+                <div className="p-2.5">
+                  <p className="text-white text-xs font-medium truncate">{e.imageName || e.category || "Receipt"}</p>
+                  <p className="text-slate-500 text-[10px]">{e.date} · {e.addedBy}</p>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
 
-      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Expense" size="sm">
+      <Modal open={showAdd} onClose={() => { setShowAdd(false); resetUpload(); }} title="Upload Expense Receipt" size="md">
         <div className="space-y-4">
-          <Select label="Category" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} options={EXPENSE_CATEGORIES} required />
-          <Input label="Amount (S$)" type="number" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} step="0.01" required />
-          <Input label="Date" type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
-          <Textarea label="Note" value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} rows={2} />
+          <p className="text-slate-400 text-sm">Take a photo or choose an image of the supplier invoice / receipt.</p>
+          <input
+            ref={albumInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(ev) => handleImagePick(ev.target.files?.[0])}
+          />
+          <input
+            ref={cameraInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(ev) => handleImagePick(ev.target.files?.[0])}
+          />
+          {uploadPreview ? (
+            <div className="rounded-xl overflow-hidden border border-slate-600 bg-slate-900">
+              <img src={uploadPreview} alt="Preview" className="w-full max-h-[50vh] object-contain" />
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => albumInputRef.current?.click()}
+                disabled={uploading}
+                className="rounded-xl border-2 border-dashed border-slate-600 hover:border-cyan-500/50 bg-slate-900/50 p-8 text-center transition-colors touch-manipulation"
+              >
+                <Images size={32} className="mx-auto text-cyan-400 mb-3" />
+                <p className="text-white font-semibold text-sm">{uploading ? "Processing..." : "Choose from album"}</p>
+                <p className="text-slate-500 text-xs mt-1">Photo library / gallery</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => cameraInputRef.current?.click()}
+                disabled={uploading}
+                className="rounded-xl border-2 border-dashed border-slate-600 hover:border-cyan-500/50 bg-slate-900/50 p-8 text-center transition-colors touch-manipulation"
+              >
+                <Camera size={32} className="mx-auto text-emerald-400 mb-3" />
+                <p className="text-white font-semibold text-sm">{uploading ? "Processing..." : "Take photo"}</p>
+                <p className="text-slate-500 text-xs mt-1">Open camera</p>
+              </button>
+            </div>
+          )}
+          {uploadPreview && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <Btn variant="secondary" onClick={() => albumInputRef.current?.click()} disabled={uploading} className="w-full justify-center">
+                <Images size={14} />Choose from album
+              </Btn>
+              <Btn variant="secondary" onClick={() => cameraInputRef.current?.click()} disabled={uploading} className="w-full justify-center">
+                <Camera size={14} />Take new photo
+              </Btn>
+            </div>
+          )}
         </div>
-        <div className="flex justify-end gap-2 mt-5">
-          <Btn variant="secondary" onClick={() => setShowAdd(false)}>Cancel</Btn>
-          <Btn onClick={addExpense}><Plus size={14} />Add</Btn>
+        <div className="modal-actions">
+          <Btn variant="secondary" onClick={() => { setShowAdd(false); resetUpload(); }}>Cancel</Btn>
+          <Btn onClick={saveReceipt} disabled={!uploadPreview || uploading}><Plus size={14} />Save Receipt</Btn>
         </div>
+      </Modal>
+
+      <Modal open={!!viewExpense} onClose={() => setViewExpense(null)} title="Expense Receipt" size="lg">
+        {viewExpense && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <BookedBadge booked={viewExpense.booked} bookedBy={viewExpense.bookedBy} />
+              <span className="text-slate-500">{viewExpense.date}</span>
+              <span className="text-slate-500">· {viewExpense.addedBy}</span>
+            </div>
+            {expenseImageSrc(viewExpense) ? (
+              <div className="rounded-xl overflow-hidden border border-slate-600 bg-[#d4d4d4] p-2">
+                <img src={expenseImageSrc(viewExpense)} alt={viewExpense.imageName || "Receipt"} className="w-full max-h-[70vh] object-contain mx-auto" />
+              </div>
+            ) : (
+              <Card className="p-6 text-center text-slate-400 text-sm">No image on this legacy expense record.</Card>
+            )}
+            <div className="flex flex-col sm:flex-row gap-2">
+              {canMarkAccounting(currentUser) && (
+                <Btn
+                  variant={viewExpense.booked ? "secondary" : "success"}
+                  onClick={() => toggleExpenseBooked(viewExpense.id)}
+                  className="flex-1 justify-center"
+                >
+                  <BookCheck size={14} />{viewExpense.booked ? "Undo accounts mark" : "Mark entered in accounts"}
+                </Btn>
+              )}
+              <Btn variant="danger" onClick={() => deleteExpense(viewExpense)} className="flex-1 justify-center">
+                <Trash2 size={14} />Delete Receipt
+              </Btn>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );
@@ -1060,20 +1900,70 @@ function ExpenseModule({ expenses, setExpenses, invoices, addNotification, curre
 // ─────────────────────────────────────────────
 // DELIVERY MODULE
 // ─────────────────────────────────────────────
-function DeliveryModule({ deliveries, setDeliveries, customers, addNotification, currentUser }) {
+function DeliveryModule({
+  deliveries, setDeliveries, customers, invoices, whatsappGroups, setWhatsappGroups,
+  addNotification, currentUser, cloudMode,
+}) {
+  const emptyDeliveryForm = () => ({
+    invoiceId: "", customerId: "", customerName: "", area: "Tampines", postalCode: "", address: "",
+    schedule: "", items: "", driver: "", notes: "",
+  });
   const [showAdd, setShowAdd] = useState(false);
   const [filter, setFilter] = useState("all");
-  const [form, setForm] = useState({ customerId: "", customerName: "", area: "Tampines", address: "", schedule: "", items: "", driver: "", notes: "" });
+  const [form, setForm] = useState(emptyDeliveryForm());
+  const [showLinkedInvoicePreview, setShowLinkedInvoicePreview] = useState(true);
+  const [invoicePreviewId, setInvoicePreviewId] = useState(null);
+  const [whatsappDelivery, setWhatsappDelivery] = useState(null);
+  const [whatsappRecipientId, setWhatsappRecipientId] = useState("custom");
+  const [whatsappDraft, setWhatsappDraft] = useState("");
+  const [showManageGroups, setShowManageGroups] = useState(false);
+  const [groupForm, setGroupForm] = useState({ name: "", link: "" });
 
   const filtered = deliveries.filter(d => filter === "all" || d.status === filter);
+  const linkedInvoice = form.invoiceId ? invoices.find((i) => i.id === form.invoiceId) : null;
+  const linkedInvoiceDoc = linkedInvoice ? enrichInvoiceCustomer(linkedInvoice, customers) : null;
+  const linkableInvoices = [...invoices]
+    .filter((i) => i.status !== "cancelled")
+    .sort((a, b) => `${b.date || ""}${b.id}`.localeCompare(`${a.date || ""}${a.id}`));
 
   const addDelivery = () => {
     if (!form.customerName || !form.address || !form.schedule) return;
     const d = { ...form, id: genId("DEL"), status: "scheduled", createdBy: currentUser.name };
     setDeliveries(prev => [...prev, d]);
-    addNotification({ type: "info", title: "Delivery Scheduled", message: `${d.id} → ${d.customerName} at ${d.area}` });
+    addNotification({
+      type: "info",
+      title: "Delivery Scheduled",
+      message: d.invoiceId ? `${d.id} linked to ${d.invoiceId} → ${d.customerName}` : `${d.id} → ${d.customerName} at ${d.area}`,
+    });
     setShowAdd(false);
-    setForm({ customerId: "", customerName: "", area: "Tampines", address: "", schedule: "", items: "", driver: "", notes: "" });
+    setForm(emptyDeliveryForm());
+  };
+
+  const selectDeliveryInvoice = (invoiceId) => {
+    if (!invoiceId) {
+      setForm((f) => ({ ...f, invoiceId: "" }));
+      return;
+    }
+    const inv = invoices.find((i) => i.id === invoiceId);
+    if (!inv) return;
+    const enriched = enrichInvoiceCustomer(inv, customers);
+    setForm((f) => ({
+      ...f,
+      ...invoiceDeliveryFields(enriched, customers),
+      schedule: f.schedule,
+      driver: f.driver,
+      notes: f.notes,
+    }));
+    setShowLinkedInvoicePreview(true);
+  };
+
+  const selectDeliveryCustomer = (customerId) => {
+    if (!customerId) {
+      setForm((f) => ({ ...f, invoiceId: "", customerId: "", customerName: "", area: "Tampines", postalCode: "", address: "" }));
+      return;
+    }
+    const c = customers.find(x => x.id === +customerId);
+    setForm((f) => ({ ...f, invoiceId: "", ...customerDeliveryFields(c), schedule: f.schedule, items: f.items, driver: f.driver, notes: f.notes }));
   };
 
   const updateStatus = (id, status) => {
@@ -1083,11 +1973,90 @@ function DeliveryModule({ deliveries, setDeliveries, customers, addNotification,
 
   const statusFlow = { scheduled: ["transit", "cancelled"], transit: ["delivered", "cancelled"], delivered: [], cancelled: [] };
 
+  const whatsappRecipients = whatsappDelivery
+    ? buildDeliveryWhatsAppRecipients(whatsappDelivery, customers, whatsappGroups)
+    : [];
+
+  const persistWhatsappGroups = (groups) => {
+    setWhatsappGroups(groups);
+    if (!cloudMode) saveWhatsappGroups(groups);
+  };
+
+  const addWhatsappGroup = () => {
+    const name = groupForm.name.trim();
+    const link = normalizeWhatsAppGroupLink(groupForm.link);
+    if (!name) {
+      addNotification({ type: "error", title: "Name Required", message: "Enter a group name." });
+      return;
+    }
+    if (!link.includes("chat.whatsapp.com")) {
+      addNotification({ type: "error", title: "Invalid Link", message: "Paste a WhatsApp group invite link (chat.whatsapp.com/...)." });
+      return;
+    }
+    persistWhatsappGroups([...whatsappGroups, { id: genId("GRP"), name, link }]);
+    setGroupForm({ name: "", link: "" });
+    addNotification({ type: "success", title: "Group Saved", message: `${name} added to WhatsApp groups.` });
+  };
+
+  const deleteWhatsappGroup = (id) => {
+    persistWhatsappGroups(whatsappGroups.filter((g) => g.id !== id));
+  };
+
+  const openWhatsappPicker = (d) => {
+    const recipients = buildDeliveryWhatsAppRecipients(d, customers, whatsappGroups);
+    setWhatsappDelivery(d);
+    setWhatsappRecipientId(recipients.find((r) => r.id === "delivery-customer")?.id || recipients[0]?.id || "custom");
+    setWhatsappDraft("");
+  };
+
+  const closeWhatsappPicker = () => {
+    setWhatsappDelivery(null);
+    setWhatsappRecipientId("custom");
+    setWhatsappDraft("");
+  };
+
+  const confirmSendDeliveryWhatsapp = async () => {
+    if (!whatsappDelivery) return;
+    let recipient = null;
+    if (whatsappRecipientId === "custom") {
+      const phone = whatsappDraft.trim();
+      if (!phone) {
+        addNotification({ type: "error", title: "WhatsApp Required", message: "Enter a WhatsApp number (e.g. +65 9123 4567)." });
+        return;
+      }
+      recipient = { type: "phone", phone, label: phone };
+    } else {
+      recipient = whatsappRecipients.find((r) => r.id === whatsappRecipientId);
+      if (!recipient) {
+        addNotification({ type: "error", title: "No Recipient", message: "Select who to send to." });
+        return;
+      }
+    }
+    try {
+      const result = await sendDeliveryToRecipient(whatsappDelivery, recipient);
+      closeWhatsappPicker();
+      if (result.mode === "group") {
+        addNotification({ type: "success", title: "Group Opened", message: `Message copied — paste in ${result.label}.` });
+      } else if (result.mode === "share") {
+        addNotification({ type: "success", title: "WhatsApp Opened", message: "Choose a chat or group, then send." });
+      } else {
+        addNotification({ type: "success", title: "WhatsApp Opened", message: `Delivery schedule ready for ${result.label}. Review and send.` });
+      }
+    } catch (err) {
+      addNotification({ type: "error", title: "WhatsApp Failed", message: err?.message || "Could not open WhatsApp." });
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div><h2 className="text-xl sm:text-2xl font-black text-white">Deliveries</h2><p className="text-slate-400 text-sm">Singapore delivery management</p></div>
-        <Btn onClick={() => setShowAdd(true)} className="w-full sm:w-auto justify-center"><Plus size={16} />Schedule Delivery</Btn>
+        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+          <Btn variant="secondary" onClick={() => setShowManageGroups(true)} className="w-full sm:w-auto justify-center">
+            <Users size={16} />WhatsApp Groups
+          </Btn>
+          <Btn onClick={() => setShowAdd(true)} className="w-full sm:w-auto justify-center"><Plus size={16} />Schedule Delivery</Btn>
+        </div>
       </div>
 
       <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
@@ -1105,10 +2074,12 @@ function DeliveryModule({ deliveries, setDeliveries, customers, addNotification,
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-2 flex-wrap">
                     <span className="font-mono text-cyan-400 text-xs font-bold">{d.id}</span>
+                    {d.invoiceId && <span className="font-mono text-purple-400/90 text-xs">{d.invoiceId}</span>}
                     <Badge className={statusColor[d.status]}>{d.status}</Badge>
                   </div>
                   <p className="text-white font-bold">{d.customerName}</p>
-                  <p className="text-slate-400 text-sm flex items-center gap-1"><MapPin size={12} />{d.address}</p>
+                  <p className="text-slate-400 text-sm flex items-center gap-1"><MapPin size={12} />{d.address}{d.postalCode ? `, Singapore ${d.postalCode}` : ""}</p>
+                  <p className="text-slate-500 text-xs">{d.area}</p>
                   <div className="flex flex-wrap gap-4 mt-2 text-xs text-slate-500">
                     <span><Clock size={10} className="inline mr-1" />{d.schedule}</span>
                     <span>Items: {d.items}</span>
@@ -1116,6 +2087,16 @@ function DeliveryModule({ deliveries, setDeliveries, customers, addNotification,
                   </div>
                 </div>
                 <div className="flex flex-col gap-2">
+                  {d.status !== "cancelled" && (
+                    <Btn variant="ghost" size="sm" onClick={() => openWhatsappPicker(d)} title="Send schedule on WhatsApp">
+                      <MessageSquare size={14} className="text-emerald-400" />
+                    </Btn>
+                  )}
+                  {d.invoiceId && (
+                    <Btn variant="ghost" size="sm" onClick={() => setInvoicePreviewId(d.invoiceId)} title="View linked invoice">
+                      <Eye size={14} />
+                    </Btn>
+                  )}
                   {statusFlow[d.status]?.map(next => (
                     <Btn key={next} variant={next === "delivered" ? "success" : next === "cancelled" ? "danger" : "secondary"} size="sm"
                       onClick={() => updateStatus(d.id, next)}>
@@ -1130,22 +2111,135 @@ function DeliveryModule({ deliveries, setDeliveries, customers, addNotification,
         }
       </div>
 
-      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Schedule Delivery" size="lg">
-        <div className="grid grid-cols-2 gap-4">
+      <Modal open={showAdd} onClose={() => { setShowAdd(false); setShowLinkedInvoicePreview(true); }} title="Schedule Delivery" size={form.invoiceId && showLinkedInvoicePreview ? "xl" : "lg"}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 min-w-0">
+          <Select
+            label="Link to Invoice"
+            value={form.invoiceId}
+            onChange={(e) => selectDeliveryInvoice(e.target.value)}
+            className="sm:col-span-2"
+            options={[
+              { value: "", label: "-- No invoice --" },
+              ...linkableInvoices.map((inv) => ({
+                value: inv.id,
+                label: `${inv.id} — ${inv.customerName} (${formatSGD(inv.total)})`,
+              })),
+            ]}
+          />
+          {form.invoiceId && (
+            <div className="sm:col-span-2 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-purple-300/90">
+                  Address and items filled from {form.invoiceId}. Compare with invoice below.
+                </p>
+                <Btn variant="ghost" size="sm" onClick={() => setShowLinkedInvoicePreview((v) => !v)} className="shrink-0">
+                  <Eye size={14} />{showLinkedInvoicePreview ? "Hide Invoice" : "View Invoice"}
+                </Btn>
+              </div>
+              {showLinkedInvoicePreview && linkedInvoiceDoc && (
+                <div className="rounded-xl border border-slate-600 bg-[#d4d4d4] p-3 sm:p-4 overflow-y-auto max-h-[min(50vh,480px)]">
+                  <InvoiceDocument invoice={linkedInvoiceDoc} className="shadow-lg" />
+                </div>
+              )}
+            </div>
+          )}
           <Select label="Customer" value={form.customerId}
-            onChange={e => { const c = customers.find(x => x.id === +e.target.value); setForm(f => ({ ...f, customerId: e.target.value, customerName: c?.name || "", area: c?.area || "Tampines" })); }}
+            onChange={e => selectDeliveryCustomer(e.target.value)}
             options={[{ value: "", label: "-- Select --" }, ...customers.map(c => ({ value: c.id, label: c.name }))]} />
           <Select label="Area" value={form.area} onChange={e => setForm(f => ({ ...f, area: e.target.value }))} options={SG_AREAS} />
-          <Input label="Address" value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} placeholder="Block / Unit / Street" required className="col-span-2" />
-          <Input label="Schedule" type="datetime-local" value={form.schedule} onChange={e => setForm(f => ({ ...f, schedule: e.target.value }))} required />
+          <Input label="Postal Code" value={form.postalCode} onChange={e => setForm(f => ({ ...f, postalCode: e.target.value.replace(/\D/g, "").slice(0, 6) }))} placeholder="e.g. 521123" inputMode="numeric" />
+          <Input label="Address Details" value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} placeholder="Blk / Unit / Street" required className="sm:col-span-2" />
+          {form.customerId && form.address && !form.invoiceId && (
+            <p className="sm:col-span-2 text-xs text-cyan-400/80">Filled from customer profile — edit here if this delivery goes elsewhere.</p>
+          )}
+          <Input label="Schedule" type="datetime-local" value={form.schedule} onChange={e => setForm(f => ({ ...f, schedule: e.target.value }))} required className="w-full max-w-full" />
           <Input label="Driver Name" value={form.driver} onChange={e => setForm(f => ({ ...f, driver: e.target.value }))} />
-          <Textarea label="Items" value={form.items} onChange={e => setForm(f => ({ ...f, items: e.target.value }))} placeholder="e.g. 1x Super Red Arowana, 2x Koi Pellets" className="col-span-2" rows={2} />
-          <Textarea label="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="col-span-2" rows={2} />
+          <Textarea label="Items" value={form.items} onChange={e => setForm(f => ({ ...f, items: e.target.value }))} placeholder="e.g. 1x Super Red Arowana, 2x Koi Pellets" className="sm:col-span-2" rows={2} />
+          <Textarea label="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="sm:col-span-2" rows={2} />
         </div>
-        <div className="flex justify-end gap-2 mt-5">
-          <Btn variant="secondary" onClick={() => setShowAdd(false)}>Cancel</Btn>
+        <div className="modal-actions">
+          <Btn variant="secondary" onClick={() => { setShowAdd(false); setShowLinkedInvoicePreview(true); }}>Cancel</Btn>
           <Btn onClick={addDelivery}><Truck size={14} />Schedule</Btn>
         </div>
+      </Modal>
+
+      <Modal open={!!invoicePreviewId} onClose={() => setInvoicePreviewId(null)} title={`Invoice ${invoicePreviewId || ""}`} size="full">
+        {invoicePreviewId && (() => {
+          const inv = invoices.find((i) => i.id === invoicePreviewId);
+          if (!inv) return <p className="text-slate-400 text-sm">Invoice not found.</p>;
+          return (
+            <div className="rounded-xl border border-slate-600 bg-[#d4d4d4] p-4 sm:p-6 overflow-y-auto max-h-[min(80vh,920px)]">
+              <InvoiceDocument invoice={enrichInvoiceCustomer(inv, customers)} className="shadow-2xl" />
+            </div>
+          );
+        })()}
+      </Modal>
+
+      <Modal open={showManageGroups} onClose={() => { setShowManageGroups(false); setGroupForm({ name: "", link: "" }); }} title="WhatsApp Groups" size="md">
+        <div className="space-y-4">
+          <p className="text-slate-400 text-sm">
+            Save your team WhatsApp group invite links. Paste the link from WhatsApp → Group info → Invite via link.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Input label="Group name" value={groupForm.name} onChange={(e) => setGroupForm((f) => ({ ...f, name: e.target.value }))} placeholder="e.g. Delivery Team" />
+            <Input label="Invite link" value={groupForm.link} onChange={(e) => setGroupForm((f) => ({ ...f, link: e.target.value }))} placeholder="https://chat.whatsapp.com/..." className="sm:col-span-2" />
+          </div>
+          <Btn onClick={addWhatsappGroup} className="w-full sm:w-auto justify-center"><Plus size={14} />Add Group</Btn>
+          {whatsappGroups.length === 0 ? (
+            <Card className="p-6 text-center text-slate-500 text-sm">No groups saved yet</Card>
+          ) : (
+            <div className="space-y-2">
+              {whatsappGroups.map((g) => (
+                <Card key={g.id} className="p-3 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-white font-semibold text-sm truncate">{g.name}</p>
+                    <p className="text-slate-500 text-xs truncate">{g.link}</p>
+                  </div>
+                  <Btn variant="danger" size="sm" onClick={() => deleteWhatsappGroup(g.id)}><Trash2 size={12} /></Btn>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      <Modal open={!!whatsappDelivery} onClose={closeWhatsappPicker} title="Send Delivery on WhatsApp" size="md">
+        {whatsappDelivery && (
+          <div className="space-y-4">
+            <p className="text-slate-300 text-sm">
+              Send <span className="font-mono text-cyan-400">{whatsappDelivery.id}</span> schedule to:
+            </p>
+            <Select
+              label="Send to"
+              value={whatsappRecipientId}
+              onChange={(e) => setWhatsappRecipientId(e.target.value)}
+              options={[
+                ...whatsappRecipients.map((r) => ({
+                  value: r.id,
+                  label: formatDeliveryRecipientLabel(r),
+                })),
+                { value: "custom", label: "Other number..." },
+              ]}
+            />
+            {whatsappRecipientId === "custom" && (
+              <Input
+                label="WhatsApp number"
+                value={whatsappDraft}
+                onChange={(e) => setWhatsappDraft(e.target.value)}
+                placeholder="+65 9123 4567"
+              />
+            )}
+            {whatsappGroups.length === 0 && (
+              <p className="text-xs text-slate-500">
+                Add saved groups via <button type="button" className="text-cyan-400 hover:underline" onClick={() => { closeWhatsappPicker(); setShowManageGroups(true); }}>WhatsApp Groups</button>.
+              </p>
+            )}
+            <div className="modal-actions !mt-0">
+              <Btn variant="secondary" onClick={closeWhatsappPicker}>Cancel</Btn>
+              <Btn variant="success" onClick={confirmSendDeliveryWhatsapp}><Send size={14} />Open WhatsApp</Btn>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );
@@ -1215,14 +2309,14 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Event" size="sm">
         <div className="space-y-4">
           <Input label="Title" value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} required />
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Input label="Date" type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
             <Input label="Time" type="time" value={form.time} onChange={e => setForm(f => ({ ...f, time: e.target.value }))} />
           </div>
           <Select label="Type" value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))} options={["maintenance", "feeding", "purchase", "customer", "other"]} />
           <Textarea label="Note" value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} rows={2} />
         </div>
-        <div className="flex justify-end gap-2 mt-5">
+        <div className="modal-actions">
           <Btn variant="secondary" onClick={() => setShowAdd(false)}>Cancel</Btn>
           <Btn onClick={addEvent}><Plus size={14} />Add Event</Btn>
         </div>
@@ -1232,9 +2326,197 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
 }
 
 // ─────────────────────────────────────────────
+// CHANGE MY PIN
+// ─────────────────────────────────────────────
+function ChangePinModal({ open, onClose, currentUser, users, setUsers, cloudMode, addNotification }) {
+  const [currentPin, setCurrentPin] = useState("");
+  const [newPin, setNewPin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const reset = () => {
+    setCurrentPin("");
+    setNewPin("");
+    setConfirmPin("");
+    setError("");
+  };
+
+  const handleClose = () => {
+    reset();
+    onClose();
+  };
+
+  const handleSave = async () => {
+    setError("");
+    if (currentPin.length < 4) {
+      setError("Enter your current PIN.");
+      return;
+    }
+    if (newPin.length < 4) {
+      setError("New PIN must be at least 4 digits.");
+      return;
+    }
+    if (newPin !== confirmPin) {
+      setError("New PINs do not match.");
+      return;
+    }
+    if (currentPin === newPin) {
+      setError("New PIN must be different from your current PIN.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      if (isSupabaseConfigured) {
+        await auth.changeMyPin({ currentPin, newPin });
+      } else {
+        const me = users.find((u) => u.id === currentUser.id);
+        if (!me || me.pin !== currentPin) {
+          setError("Current PIN is incorrect.");
+          setSaving(false);
+          return;
+        }
+        if (users.some((u) => u.pin === newPin && u.id !== currentUser.id)) {
+          setError("This PIN is already assigned to another user.");
+          setSaving(false);
+          return;
+        }
+        setUsers((prev) => prev.map((u) => (u.id === currentUser.id ? { ...u, pin: newPin } : u)));
+      }
+      addNotification({ type: "success", title: "PIN Updated", message: "Your login PIN has been changed successfully." });
+      handleClose();
+    } catch (err) {
+      setError(err?.message || "Failed to change PIN.");
+    }
+    setSaving(false);
+  };
+
+  return (
+    <Modal open={open} onClose={handleClose} title="Change My PIN" size="sm">
+      <p className="text-slate-400 text-sm mb-4">
+        Update your login PIN for <span className="text-white font-semibold">{currentUser.name}</span>.
+        {currentUser.role === "owner" && " As admin, keep your PIN private and unique."}
+      </p>
+      <div className="space-y-4">
+        <Input label="Current PIN" type="password" inputMode="numeric" value={currentPin}
+          onChange={e => setCurrentPin(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="••••" required />
+        <Input label="New PIN (4+ digits)" type="password" inputMode="numeric" value={newPin}
+          onChange={e => setNewPin(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="••••" required />
+        <Input label="Confirm New PIN" type="password" inputMode="numeric" value={confirmPin}
+          onChange={e => setConfirmPin(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="••••" required />
+        {error && (
+          <div className="bg-red-500/20 border border-red-500/30 rounded-lg p-3 text-red-300 text-sm flex items-center gap-2">
+            <AlertTriangle size={14} />{error}
+          </div>
+        )}
+      </div>
+      <div className="modal-actions">
+        <Btn variant="secondary" onClick={handleClose} disabled={saving}>Cancel</Btn>
+        <Btn onClick={handleSave} disabled={saving}><Lock size={14} />{saving ? "Saving..." : "Update PIN"}</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+// ─────────────────────────────────────────────
 // TEAM & PERMISSIONS (Owner)
 // ─────────────────────────────────────────────
-function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUserUpdate }) {
+function AiUsageStatsPanel({ isOwner, cloudMode }) {
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = async () => {
+    if (!isOwner || !cloudMode) return;
+    setLoading(true);
+    setError("");
+    try {
+      const data = await fetchAiUsageStats();
+      setStats(data);
+    } catch (err) {
+      setError(err.message);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    if (!isOwner || !cloudMode) return;
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const data = await fetchAiUsageStats();
+        if (!cancelled) setStats(data);
+      } catch (err) {
+        if (!cancelled) setError(err.message);
+      }
+      if (!cancelled) setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [isOwner, cloudMode]);
+
+  if (!isOwner) return null;
+
+  const topToday = stats?.today?.[0];
+  const maxToday = Math.max(...(stats?.today?.map((r) => r.tokens) || [1]), 1);
+
+  return (
+    <Card className="p-4 border-violet-500/20 bg-violet-500/5">
+      <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+        <div>
+          <h3 className="text-sm font-bold text-white flex items-center gap-2">
+            <MessageSquare size={16} className="text-violet-400" />AI API Usage
+          </h3>
+          <p className="text-xs text-slate-500">Token usage by user — today & last 7 days (from Gemini API)</p>
+        </div>
+        <Btn variant="ghost" size="sm" onClick={load} disabled={loading || !cloudMode}>
+          {loading ? "Loading..." : "Refresh"}
+        </Btn>
+      </div>
+      {!cloudMode ? (
+        <p className="text-slate-500 text-sm">Connect Supabase to track AI usage.</p>
+      ) : error ? (
+        <p className="text-red-400 text-sm">{error}</p>
+      ) : !stats ? (
+        <p className="text-slate-500 text-sm">Loading usage...</p>
+      ) : (
+        <>
+          {topToday && topToday.tokens > 0 && (
+            <p className="text-xs text-violet-300 mb-3">
+              Top today: <span className="font-bold text-white">{topToday.name}</span> ({formatTokens(topToday.tokens)} tokens)
+            </p>
+          )}
+          <div className="space-y-2 max-h-48 overflow-y-auto">
+            {stats.today.map((row) => (
+              <div key={row.userId}>
+                <div className="flex justify-between text-xs mb-0.5">
+                  <span className="text-slate-300 truncate">
+                    {row.name}
+                    <Badge className={`ml-1.5 ${row.role === "owner" ? "bg-yellow-500/20 text-yellow-300" : "bg-blue-500/20 text-blue-300"}`}>{row.role}</Badge>
+                  </span>
+                  <span className="text-white font-bold shrink-0 ml-2">{formatTokens(row.tokens)}</span>
+                </div>
+                <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                  <div className="h-full bg-violet-500 rounded-full" style={{ width: `${(row.tokens / maxToday) * 100}%` }} />
+                </div>
+                <p className="text-[10px] text-slate-600 mt-0.5">
+                  {row.requests} calls · in {formatTokens(row.inputTokens)} / out {formatTokens(row.outputTokens)} · 7d: {formatTokens(stats.week.find((w) => w.userId === row.userId)?.tokens ?? 0)}
+                </p>
+              </div>
+            ))}
+            {stats.today.every((r) => r.tokens === 0) && (
+              <p className="text-slate-500 text-sm">No AI usage recorded today yet.</p>
+            )}
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
+function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUserUpdate, cloudMode, apiEnabled, onOpenChangePin }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editUser, setEditUser] = useState(null);
   const [form, setForm] = useState({ name: "", role: "staff", pin: "", permissions: [...DEFAULT_PERMISSIONS.staff], active: true });
@@ -1248,7 +2530,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
   };
 
   const openEdit = (user) => {
-    setForm({ name: user.name, role: user.role, pin: user.pin, permissions: [...user.permissions], active: user.active !== false });
+    setForm({ name: user.name, role: user.role, pin: "", permissions: [...user.permissions], active: user.active !== false });
     setEditUser(user);
     setShowAdd(true);
   };
@@ -1266,15 +2548,26 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
     setForm((f) => ({ ...f, role, permissions: [...DEFAULT_PERMISSIONS[role]] }));
   };
 
-  const saveUser = () => {
-    if (!form.name.trim() || !form.pin || form.pin.length < 4) {
-      addNotification({ type: "error", title: "Validation Error", message: "Name and 4-digit PIN are required." });
+  const saveUser = async () => {
+    if (!form.name.trim()) {
+      addNotification({ type: "error", title: "Validation Error", message: "Name is required." });
       return;
     }
-    const pinTaken = users.some((u) => u.pin === form.pin && u.id !== editUser?.id);
-    if (pinTaken) {
-      addNotification({ type: "error", title: "PIN In Use", message: "This PIN is already assigned to another user." });
+    const pinChanging = form.pin.length > 0;
+    if (!editUser && form.pin.length < 4) {
+      addNotification({ type: "error", title: "Validation Error", message: "New users need a 4-digit PIN." });
       return;
+    }
+    if (editUser && pinChanging && form.pin.length < 4) {
+      addNotification({ type: "error", title: "Validation Error", message: "PIN must be at least 4 digits, or leave blank to keep current PIN." });
+      return;
+    }
+    if (pinChanging && !apiEnabled) {
+      const pinTaken = users.some((u) => u.pin === form.pin && u.id !== editUser?.id);
+      if (pinTaken) {
+        addNotification({ type: "error", title: "PIN In Use", message: "This PIN is already assigned to another user." });
+        return;
+      }
     }
     if (form.permissions.length === 0) {
       addNotification({ type: "error", title: "No Permissions", message: "Select at least one permission." });
@@ -1291,36 +2584,95 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
         addNotification({ type: "error", title: "Cannot Remove", message: "Last owner must keep Team permission." });
         return;
       }
-      const updated = { ...form, name: form.name.trim() };
-      setUsers((prev) => prev.map((u) => u.id === editUser.id ? { ...u, ...updated } : u));
-      if (editUser.id === currentUser.id && onCurrentUserUpdate) {
-        onCurrentUserUpdate({ ...updated, permissions: form.permissions });
-      }
-      addNotification({ type: "success", title: "User Updated", message: `${form.name} permissions saved.` });
-    } else {
-      const newUser = { id: Date.now(), ...form, name: form.name.trim() };
-      setUsers((prev) => [...prev, newUser]);
-      addNotification({ type: "success", title: "User Added", message: `${form.name} (${form.role}) account created. Share their PIN securely.` });
     }
-    setShowAdd(false);
-    setEditUser(null);
+
+    try {
+      if (apiEnabled) {
+        if (editUser) {
+          const saved = await db.updateUser({
+            userId: editUser.id,
+            name: form.name.trim(),
+            role: form.role,
+            pin: pinChanging ? form.pin : undefined,
+            permissions: form.permissions,
+            active: form.active,
+          });
+          const refreshed = await db.fetchUsers();
+          if (refreshed) setUsers(refreshed);
+          else if (saved) setUsers((prev) => prev.map((u) => u.id === saved.id ? saved : u));
+          if (editUser.id === currentUser.id && onCurrentUserUpdate) {
+            onCurrentUserUpdate({
+              name: form.name.trim(),
+              role: form.role,
+              permissions: form.permissions,
+              active: form.active,
+            });
+          }
+          const msg = pinChanging ? `${form.name} updated (PIN changed).` : `${form.name} saved.`;
+          addNotification({ type: "success", title: "User Updated", message: msg });
+        } else {
+          await db.addUser({
+            name: form.name.trim(),
+            role: form.role,
+            pin: form.pin,
+            permissions: form.permissions,
+            active: form.active,
+          });
+          const refreshed = await db.fetchUsers();
+          if (refreshed) setUsers(refreshed);
+          addNotification({ type: "success", title: "User Added", message: `${form.name} (${form.role}) account created. Share their PIN securely.` });
+        }
+      } else if (editUser) {
+        setUsers((prev) => prev.map((u) => {
+          if (u.id !== editUser.id) return u;
+          const next = { ...u, name: form.name.trim(), role: form.role, permissions: form.permissions, active: form.active };
+          if (pinChanging) next.pin = form.pin;
+          return next;
+        }));
+        addNotification({ type: "success", title: "User Updated", message: `${form.name} saved locally.` });
+      } else {
+        const newUser = { id: Date.now(), ...form, name: form.name.trim() };
+        setUsers((prev) => [...prev, newUser]);
+        addNotification({ type: "success", title: "User Added", message: `${form.name} added locally (offline mode).` });
+      }
+      setShowAdd(false);
+      setEditUser(null);
+    } catch (err) {
+      addNotification({ type: "error", title: editUser ? "Update Failed" : "Add Failed", message: err?.message || "Could not save user to server." });
+    }
   };
 
-  const deleteUser = (user) => {
+  const deleteUser = async (user) => {
     if (user.id === currentUser.id) {
       addNotification({ type: "error", title: "Cannot Delete", message: "You cannot delete your own account." });
+      return;
+    }
+    if (user.isSystem) {
+      addNotification({ type: "error", title: "Cannot Delete", message: "The system owner account cannot be removed." });
       return;
     }
     if (user.role === "owner" && users.filter((u) => u.role === "owner" && u.active !== false).length <= 1) {
       addNotification({ type: "error", title: "Cannot Delete", message: "At least one active owner is required." });
       return;
     }
-    if (!confirm(`Remove ${user.name}?`)) return;
-    setUsers((prev) => prev.filter((u) => u.id !== user.id));
-    addNotification({ type: "info", title: "User Removed", message: `${user.name} has been removed.` });
+    if (!confirm(`Remove ${user.name}? This cannot be undone.`)) return;
+
+    try {
+      if (apiEnabled) {
+        await db.deleteUser(user.id);
+        const data = await db.fetchAllData();
+        if (data?.users) setUsers(data.users);
+        else setUsers((prev) => prev.filter((u) => u.id !== user.id));
+      } else {
+        setUsers((prev) => prev.filter((u) => u.id !== user.id));
+      }
+      addNotification({ type: "info", title: "User Removed", message: `${user.name} has been permanently removed.` });
+    } catch (err) {
+      addNotification({ type: "error", title: "Delete Failed", message: err?.message || "Could not remove user from server." });
+    }
   };
 
-  const toggleActive = (user) => {
+  const toggleActive = async (user) => {
     if (user.id === currentUser.id) {
       addNotification({ type: "error", title: "Cannot Deactivate", message: "You cannot deactivate your own account." });
       return;
@@ -1329,8 +2681,25 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
       addNotification({ type: "error", title: "Cannot Deactivate", message: "At least one active owner is required." });
       return;
     }
-    setUsers((prev) => prev.map((u) => u.id === user.id ? { ...u, active: u.active === false } : u));
-    addNotification({ type: "info", title: user.active === false ? "User Activated" : "User Deactivated", message: user.name });
+    const nextActive = user.active === false;
+    try {
+      if (apiEnabled) {
+        await db.updateUser({
+          userId: user.id,
+          name: user.name,
+          role: user.role,
+          permissions: user.permissions,
+          active: nextActive,
+        });
+        const refreshed = await db.fetchUsers();
+        if (refreshed) setUsers(refreshed);
+      } else {
+        setUsers((prev) => prev.map((u) => u.id === user.id ? { ...u, active: nextActive } : u));
+      }
+      addNotification({ type: "info", title: nextActive ? "User Activated" : "User Deactivated", message: user.name });
+    } catch (err) {
+      addNotification({ type: "error", title: "Update Failed", message: err?.message || "Could not update user on server." });
+    }
   };
 
   return (
@@ -1342,6 +2711,8 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
         </div>
         <Btn onClick={openAdd} className="w-full sm:w-auto justify-center"><UserPlus size={16} />Add User</Btn>
       </div>
+
+      <AiUsageStatsPanel isOwner={currentUser.role === "owner"} cloudMode={cloudMode} />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="p-4 border-yellow-500/20 bg-yellow-500/5">
@@ -1399,10 +2770,35 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
 
       <Modal open={showAdd} onClose={() => { setShowAdd(false); setEditUser(null); }} title={editUser ? `Edit — ${editUser.name}` : "Add User"} size="lg">
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <Input label="Full Name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required className="col-span-2" />
+          {editUser?.id === currentUser.id && (
+            <div className="bg-cyan-500/10 border border-cyan-500/20 rounded-xl p-3 text-sm text-slate-300">
+              To change <span className="text-white font-semibold">your own login PIN</span>, use{" "}
+              <button type="button" onClick={() => { setShowAdd(false); setEditUser(null); onOpenChangePin?.(); }}
+                className="text-cyan-400 font-bold hover:text-cyan-300 underline touch-manipulation">
+                Change My PIN
+              </button>{" "}
+              (lock icon in sidebar) — it verifies your current PIN.
+            </div>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input label="Full Name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required className="sm:col-span-2" />
             <Select label="Role" value={form.role} onChange={e => applyRoleDefaults(e.target.value)} options={[{ value: "owner", label: "Owner" }, { value: "staff", label: "Staff" }]} />
-            <Input label="PIN (4 digits)" type="password" value={form.pin} onChange={e => setForm(f => ({ ...f, pin: e.target.value.replace(/\D/g, "").slice(0, 6) }))} placeholder="e.g. 1234" required />
+            <div>
+              <Input
+                label={editUser ? "New PIN (optional)" : "PIN (4 digits)"}
+                type="password"
+                inputMode="numeric"
+                value={form.pin}
+                onChange={e => setForm(f => ({ ...f, pin: e.target.value.replace(/\D/g, "").slice(0, 6) }))}
+                placeholder={editUser ? "Leave blank to keep current PIN" : "e.g. 1234"}
+                required={!editUser}
+              />
+              {editUser && (
+                <p className="text-xs text-slate-500 mt-1">
+                  {cloudMode ? "PIN is hidden for security. Enter a new PIN only to reset this user's login." : "Leave blank to keep the current PIN."}
+                </p>
+              )}
+            </div>
           </div>
           <div>
             <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wide">Module Permissions</label>
@@ -1417,7 +2813,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
             <p className="text-xs text-slate-500 mt-2">Role change applies default permissions — customize as needed.</p>
           </div>
         </div>
-        <div className="flex justify-end gap-2 mt-5">
+        <div className="modal-actions">
           <Btn variant="secondary" onClick={() => { setShowAdd(false); setEditUser(null); }}>Cancel</Btn>
           <Btn onClick={saveUser}><Check size={14} />{editUser ? "Save Changes" : "Add User"}</Btn>
         </div>
@@ -1426,52 +2822,143 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
   );
 }
 
+const CHAT_STORAGE_KEY = "marugen_chat_history";
+
+const INITIAL_CHAT_MESSAGES = [
+  {
+    role: "assistant",
+    content: "Hello! I'm your Marugen Farm AI Assistant.\n\nTalk naturally — I understand everyday requests and will do the work in the app for you.\n\nExamples:\n• \"Sarah paid already\"\n• \"We're low on pellets — 20kg just came in\"\n• \"Bill Ahmad for 3 koi and some food\"\n• \"Who hasn't paid yet?\"\n• \"Deliver to Tan tomorrow morning\"",
+  },
+];
+
+function loadChatHistory() {
+  try {
+    const raw = sessionStorage.getItem(CHAT_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return Array.isArray(parsed) && parsed.length ? parsed : INITIAL_CHAT_MESSAGES;
+  } catch {
+    return INITIAL_CHAT_MESSAGES;
+  }
+}
+
 // ─────────────────────────────────────────────
 // AI CHAT AGENT
 // ─────────────────────────────────────────────
-function ChatModule({ customers, invoices, expenses, products, deliveries, currentUser }) {
-  const [messages, setMessages] = useState([
-    { role: "assistant", content: "Hello! Welcome to the Marugen Koi & Arowana Farm AI Assistant.\n\nI can help you with:\n• Customer inquiries & CRM\n• Invoice & payment queries\n• Stock & inventory questions\n• Delivery scheduling\n• Farm management advice\n\nHow can I help you today?" }
-  ]);
+function AiUsageBar({ usage }) {
+  if (!usage) return null;
+  const tokens = usage.tokens ?? 0;
+  const pct = Math.min(100, (tokens / usage.limit) * 100);
+  const warn = tokens >= AI_WARN_AT_TOKENS;
+  const over = tokens > usage.limit;
+  return (
+    <div className="mb-3">
+      <div className="flex justify-between text-xs mb-1">
+        <span className="text-slate-500">Daily free AI tokens</span>
+        <span className={`font-bold ${over ? "text-amber-400" : warn ? "text-yellow-400" : "text-slate-400"}`}>
+          {formatTokens(tokens)}/{formatTokens(usage.limit)}{usage.remaining > 0 ? ` · ${formatTokens(usage.remaining)} left` : over ? " · over limit" : ""}
+        </span>
+      </div>
+      <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all ${over ? "bg-amber-500" : warn ? "bg-yellow-500" : "bg-cyan-500"}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ChatModule({ aiContext, messages, setMessages }) {
+  const aiContextRef = useRef(aiContext);
+  aiContextRef.current = aiContext;
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [usage, setUsage] = useState(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmMsg, setConfirmMsg] = useState("");
+  const [pendingThread, setPendingThread] = useState(null);
   const endRef = useRef(null);
+  const warnNotified = useRef(false);
+  const limitNotified = useRef(false);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
-  const systemPrompt = `You are the AI assistant for Marugen Koi & Arowana Farm in Singapore. Always respond in English only.
+  useEffect(() => {
+    fetchAiUsage().then(setUsage).catch(() => {});
+  }, []);
 
-Current business data:
-- Customers: ${customers.length} total
-- Invoices: ${invoices.length} total, ${invoices.filter(i => getInvoiceStatus(i) === "paid").length} paid, ${invoices.filter(i => getInvoiceStatus(i) === "pending").length} pending, ${invoices.filter(i => getInvoiceStatus(i) === "overdue").length} overdue
-- Total Revenue: S$${invoices.filter(i => i.status === "paid").reduce((s, i) => s + i.total, 0).toFixed(2)}
-- Expenses: S$${expenses.reduce((s, e) => s + e.amount, 0).toFixed(2)}
-- Products in stock: ${products.length} items, ${products.filter(p => p.stock <= p.minStock).length} low stock items
-- Scheduled deliveries: ${deliveries.filter(d => d.status === "scheduled").length}
-- Current user: ${currentUser.displayName} (${currentUser.role})
+  const applyUsageResult = (result) => {
+    if (result.usage) setUsage(result.usage);
+    const tokens = result.usage?.tokens ?? 0;
+    if (tokens >= AI_WARN_AT_TOKENS && tokens < AI_DAILY_FREE_TOKENS && !warnNotified.current) {
+      warnNotified.current = true;
+      aiContextRef.current.addNotification?.({
+        type: "warning",
+        title: "AI Token Warning",
+        message: `You've used ${formatTokens(tokens)} of ${formatTokens(AI_DAILY_FREE_TOKENS)} free tokens today. ${formatTokens(result.usage?.remaining ?? 0)} remaining.`,
+      });
+    }
+    if (result.atFreeLimit && !limitNotified.current) {
+      limitNotified.current = true;
+      aiContextRef.current.addNotification?.({
+        type: "warning",
+        title: "Daily Free Token Limit Reached",
+        message: "You've hit today's free token limit. You'll be asked to confirm before extra usage.",
+      });
+    }
+  };
 
-You specialize in:
-1. Koi fish types: ${KOI_TYPES.join(", ")}
-2. Arowana types: ${AROWANA_TYPES.join(", ")}
-3. Singapore delivery areas
-4. Fish care, water quality, feeding advice
-5. Business management for fish farms
+  const runChat = async (thread, confirmOverage = false) => {
+    const systemPrompt = buildBusinessContext(aiContextRef.current);
+    const result = await sendChatMessage({
+      systemPrompt,
+      messages: thread,
+      tools: AI_TOOL_DEFINITIONS,
+      executeFunctions: (calls) => executeAiActions(calls, aiContextRef.current),
+      confirmOverage,
+    });
 
-Always reply in clear, professional English. Be concise and helpful.`;
+    if (result.requiresConfirm) {
+      setPendingThread(thread);
+      setConfirmMsg(result.message);
+      setConfirmOpen(true);
+      if (result.usage) setUsage(result.usage);
+      return;
+    }
+
+    applyUsageResult(result);
+    setMessages(prev => [...prev, {
+      role: "assistant",
+      content: result.text,
+      executed: result.executed?.length ? result.executed : undefined,
+    }]);
+  };
 
   const sendMessage = async () => {
     if (!input.trim() || loading) return;
     const userMsg = { role: "user", content: input };
+    const thread = [...messages.filter((m) => m.role === "user" || m.role === "assistant"), userMsg];
     setMessages(prev => [...prev, userMsg]);
     setInput("");
     setLoading(true);
-
     try {
-      const reply = await sendChatMessage({ systemPrompt, messages: [...messages, userMsg] });
-      setMessages(prev => [...prev, { role: "assistant", content: reply }]);
-    } catch {
-      setMessages(prev => [...prev, { role: "assistant", content: "Connection error. Please log in and try again." }]);
+      await runChat(thread);
+    } catch (err) {
+      setMessages(prev => [...prev, { role: "assistant", content: err?.message || "Connection error. Please log in and try again." }]);
     }
+    setLoading(false);
+  };
+
+  const handleConfirmContinue = async () => {
+    if (!pendingThread) return;
+    setConfirmOpen(false);
+    setLoading(true);
+    try {
+      await runChat(pendingThread, true);
+    } catch (err) {
+      setMessages(prev => [...prev, { role: "assistant", content: err?.message || "Connection error." }]);
+    }
+    setPendingThread(null);
     setLoading(false);
   };
 
@@ -1479,8 +2966,21 @@ Always reply in clear, professional English. Be concise and helpful.`;
     <div className="flex flex-col h-[calc(100dvh-12rem)] sm:h-[calc(100vh-180px)] min-h-[320px]">
       <div className="mb-3 sm:mb-4">
         <h2 className="text-xl sm:text-2xl font-black text-white">AI Assistant</h2>
-        <p className="text-slate-400 text-sm">Powered by Gemini</p>
+        <p className="text-slate-400 text-sm">Powered by Gemini · {formatTokens(AI_DAILY_FREE_TOKENS)} free tokens/day</p>
+        <AiUsageBar usage={usage} />
       </div>
+
+      <Modal open={confirmOpen} onClose={() => { setConfirmOpen(false); setPendingThread(null); }} title="Continue AI Usage?" size="sm">
+        <p className="text-slate-300 text-sm mb-3">{confirmMsg}</p>
+        <p className="text-slate-500 text-xs mb-4">
+          Used today: <span className="text-amber-400 font-bold">{formatTokens(usage?.tokens ?? AI_DAILY_FREE_TOKENS)}/{formatTokens(AI_DAILY_FREE_TOKENS)}</span> tokens.
+          Extra usage may incur API costs.
+        </p>
+        <div className="flex justify-end gap-2">
+          <Btn variant="secondary" onClick={() => { setConfirmOpen(false); setPendingThread(null); }}>Not now</Btn>
+          <Btn onClick={handleConfirmContinue}><Check size={14} />Yes, continue</Btn>
+        </div>
+      </Modal>
 
       <Card className="flex-1 overflow-hidden flex flex-col min-h-0">
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -1491,6 +2991,15 @@ Always reply in clear, professional English. Be concise and helpful.`;
               )}
               <div className={`max-w-[85%] px-4 py-3 rounded-2xl text-sm whitespace-pre-wrap leading-relaxed ${m.role === "user" ? "bg-cyan-500 text-slate-900 font-medium rounded-br-sm" : "bg-slate-700 text-slate-100 rounded-bl-sm"}`}>
                 {m.content}
+                {m.executed?.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-slate-600/50 space-y-1">
+                    {m.executed.map((a, j) => (
+                      <p key={j} className={`text-xs font-semibold ${a.success ? "text-emerald-400" : "text-red-400"}`}>
+                        {a.success ? "✓" : "✗"} {a.message || a.error || a.name}
+                      </p>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -1507,7 +3016,7 @@ Always reply in clear, professional English. Be concise and helpful.`;
 
         <div className="border-t border-slate-700 p-4">
           <div className="flex gap-3 flex-wrap mb-2">
-            {["Low stock items?", "Pending invoices?", "Today's deliveries?", "Feeding schedule?"].map(q => (
+            {["Who hasn't paid yet?", "Pellets came in, add 20kg", "Sarah paid already", "What's running low?"].map(q => (
               <button key={q} onClick={() => setInput(q)}
                 className="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-full transition-colors">{q}</button>
             ))}
@@ -1530,6 +3039,9 @@ Always reply in clear, professional English. Be concise and helpful.`;
 const ALL_NAV_ITEMS = [
   { id: "dashboard", label: "Dashboard", icon: Home },
   { id: "inventory", label: "Inventory", icon: Boxes },
+  { id: "koifish", label: "Koi Fish", icon: Fish },
+  { id: "customerkoi", label: "Customer Koi", icon: Users2 },
+  { id: "ponds", label: "Pond Mgmt", icon: Droplets },
   { id: "invoices", label: "Invoices", icon: FileText },
   { id: "customers", label: "Customers", icon: Users },
   { id: "expenses", label: "Expenses", icon: TrendingUp },
@@ -1557,6 +3069,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== "undefined" && window.innerWidth >= 1024);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [showChangePin, setShowChangePin] = useState(false);
   const [needsSetup, setNeedsSetup] = useState(false);
   const [dataReady, setDataReady] = useState(!isSupabaseConfigured);
   const [cloudSync, setCloudSync] = useState(isSupabaseConfigured);
@@ -1567,10 +3080,55 @@ export default function App() {
   const [customers, setCustomers] = useState(INITIAL_CUSTOMERS);
   const [invoices, setInvoices] = useState(INITIAL_INVOICES);
   const [expenses, setExpenses] = useState(INITIAL_EXPENSES);
-  const [products, setProducts] = useState(INITIAL_PRODUCTS);
+  const [products, setProducts] = useState(() => (isSupabaseConfigured ? INITIAL_PRODUCTS : loadProducts()));
   const [deliveries, setDeliveries] = useState(INITIAL_DELIVERIES);
   const [events, setEvents] = useState(INITIAL_EVENTS);
-  const [stockLog, setStockLog] = useState([]);
+  const [stockLog, setStockLog] = useState(() => (isSupabaseConfigured ? [] : loadStockLog()));
+  const [koiFishList, setKoiFishList] = useState(() => (isSupabaseConfigured ? [] : loadKoiFish()));
+  const [customerKoiList, setCustomerKoiList] = useState(() => (isSupabaseConfigured ? [] : loadCustomerKoi()));
+  const [pondData, setPondData] = useState(() => (isSupabaseConfigured ? emptyPondData() : loadPondData()));
+  const [whatsappGroups, setWhatsappGroups] = useState(() => (isSupabaseConfigured ? [] : loadWhatsappGroups()));
+  const [notifications, setNotifications] = useState([]);
+
+  const addNotification = useCallback((n) => {
+    const notif = { ...n, id: Date.now(), time: "Just now", read: false };
+    setNotifications(prev => [notif, ...prev].slice(0, 20));
+  }, []);
+
+  useEffect(() => { if (!isSupabaseConfigured) saveKoiFish(koiFishList) }, [koiFishList]);
+  useEffect(() => { if (!isSupabaseConfigured) saveCustomerKoi(customerKoiList) }, [customerKoiList]);
+  useEffect(() => { if (!isSupabaseConfigured) savePondData(pondData) }, [pondData]);
+  useEffect(() => { if (!isSupabaseConfigured) saveProducts(products) }, [products]);
+  useEffect(() => { if (!isSupabaseConfigured) saveStockLog(stockLog) }, [stockLog]);
+
+  const applyCloudData = useCallback((data) => {
+    if (!data) return;
+    setUsers(data.users);
+    setCustomers(data.customers || []);
+    setProducts(data.products || []);
+    setInvoices(data.invoices || []);
+    setExpenses(data.expenses || []);
+    setDeliveries(data.deliveries || []);
+    setEvents(data.events || []);
+    setStockLog(data.stockActivity || []);
+
+    const koi = resolveCloudKoiPayload(data);
+    setKoiFishList(koi.koiFish);
+    setCustomerKoiList(koi.customerKoi);
+    setPondData(koi.pondData);
+
+    const whatsapp = resolveCloudWhatsappGroups(data.whatsappGroups);
+    setWhatsappGroups(whatsapp.groups);
+
+    if (koi.migratedFromLocal || whatsapp.migratedFromLocal) {
+      clearLocalOnlyStorage();
+      addNotification({
+        type: "info",
+        title: "Uploaded to Cloud",
+        message: "Data from this device was saved to Supabase. You can now access it on any device after login.",
+      });
+    }
+  }, [addNotification]);
 
   useEffect(() => {
     if (!isSupabaseConfigured) return;
@@ -1584,44 +3142,51 @@ export default function App() {
           return;
         }
         if (!auth.getSession()) {
+          if (status.users?.length) {
+            setUsers(db.mapPublicUsers(status.users));
+          } else {
+            const publicUsers = await auth.fetchPublicUsers();
+            if (publicUsers.length) setUsers(db.mapPublicUsers(publicUsers));
+          }
+          setCloudSync(true);
+          setCloudError(null);
           setDataReady(true);
           return;
         }
-        let data = await db.fetchAllData();
-        if (data && !data.customers.length && !data.products.length) {
-          await db.seedDatabase(DEMO_SEED);
-          data = await db.fetchAllData();
-        }
-        if (data) {
-          setUsers(data.users);
-          setCustomers(data.customers.length ? data.customers : INITIAL_CUSTOMERS);
-          setProducts(data.products.length ? data.products : INITIAL_PRODUCTS);
-          setInvoices(data.invoices.length ? data.invoices : INITIAL_INVOICES);
-          setExpenses(data.expenses.length ? data.expenses : INITIAL_EXPENSES);
-          setDeliveries(data.deliveries.length ? data.deliveries : INITIAL_DELIVERIES);
-          setEvents(data.events.length ? data.events : INITIAL_EVENTS);
-          setStockLog(data.stockActivity || []);
-        }
+        const data = await db.fetchAllData();
+        applyCloudData(data);
         setCloudSync(true);
         setCloudError(null);
       } catch (err) {
         setCloudSync(false);
         setCloudError(err.message);
+        if (err.message?.includes("Session expired")) {
+          auth.clearSession();
+          setCurrentUser(null);
+        }
       } finally {
         setDataReady(true);
       }
     }
 
     loadFromCloud();
-  }, []);
+  }, [applyCloudData]);
 
   const syncDebounced = useCallback((fn, data) => {
-    if (!dataReady || !cloudSync || !auth.getSessionToken()) return;
-    const timer = setTimeout(() => fn(data).catch(() => {}), 800);
+    if (!dataReady || !isSupabaseConfigured || !auth.getSessionToken()) return;
+    const timer = setTimeout(() => {
+      fn(data).catch((err) => {
+        setCloudSync(false);
+        setCloudError(err?.message || "Sync failed");
+        if (err?.message?.includes("Session expired")) {
+          auth.clearSession();
+          setCurrentUser(null);
+        }
+      });
+    }, 800);
     return () => clearTimeout(timer);
-  }, [dataReady, cloudSync]);
+  }, [dataReady]);
 
-  useEffect(() => syncDebounced(db.syncUsers, users), [users, syncDebounced]);
   useEffect(() => syncDebounced(db.syncCustomers, customers), [customers, syncDebounced]);
   useEffect(() => syncDebounced(db.syncProducts, products), [products, syncDebounced]);
   useEffect(() => syncDebounced(db.syncInvoices, invoices), [invoices, syncDebounced]);
@@ -1629,18 +3194,62 @@ export default function App() {
   useEffect(() => syncDebounced(db.syncDeliveries, deliveries), [deliveries, syncDebounced]);
   useEffect(() => syncDebounced(db.syncEvents, events), [events, syncDebounced]);
   useEffect(() => syncDebounced(db.syncStockActivity, stockLog), [stockLog, syncDebounced]);
+  useEffect(() => syncDebounced(db.syncKoiFish, koiFishList), [koiFishList, syncDebounced]);
+  useEffect(() => syncDebounced(db.syncCustomerKoi, customerKoiList), [customerKoiList, syncDebounced]);
+  useEffect(() => syncDebounced(db.syncPondData, pondData), [pondData, syncDebounced]);
+  useEffect(() => syncDebounced(db.syncWhatsappGroups, whatsappGroups), [whatsappGroups, syncDebounced]);
 
-  const [notifications, setNotifications] = useState([]);
+  const [chatMessages, setChatMessages] = useState(loadChatHistory);
 
-  const addNotification = useCallback((n) => {
-    const notif = { ...n, id: Date.now(), time: "Just now", read: false };
-    setNotifications(prev => [notif, ...prev].slice(0, 20));
-  }, []);
+  useEffect(() => {
+    sessionStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatMessages));
+  }, [chatMessages]);
+
+  const handleKoiSold = useCallback((koi, customer, soldPrice, soldDate, options = {}) => {
+    if (!customer || options.disposition !== "keep") return;
+    const keepPondName = options.keepPondName?.trim() || "";
+    const existing = customerKoiList.find(
+      (r) => r.koiId === koi.id && r.status !== CUSTOMER_KOI_STATUS.DECEASED,
+    );
+    if (existing) {
+      addNotification({
+        type: "warning",
+        title: "Already in Customer Koi",
+        message: `${koi.id} is already linked to ${existing.customerName}. Update status in Customer Koi.`,
+      });
+      return;
+    }
+    setCustomerKoiList((prev) => [...prev, {
+      id: genId("CKOI"),
+      customerId: customer.id,
+      customerName: customer.name,
+      koiId: koi.id,
+      photo: koi.photo,
+      fishName: koi.name?.trim() || "",
+      variety: koi.variety,
+      size: koi.size ?? null,
+      pondName: keepPondName,
+      purchaseDate: soldDate || today(),
+      purchasePrice: soldPrice,
+      status: "in_pond",
+      collectedDate: null,
+      notes: `Purchased from Marugen Farm. Kept at ${keepPondName}. Original KOI ID: ${koi.id}`,
+      deathDate: null,
+      deathCause: null,
+      deathPhoto: null,
+      deathNotes: "",
+    }]);
+    addNotification({
+      type: "info",
+      title: "Customer Record Created",
+      message: `Koi kept at ${keepPondName} for ${customer.name}. Track in Customer Koi.`,
+    });
+  }, [addNotification, customerKoiList]);
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
   useEffect(() => {
-    const lowStock = products.filter(p => p.stock <= p.minStock);
+    const lowStock = products.filter((p) => p.minStock > 0 && p.stock <= p.minStock);
     if (lowStock.length > 0 && currentUser && !lowStockNotified.current) {
       lowStockNotified.current = true;
       addNotification({ type: "warning", title: "Low Stock Alert", message: `${lowStock.length} product(s) need restocking: ${lowStock.map(p => p.name).join(", ")}` });
@@ -1660,20 +3269,16 @@ export default function App() {
   const handleLogin = async (user) => {
     setCurrentUser(user);
     setNeedsSetup(false);
-    if (isSupabaseConfigured && cloudSync) {
+    if (isSupabaseConfigured) {
       try {
         const data = await db.fetchAllData();
-        if (data) {
-          setUsers(data.users);
-          setCustomers(data.customers.length ? data.customers : INITIAL_CUSTOMERS);
-          setProducts(data.products.length ? data.products : INITIAL_PRODUCTS);
-          setInvoices(data.invoices.length ? data.invoices : INITIAL_INVOICES);
-          setExpenses(data.expenses.length ? data.expenses : INITIAL_EXPENSES);
-          setDeliveries(data.deliveries.length ? data.deliveries : INITIAL_DELIVERIES);
-          setEvents(data.events.length ? data.events : INITIAL_EVENTS);
-          setStockLog(data.stockActivity || []);
-        }
-      } catch { /* use local state */ }
+        applyCloudData(data);
+        setCloudSync(true);
+        setCloudError(null);
+      } catch (err) {
+        setCloudSync(false);
+        setCloudError(err?.message || "Failed to load cloud data");
+      }
     }
     const allowed = ALL_NAV_ITEMS.filter((item) => hasPermission(user, item.id));
     setActiveTab(allowed[0]?.id || "dashboard");
@@ -1683,23 +3288,16 @@ export default function App() {
     await auth.logout();
     setCurrentUser(null);
     setNotifOpen(false);
+    sessionStorage.removeItem(CHAT_STORAGE_KEY);
+    setChatMessages(INITIAL_CHAT_MESSAGES);
   };
 
   const handleSetupComplete = async (user) => {
     setNeedsSetup(false);
     setCurrentUser(user);
     try {
-      await db.seedDatabase(DEMO_SEED);
       const data = await db.fetchAllData();
-      if (data) {
-        setUsers(data.users);
-        setCustomers(data.customers);
-        setProducts(data.products);
-        setInvoices(data.invoices);
-        setExpenses(data.expenses);
-        setDeliveries(data.deliveries);
-        setEvents(data.events);
-      }
+      applyCloudData(data);
       setCloudSync(true);
     } catch (err) {
       setCloudError(err.message);
@@ -1731,18 +3329,27 @@ export default function App() {
     return content;
   };
 
+  const aiContext = {
+    customers, invoices, expenses, products, deliveries, events, stockLog, currentUser, addNotification,
+    setCustomers, setInvoices, setExpenses, setProducts, setDeliveries, setEvents, setStockLog,
+    onNavigate: goToTab,
+  };
+
   const renderModule = () => {
-    const props = { customers, invoices, expenses, products, deliveries, events, currentUser, addNotification };
+    const props = { customers, invoices, expenses, products, deliveries, events, koiFishList, customerKoiList, currentUser, addNotification, onNavigate: goToTab };
     switch (effectiveTab) {
       case "dashboard": return guard("dashboard", "Dashboard", <Dashboard {...props} />);
       case "inventory": return guard("inventory", "Inventory", <InventoryModule products={products} setProducts={setProducts} stockLog={stockLog} setStockLog={setStockLog} addNotification={addNotification} currentUser={currentUser} />);
-      case "invoices": return guard("invoices", "Invoices", <InvoiceModule invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} customers={customers} addNotification={addNotification} currentUser={currentUser} />);
+      case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} onKoiSold={handleKoiSold} addNotification={addNotification} />);
+      case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} addNotification={addNotification} />);
+      case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondData} addNotification={addNotification} currentUser={currentUser} />);
+      case "invoices": return guard("invoices", "Invoices", <InvoiceModule invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} addNotification={addNotification} currentUser={currentUser} />);
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} addNotification={addNotification} />);
-      case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpenses} invoices={invoices} addNotification={addNotification} currentUser={currentUser} />);
-      case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} addNotification={addNotification} currentUser={currentUser} />);
+      case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpenses} addNotification={addNotification} currentUser={currentUser} />);
+      case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} />);
       case "calendar": return guard("calendar", "Calendar", <CalendarModule events={events} setEvents={setEvents} addNotification={addNotification} currentUser={currentUser} />);
-      case "chat": return guard("chat", "AI Chat", <ChatModule {...props} />);
-      case "users": return <TeamModule users={users} setUsers={setUsers} currentUser={currentUser} addNotification={addNotification} onCurrentUserUpdate={handleUserUpdate} />;
+      case "chat": return guard("chat", "AI Chat", <ChatModule aiContext={aiContext} messages={chatMessages} setMessages={setChatMessages} />);
+      case "users": return <TeamModule users={users} setUsers={setUsers} currentUser={currentUser} addNotification={addNotification} onCurrentUserUpdate={handleUserUpdate} cloudMode={isSupabaseConfigured && cloudSync} apiEnabled={isSupabaseConfigured} onOpenChangePin={() => setShowChangePin(true)} />;
       default: return null;
     }
   };
@@ -1764,11 +3371,11 @@ export default function App() {
       <div
         className={`bg-slate-900 border-r border-slate-800 flex flex-col z-50
           ${isMobile
-            ? `fixed inset-y-0 left-0 w-[min(18rem,85vw)] transition-transform duration-300 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`
+            ? `fixed left-0 top-0 bottom-0 w-[min(18rem,85vw)] transition-transform duration-300 safe-top safe-bottom ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`
             : `${sidebarOpen ? "w-56" : "w-16"} flex-shrink-0 relative transition-all duration-300`
           }`}
       >
-        <div className="p-4 border-b border-slate-800 flex items-center gap-3">
+        <div className={`p-4 border-b border-slate-800 flex items-center gap-3 ${isMobile ? "" : "safe-top"}`}>
           <AppLogo size="sm" className="ring-1 ring-slate-700" />
           {(sidebarOpen || isMobile) && (
             <div className="overflow-hidden flex-1 min-w-0">
@@ -1803,6 +3410,7 @@ export default function App() {
                 <p className="text-white text-xs font-bold truncate">{currentUser.name}</p>
                 <p className="text-slate-500 text-xs capitalize">{currentUser.role}</p>
               </div>
+              <button onClick={() => setShowChangePin(true)} title="Change My PIN" className="text-slate-500 hover:text-cyan-400 transition-colors p-2 touch-manipulation"><Lock size={14} /></button>
               <button onClick={handleLogout} className="text-slate-500 hover:text-red-400 transition-colors p-2 touch-manipulation"><LogOut size={14} /></button>
             </div>
           ) : (
@@ -1812,7 +3420,7 @@ export default function App() {
       </div>
 
       <div className="flex-1 flex flex-col min-w-0 w-full">
-        <header className="h-14 bg-slate-900/90 backdrop-blur border-b border-slate-800 flex items-center gap-2 sm:gap-3 px-3 sm:px-4 flex-shrink-0 sticky top-0 z-30 pt-[env(safe-area-inset-top)]">
+        <header className="safe-header bg-slate-900/90 backdrop-blur border-b border-slate-800 flex items-center gap-2 sm:gap-3 px-3 sm:px-4 flex-shrink-0 sticky top-0 z-30">
           <button
             onClick={() => setSidebarOpen(o => !o)}
             className="text-slate-400 hover:text-white transition-colors p-2 -ml-1 rounded-xl hover:bg-slate-800 touch-manipulation"
@@ -1861,14 +3469,6 @@ export default function App() {
               </>
             )}
           </div>
-
-          <div className="hidden sm:flex items-center gap-2 bg-slate-800 rounded-xl px-3 py-1.5 max-w-[10rem] md:max-w-none">
-            <div className="w-6 h-6 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-xs font-black shrink-0">
-              {currentUser.name[0].toUpperCase()}
-            </div>
-            <span className="text-white text-sm font-bold truncate hidden md:inline">{currentUser.name}</span>
-            <Badge className={`text-xs shrink-0 hidden md:inline ${currentUser.role === "owner" ? "bg-yellow-500/20 text-yellow-300" : "bg-blue-500/20 text-blue-300"}`}>{currentUser.role}</Badge>
-          </div>
         </header>
 
         <main className={`flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6 ${isMobile ? "pb-[calc(4.5rem+env(safe-area-inset-bottom))]" : ""}`}>
@@ -1876,8 +3476,18 @@ export default function App() {
         </main>
       </div>
 
+      <ChangePinModal
+        open={showChangePin}
+        onClose={() => setShowChangePin(false)}
+        currentUser={currentUser}
+        users={users}
+        setUsers={setUsers}
+        cloudMode={isSupabaseConfigured && cloudSync}
+        addNotification={addNotification}
+      />
+
       {isMobile && (
-        <nav className="fixed bottom-0 left-0 right-0 z-30 bg-slate-900/95 backdrop-blur border-t border-slate-800 safe-bottom lg:hidden">
+        <nav className="fixed bottom-0 left-0 right-0 z-30 bg-slate-900/95 backdrop-blur border-t border-slate-800 safe-bottom-nav lg:hidden">
           <div className="flex overflow-x-auto scrollbar-hide gap-0.5 px-1 py-1.5">
             {navItems.map(item => (
               <button

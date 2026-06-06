@@ -1,14 +1,57 @@
 @import "tailwindcss";
 
+html {
+  background-color: #020617;
+}
+
 body {
   margin: 0;
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior: none;
+  background-color: #020617;
 }
 
 #root {
   min-height: 100vh;
   min-height: 100dvh;
+}
+
+/* iOS Home Screen / notch safe areas */
+.safe-top {
+  padding-top: constant(safe-area-inset-top, 0px);
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.safe-bottom {
+  padding-bottom: constant(safe-area-inset-bottom, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.safe-x {
+  padding-left: constant(safe-area-inset-left, 0px);
+  padding-right: constant(safe-area-inset-right, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+.safe-header {
+  padding-top: constant(safe-area-inset-top, 0px);
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-left: constant(safe-area-inset-left, 0px);
+  padding-right: constant(safe-area-inset-right, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+  min-height: calc(3.5rem + constant(safe-area-inset-top, 0px));
+  min-height: calc(3.5rem + env(safe-area-inset-top, 0px));
+}
+
+.safe-bottom-nav {
+  padding-bottom: constant(safe-area-inset-bottom, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: constant(safe-area-inset-left, 0px);
+  padding-right: constant(safe-area-inset-right, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
 }
 
 /* Prevent iOS zoom on input focus */
@@ -17,6 +60,51 @@ body {
   select,
   textarea {
     font-size: 16px !important;
+  }
+}
+
+/* Stop date/time fields overflowing on iOS Safari */
+.datetime-field,
+input[type='date'],
+input[type='datetime-local'],
+input[type='time'] {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+input[type='datetime-local']::-webkit-date-and-time-value,
+input[type='date']::-webkit-date-and-time-value,
+input[type='time']::-webkit-date-and-time-value {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+input[type='datetime-local']::-webkit-calendar-picker-indicator,
+input[type='date']::-webkit-calendar-picker-indicator,
+input[type='time']::-webkit-calendar-picker-indicator {
+  flex-shrink: 0;
+  margin-left: 0.25rem;
+}
+
+.modal-actions {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+}
+
+@media (min-width: 640px) {
+  .modal-actions {
+    flex-direction: row;
+    justify-content: flex-end;
   }
 }
 
@@ -29,6 +117,57 @@ body {
   display: none;
 }
 
-.safe-bottom {
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+/* Invoice print */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 0;
+  }
+
+  body {
+    background: white !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  .invoice-print-area,
+  .invoice-print-area * {
+    visibility: visible;
+  }
+
+  .invoice-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    padding: 0;
+    margin: 0;
+    background: white;
+  }
+
+  .invoice-sheet {
+    width: 210mm !important;
+    max-width: none !important;
+    height: 297mm !important;
+    aspect-ratio: auto !important;
+    page-break-inside: avoid;
+  }
+
+  .invoice-sheet img {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: fill !important;
+  }
+
+  .invoice-overlay {
+    font-size: 11pt !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
 }

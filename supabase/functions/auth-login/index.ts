@@ -1,6 +1,6 @@
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import { hashPin, verifyPin } from "../_shared/pin.ts";
-import { adminClient } from "../_shared/supabase.ts";
+import { adminClient, sessionTokenFrom, validateSession } from "../_shared/supabase.ts";
 
 const SESSION_DAYS = 7;
 
@@ -49,7 +49,20 @@ Deno.serve(async (req) => {
 
     if (req.method === "GET") {
       const { count } = await db.from("farm_users").select("*", { count: "exact", head: true });
-      return jsonResponse({ needsSetup: count === 0, hasUsers: (count || 0) > 0 });
+      const { data: publicUsers } = await db.from("farm_users")
+        .select("id, name, role, active")
+        .eq("active", true)
+        .order("id");
+      return jsonResponse({
+        needsSetup: count === 0,
+        hasUsers: (count || 0) > 0,
+        users: (publicUsers || []).map((u) => ({
+          id: u.id,
+          name: u.name,
+          role: u.role,
+          active: u.active !== false,
+        })),
+      });
     }
 
     const body = await req.json();
@@ -80,7 +93,7 @@ Deno.serve(async (req) => {
       }
 
       const permissions = [
-        "dashboard", "inventory", "invoices", "customers", "expenses",
+        "dashboard", "inventory", "invoices", "customers", "expenses", "accounting",
         "deliveries", "calendar", "chat", "users",
       ];
       const pin_hash = await hashPin(String(pin));
@@ -101,6 +114,40 @@ Deno.serve(async (req) => {
     if (action === "logout") {
       const token = body.token;
       if (token) await db.from("auth_sessions").delete().eq("token", token);
+      return jsonResponse({ ok: true });
+    }
+
+    if (action === "change_pin") {
+      const sessionToken = sessionTokenFrom(req) || body.token;
+      const sessionUser = await validateSession(sessionToken);
+      if (!sessionUser) return jsonResponse({ error: "Unauthorized — login required" }, 401);
+
+      const { currentPin, newPin } = body;
+      if (!currentPin || !newPin || String(newPin).length < 4) {
+        return jsonResponse({ error: "Current PIN and new PIN (4+ digits) required" }, 400);
+      }
+      if (String(currentPin) === String(newPin)) {
+        return jsonResponse({ error: "New PIN must be different from current PIN" }, 400);
+      }
+
+      const { data: row, error: fetchErr } = await db.from("farm_users").select("*").eq("id", sessionUser.id).maybeSingle();
+      if (fetchErr || !row) return jsonResponse({ error: "User not found" }, 404);
+      if (!(await verifyUserPin(row, String(currentPin)))) {
+        return jsonResponse({ error: "Current PIN is incorrect" }, 401);
+      }
+
+      const { data: allUsers } = await db.from("farm_users").select("id, pin_hash, pin").eq("active", true);
+      for (const other of allUsers || []) {
+        if (other.id === sessionUser.id) continue;
+        if (await verifyUserPin(other, String(newPin))) {
+          return jsonResponse({ error: "This PIN is already assigned to another user" }, 400);
+        }
+      }
+
+      const pin_hash = await hashPin(String(newPin));
+      const { error: updateErr } = await db.from("farm_users").update({ pin_hash, pin: null }).eq("id", sessionUser.id);
+      if (updateErr) return jsonResponse({ error: updateErr.message }, 500);
+
       return jsonResponse({ ok: true });
     }
 

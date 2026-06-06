@@ -49,6 +49,16 @@ export async function loginWithPin(pin) {
   return data
 }
 
+export async function fetchPublicUsers() {
+  if (!isSupabaseConfigured) return []
+  const res = await fetch(`${getFunctionsUrl()}/auth-login`, {
+    headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY },
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to load users')
+  return data.users || []
+}
+
 export async function setupOwner({ name, pin }) {
   if (!isSupabaseConfigured) return null
   const res = await fetch(`${getFunctionsUrl()}/auth-login`, {
@@ -62,6 +72,27 @@ export async function setupOwner({ name, pin }) {
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Setup failed')
   setSession(data)
+  return data
+}
+
+export async function changeMyPin({ currentPin, newPin }) {
+  if (!isSupabaseConfigured) {
+    return { local: true }
+  }
+  const token = getSessionToken()
+  if (!token) throw new Error('Not logged in')
+
+  const res = await fetch(`${getFunctionsUrl()}/auth-login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+      Authorization: `Session ${token}`,
+    },
+    body: JSON.stringify({ action: 'change_pin', currentPin, newPin }),
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to change PIN')
   return data
 }
 
