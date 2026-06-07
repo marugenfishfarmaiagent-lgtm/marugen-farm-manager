@@ -1,4 +1,4 @@
-export const FISH_TYPES = ['Koi', 'Arowana', 'Goldfish', 'Guppy', 'Betta', 'Flowerhorn', 'Discus', 'Other']
+export const FISH_TYPES = ['Koi', 'Arowana', 'Goldfish', 'Guppy', 'Other']
 export const AROWANA_TYPES = ['Super Red', 'Cross Back Golden', 'Malaysian Golden', 'Green Arowana', 'Silver Arowana']
 export const KOI_TYPES = ['Kohaku', 'Sanke', 'Showa', 'Butterfly Koi', 'Ghost Koi', 'Ogon']
 

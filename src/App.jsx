@@ -14,6 +14,7 @@ import { downloadInvoicePdf } from "./lib/generateInvoicePdf";
 import { calcInvoiceAmounts } from "./lib/invoiceDesign";
 import { compressReceiptImage, expenseImageSrc } from "./lib/compressImage";
 import { enrichInvoiceCustomer, findCustomerWhatsApp, formatCustomerAddress, findCustomerRecord, openWhatsAppChat, resolveInvoiceCustomer, resolveInvoiceWhatsApp } from "./lib/invoiceWhatsApp";
+import { lookupSingaporePostalAddress } from "./lib/sgPostalLookup";
 import {
   buildDeliveryWhatsAppRecipients, formatDeliveryRecipientLabel, formatDeliverySchedule,
   loadWhatsappGroups, saveWhatsappGroups, sendDeliveryToRecipient,
@@ -1557,15 +1558,20 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
 // ─────────────────────────────────────────────
 function CustomerModule({ customers, setCustomers, addNotification }) {
   const emptyForm = () => ({
-    name: "", phone: "", whatsapp: "", area: "Tampines", postalCode: "", address: "", fishTypes: [], notes: "",
+    name: "", whatsapp: "", area: "Tampines", postalCode: "", address: "", fishTypes: [], notes: "",
   });
 
   const [showAdd, setShowAdd] = useState(false);
   const [viewId, setViewId] = useState(null);
   const [editCustomer, setEditCustomer] = useState(null);
+  const [deleteCustomer, setDeleteCustomer] = useState(null);
   const [search, setSearch] = useState("");
   const [tierFilter, setTierFilter] = useState("All");
   const [form, setForm] = useState(emptyForm());
+  const [postalLookupAdd, setPostalLookupAdd] = useState(false);
+  const [postalLookupEdit, setPostalLookupEdit] = useState(false);
+  const addAddressManual = useRef(false);
+  const editAddressManual = useRef(false);
 
   const view = viewId != null ? customers.find((c) => String(c.id) === String(viewId)) : null;
 
@@ -1588,21 +1594,44 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
     });
   };
 
+  const fillAddressFromPostal = async (postalCode, setState, manualRef, setLoading) => {
+    if (postalCode.length !== 6) return;
+    setLoading(true);
+    const result = await lookupSingaporePostalAddress(postalCode);
+    setLoading(false);
+    if (result?.address && !manualRef.current) {
+      setState((f) => ({ ...f, address: result.address }));
+    }
+  };
+
+  const onAddPostalChange = (value) => {
+    const postalCode = value.replace(/\D/g, "").slice(0, 6);
+    addAddressManual.current = false;
+    setForm((f) => ({ ...f, postalCode }));
+    fillAddressFromPostal(postalCode, setForm, addAddressManual, setPostalLookupAdd);
+  };
+
+  const onEditPostalChange = (value) => {
+    const postalCode = value.replace(/\D/g, "").slice(0, 6);
+    editAddressManual.current = false;
+    setEditCustomer((c) => ({ ...c, postalCode }));
+    fillAddressFromPostal(postalCode, setEditCustomer, editAddressManual, setPostalLookupEdit);
+  };
+
   const addCustomer = () => {
     const name = form.name?.trim();
-    const phone = form.phone?.trim();
+    const whatsapp = form.whatsapp?.trim();
     if (!name) {
       addNotification({ type: "error", title: "Name Required", message: "Enter the customer name." });
       return;
     }
-    if (!phone) {
-      addNotification({ type: "error", title: "Phone Required", message: "Enter a contact phone number." });
+    if (!whatsapp) {
+      addNotification({ type: "error", title: "WhatsApp Required", message: "Enter a WhatsApp number." });
       return;
     }
-    const whatsapp = form.whatsapp?.trim() || phone;
     const c = {
       name,
-      phone,
+      phone: whatsapp,
       whatsapp,
       area: form.area || "Tampines",
       postalCode: form.postalCode?.trim() || "",
@@ -1617,25 +1646,26 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
     addNotification({ type: "success", title: "Customer Added", message: `${c.name} added to CRM` });
     setShowAdd(false);
     setForm(emptyForm());
+    addAddressManual.current = false;
   };
 
   const saveEdit = () => {
     if (!editCustomer) return;
     const name = editCustomer.name?.trim();
-    const phone = editCustomer.phone?.trim();
+    const whatsapp = editCustomer.whatsapp?.trim();
     if (!name) {
       addNotification({ type: "error", title: "Name Required", message: "Enter the customer name." });
       return;
     }
-    if (!phone) {
-      addNotification({ type: "error", title: "Phone Required", message: "Enter a contact phone number." });
+    if (!whatsapp) {
+      addNotification({ type: "error", title: "WhatsApp Required", message: "Enter a WhatsApp number." });
       return;
     }
     const updated = {
       ...editCustomer,
       name,
-      phone,
-      whatsapp: editCustomer.whatsapp?.trim() || phone,
+      phone: whatsapp,
+      whatsapp,
       postalCode: editCustomer.postalCode?.trim() || "",
       address: editCustomer.address?.trim() || "",
       notes: editCustomer.notes?.trim() || "",
@@ -1645,13 +1675,23 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
     setCustomers((prev) => prev.map((c) => (String(c.id) === String(updated.id) ? updated : c)));
     addNotification({ type: "success", title: "Customer Updated", message: `${updated.name} saved` });
     setEditCustomer(null);
+    editAddressManual.current = false;
     setViewId(updated.id);
+  };
+
+  const confirmDeleteCustomer = () => {
+    if (!deleteCustomer) return;
+    const id = deleteCustomer.id;
+    setCustomers((prev) => prev.filter((c) => String(c.id) !== String(id)));
+    if (String(viewId) === String(id)) setViewId(null);
+    addNotification({ type: "info", title: "Customer Deleted", message: `${deleteCustomer.name} removed from CRM` });
+    setDeleteCustomer(null);
   };
 
   const generateWhatsApp = (c) => {
     const phone = findCustomerWhatsApp(customers, c.id, c.name) || c.whatsapp || c.phone;
     if (!phone?.trim()) {
-      addNotification({ type: "error", title: "No Number", message: "Add a phone or WhatsApp number first." });
+      addNotification({ type: "error", title: "No Number", message: "Add a WhatsApp number first." });
       return;
     }
     const text = `Hi ${c.name}! Marugen Koi & Arowana Farm here. We have new arrivals that may interest you. Would you like to take a look?`;
@@ -1668,7 +1708,7 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
         <h2 className="text-xl sm:text-2xl font-black text-white">Customers</h2>
         <p className="text-slate-400 text-sm">{customers.length} registered</p>
       </div>
-      <Fab onClick={() => setShowAdd(true)} label="Add Customer" hidden={showAdd || viewId != null || !!editCustomer} />
+      <Fab onClick={() => { setForm(emptyForm()); addAddressManual.current = false; setShowAdd(true); }} label="Add Customer" hidden={showAdd || viewId != null || !!editCustomer || !!deleteCustomer} />
 
       <div className="flex flex-wrap gap-3">
         <div className="relative flex-1 min-w-[180px]">
@@ -1703,12 +1743,13 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
               {(c.fishTypes || []).map((f) => <Badge key={f} className="bg-slate-700/60 text-slate-300">{f}</Badge>)}
             </div>
             <div className="flex items-center justify-between mb-3">
-              <span className="text-slate-500 text-xs">{c.phone}</span>
+              <span className="text-slate-500 text-xs">{c.whatsapp || c.phone || "—"}</span>
               <span className="text-emerald-400 font-bold text-sm">{formatSGD(c.totalSpent || 0)}</span>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Btn variant="ghost" size="sm" onClick={() => setViewId(c.id)}><Eye size={12} />View</Btn>
-              <Btn variant="ghost" size="sm" onClick={() => setEditCustomer({ ...c, fishTypes: [...(c.fishTypes || [])] })}><Edit2 size={12} />Edit</Btn>
+              <Btn variant="ghost" size="sm" onClick={() => { editAddressManual.current = false; setEditCustomer({ ...c, fishTypes: [...(c.fishTypes || [])] }); }}><Edit2 size={12} />Edit</Btn>
+              <Btn variant="danger" size="sm" onClick={() => setDeleteCustomer(c)}><Trash2 size={12} />Delete</Btn>
               <Btn variant="success" size="sm" onClick={() => generateWhatsApp(c)}><MessageSquare size={12} />WhatsApp</Btn>
             </div>
           </Card>
@@ -1719,11 +1760,11 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Customer" size="lg">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input label="Full Name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required className="sm:col-span-2" />
-          <Input label="Phone" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="+65 9XXX XXXX" required />
-          <Input label="WhatsApp" value={form.whatsapp} onChange={e => setForm(f => ({ ...f, whatsapp: e.target.value }))} placeholder="+65 9XXX XXXX" />
+          <Input label="WhatsApp" value={form.whatsapp} onChange={e => setForm(f => ({ ...f, whatsapp: e.target.value }))} placeholder="+65 9XXX XXXX" required className="sm:col-span-2" />
           <Select label="Area" value={form.area} onChange={e => setForm(f => ({ ...f, area: e.target.value }))} options={SG_AREAS} />
-          <Input label="Postal Code" value={form.postalCode} onChange={e => setForm(f => ({ ...f, postalCode: e.target.value.replace(/\D/g, "").slice(0, 6) }))} placeholder="e.g. 521123" inputMode="numeric" />
-          <Input label="Address Details" value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} placeholder="Blk / Unit / Street" className="sm:col-span-2" />
+          <Input label="Postal Code" value={form.postalCode} onChange={e => onAddPostalChange(e.target.value)} placeholder="e.g. 521123" inputMode="numeric" />
+          <Input label="Address Details" value={form.address} onChange={e => { addAddressManual.current = true; setForm(f => ({ ...f, address: e.target.value })); }} placeholder="Blk / Unit / Street — auto-fills from postal code" className="sm:col-span-2" />
+          {postalLookupAdd && <p className="text-cyan-400/80 text-xs sm:col-span-2">Looking up address…</p>}
         </div>
         <div className="mt-4">
           <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wide">Fish Interests</label>
@@ -1746,8 +1787,7 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
         {view && (
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-              <div><p className="text-slate-500 text-xs">Phone</p><p className="text-white flex items-center gap-1"><Phone size={12} />{view.phone || "—"}</p></div>
-              <div><p className="text-slate-500 text-xs">WhatsApp</p><p className="text-white">{view.whatsapp || view.phone || "—"}</p></div>
+              <div className="sm:col-span-2"><p className="text-slate-500 text-xs">WhatsApp</p><p className="text-white flex items-center gap-1"><Phone size={12} />{view.whatsapp || view.phone || "—"}</p></div>
               <div><p className="text-slate-500 text-xs">Area</p><p className="text-white">{view.area}</p></div>
               <div><p className="text-slate-500 text-xs">Postal Code</p><p className="text-white">{view.postalCode || "—"}</p></div>
               <div className="sm:col-span-2"><p className="text-slate-500 text-xs">Address</p><p className="text-white">{view.address || "—"}</p></div>
@@ -1757,7 +1797,8 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
             <div><p className="text-slate-500 text-xs mb-2">Fish Types</p><div className="flex flex-wrap gap-2">{(view.fishTypes || []).length ? (view.fishTypes || []).map((f) => <Badge key={f} className="bg-slate-700 text-slate-300">{f}</Badge>) : <span className="text-slate-500 text-sm">—</span>}</div></div>
             {view.notes && <div className="bg-slate-900/50 rounded-lg p-3"><p className="text-slate-500 text-xs">Notes</p><p className="text-slate-300 text-sm">{view.notes}</p></div>}
             <div className="flex flex-wrap gap-2">
-              <Btn variant="ghost" size="sm" onClick={() => { setEditCustomer({ ...view, fishTypes: [...(view.fishTypes || [])] }); setViewId(null); }}><Edit2 size={12} />Edit</Btn>
+              <Btn variant="ghost" size="sm" onClick={() => { editAddressManual.current = false; setEditCustomer({ ...view, fishTypes: [...(view.fishTypes || [])] }); setViewId(null); }}><Edit2 size={12} />Edit</Btn>
+              <Btn variant="danger" size="sm" onClick={() => { setDeleteCustomer(view); setViewId(null); }}><Trash2 size={12} />Delete</Btn>
               <Btn variant="success" size="sm" onClick={() => generateWhatsApp(view)}><Send size={12} />Send on WhatsApp</Btn>
             </div>
             <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4">
@@ -1774,11 +1815,11 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="Full Name" value={editCustomer.name} onChange={(e) => setEditCustomer((c) => ({ ...c, name: e.target.value }))} required className="sm:col-span-2" />
-              <Input label="Phone" value={editCustomer.phone} onChange={(e) => setEditCustomer((c) => ({ ...c, phone: e.target.value }))} required />
-              <Input label="WhatsApp" value={editCustomer.whatsapp} onChange={(e) => setEditCustomer((c) => ({ ...c, whatsapp: e.target.value }))} placeholder="Defaults to phone if blank" />
+              <Input label="WhatsApp" value={editCustomer.whatsapp || editCustomer.phone || ""} onChange={(e) => setEditCustomer((c) => ({ ...c, whatsapp: e.target.value }))} placeholder="+65 9XXX XXXX" required className="sm:col-span-2" />
               <Select label="Area" value={editCustomer.area} onChange={(e) => setEditCustomer((c) => ({ ...c, area: e.target.value }))} options={SG_AREAS} />
-              <Input label="Postal Code" value={editCustomer.postalCode || ""} onChange={(e) => setEditCustomer((c) => ({ ...c, postalCode: e.target.value.replace(/\D/g, "").slice(0, 6) }))} inputMode="numeric" />
-              <Input label="Address Details" value={editCustomer.address || ""} onChange={(e) => setEditCustomer((c) => ({ ...c, address: e.target.value }))} className="sm:col-span-2" />
+              <Input label="Postal Code" value={editCustomer.postalCode || ""} onChange={(e) => onEditPostalChange(e.target.value)} inputMode="numeric" placeholder="e.g. 521123" />
+              <Input label="Address Details" value={editCustomer.address || ""} onChange={(e) => { editAddressManual.current = true; setEditCustomer((c) => ({ ...c, address: e.target.value })); }} placeholder="Blk / Unit / Street — auto-fills from postal code" className="sm:col-span-2" />
+              {postalLookupEdit && <p className="text-cyan-400/80 text-xs sm:col-span-2">Looking up address…</p>}
             </div>
             <p className="text-xs text-slate-500 mt-3">
               Tier: <span className={tierColor[calcCustomerTier(editCustomer.totalSpent)]}>{calcCustomerTier(editCustomer.totalSpent)}</span>
@@ -1799,6 +1840,25 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
               <Btn onClick={saveEdit}>Save</Btn>
             </div>
           </>
+        )}
+      </Modal>
+
+      <Modal open={!!deleteCustomer} onClose={() => setDeleteCustomer(null)} title="Delete Customer" size="sm">
+        {deleteCustomer && (
+          <div className="space-y-4">
+            <p className="text-slate-300 text-sm">
+              Remove <strong className="text-white">{deleteCustomer.name}</strong> from your customer list? This cannot be undone.
+            </p>
+            {(deleteCustomer.totalSpent || 0) > 0 && (
+              <p className="text-amber-300 text-xs bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+                This customer has {formatSGD(deleteCustomer.totalSpent)} in recorded spending. Past invoices and deliveries may still reference them.
+              </p>
+            )}
+            <div className="modal-actions flex justify-end gap-2">
+              <Btn variant="secondary" onClick={() => setDeleteCustomer(null)}>Cancel</Btn>
+              <Btn variant="danger" onClick={confirmDeleteCustomer}><Trash2 size={14} />Delete</Btn>
+            </div>
+          </div>
         )}
       </Modal>
     </div>
