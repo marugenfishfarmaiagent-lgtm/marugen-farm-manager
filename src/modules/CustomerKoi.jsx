@@ -375,7 +375,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
         <h2 className="text-xl sm:text-2xl font-black text-white">Customer Koi</h2>
         <p className="text-slate-400 text-sm">Sold koi — track pond, taken away, or deceased</p>
       </div>
-      <Fab onClick={openAdd} label="Add Koi Record" />
+      <Fab onClick={openAdd} label="Add Koi Record" hidden={showAdd || !!editRec || !!viewRec || !!deathRec || !!collectRec} />
 
       <div className="flex flex-col lg:flex-row gap-4 min-h-[480px]">
         <Card className="lg:w-64 shrink-0 p-3 space-y-2 lg:sticky lg:top-4 lg:self-start max-h-[70vh] overflow-y-auto">

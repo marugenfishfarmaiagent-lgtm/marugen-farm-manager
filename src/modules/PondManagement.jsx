@@ -217,6 +217,7 @@ export default function PondManagement({ pondData, setPondData, addNotification,
     guide: isOwner ? { onClick: () => setGuideModal(true), label: 'Add Guide' } : null,
   }
   const fabAction = fabByTab[tab]
+  const pondModalOpen = showAddPond || !!editPond || !!maintModal || !!treatModal || !!remindModal || !!guideModal
 
   return (
     <div className="space-y-4 pb-20 lg:pb-12">
@@ -224,7 +225,7 @@ export default function PondManagement({ pondData, setPondData, addNotification,
         <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2"><Droplets className="text-cyan-400" />Pond Management</h2>
         <p className="text-slate-400 text-sm">Maintenance · treatments · reminders</p>
       </div>
-      {fabAction && <Fab {...fabAction} />}
+      {fabAction && <Fab {...fabAction} hidden={pondModalOpen} />}
 
       <div className="flex gap-2 overflow-x-auto pb-1">
         {tabs.map((t) => (

@@ -663,7 +663,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
         <h2 className="text-xl sm:text-2xl font-black text-white">Inventory</h2>
         <p className="text-slate-400 text-sm">Products, Feed & Supplies</p>
       </div>
-      <Fab onClick={() => setShowAdd(true)} label="Add Product" />
+      <Fab onClick={() => setShowAdd(true)} label="Add Product" hidden={showAdd || !!editProduct || !!deleteProduct || !!showUse || !!showRestock || !!showSell} />
 
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
         {[
@@ -1131,7 +1131,7 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
           <p className="text-amber-400/90 text-xs mt-1">{unbookedInvoiceCount} not yet entered in accounts</p>
         )}
       </div>
-      <Fab onClick={() => setShowNew(true)} label="New Invoice" />
+      <Fab onClick={() => setShowNew(true)} label="New Invoice" hidden={showNew || !!viewInv} />
 
       <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
         {["all", "pending", "paid", "overdue", "cancelled"].map(s => (
@@ -1668,7 +1668,7 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
         <h2 className="text-xl sm:text-2xl font-black text-white">Customers</h2>
         <p className="text-slate-400 text-sm">{customers.length} registered</p>
       </div>
-      <Fab onClick={() => setShowAdd(true)} label="Add Customer" />
+      <Fab onClick={() => setShowAdd(true)} label="Add Customer" hidden={showAdd || viewId != null || !!editCustomer} />
 
       <div className="flex flex-wrap gap-3">
         <div className="relative flex-1 min-w-[180px]">
@@ -1909,7 +1909,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
           <p className="text-amber-400/90 text-xs mt-1">{unbookedExpenseCount} not yet entered in accounts</p>
         )}
       </div>
-      <Fab onClick={() => { resetUpload(); setShowAdd(true); }} label="Upload Receipt" icon={ImagePlus} />
+      <Fab onClick={() => { resetUpload(); setShowAdd(true); }} label="Upload Receipt" icon={ImagePlus} hidden={showAdd || viewExpenseId != null} />
 
       <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
         {[
@@ -2355,7 +2355,7 @@ function DeliveryModule({
           <Users size={16} />WhatsApp Groups
         </Btn>
       </div>
-      <Fab onClick={openAddDelivery} label="Schedule Delivery" />
+      <Fab onClick={openAddDelivery} label="Schedule Delivery" hidden={formOpen || !!invoicePreviewId || showManageGroups || !!whatsappDelivery} />
 
       <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
         {["all", "scheduled", "transit", "delivered", "cancelled"].map(s => (
@@ -2710,7 +2710,7 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
         <h2 className="text-xl sm:text-2xl font-black text-white">Calendar</h2>
         <p className="text-slate-400 text-sm">Events & reminders</p>
       </div>
-      <Fab onClick={openAddEvent} label="Add Event" />
+      <Fab onClick={openAddEvent} label="Add Event" hidden={formOpen} />
 
       {events.length === 0 ? (
         <Card className="p-10 text-center">
@@ -3190,7 +3190,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
         <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2"><UserCog size={22} className="text-cyan-400 shrink-0" />Team & Permissions</h2>
         <p className="text-slate-400 text-sm">Manage staff & owner accounts with module access</p>
       </div>
-      <Fab onClick={openAdd} label="Add User" icon={UserPlus} />
+      <Fab onClick={openAdd} label="Add User" icon={UserPlus} hidden={showAdd} />
 
       <AiUsageStatsPanel isOwner={currentUser.role === "owner"} cloudMode={cloudMode} />
 

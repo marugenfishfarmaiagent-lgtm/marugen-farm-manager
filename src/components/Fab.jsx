@@ -7,9 +7,10 @@ export default function Fab({
   label,
   icon: Icon = Plus,
   disabled = false,
+  hidden = false,
   className = '',
 }) {
-  if (typeof document === 'undefined') return null
+  if (hidden || typeof document === 'undefined') return null
 
   return createPortal(
     <button
@@ -18,7 +19,7 @@ export default function Fab({
       disabled={disabled}
       aria-label={label}
       title={label}
-      className={`fixed z-[60] right-4 bottom-[calc(5rem+env(safe-area-inset-bottom,0px))] lg:bottom-6 lg:right-6 flex items-center justify-center w-14 h-14 rounded-full bg-cyan-500 hover:bg-cyan-400 active:scale-95 text-slate-900 shadow-xl shadow-cyan-500/30 border border-cyan-400/40 touch-manipulation transition-all disabled:opacity-50 disabled:pointer-events-none ${className}`}
+      className={`fixed z-40 right-4 bottom-[calc(5rem+env(safe-area-inset-bottom,0px))] lg:bottom-6 lg:right-6 flex items-center justify-center w-14 h-14 rounded-full bg-cyan-500 hover:bg-cyan-400 active:scale-95 text-slate-900 shadow-xl shadow-cyan-500/30 border border-cyan-400/40 touch-manipulation transition-all disabled:opacity-50 disabled:pointer-events-none ${className}`}
     >
       <Icon size={24} strokeWidth={2.5} />
     </button>,

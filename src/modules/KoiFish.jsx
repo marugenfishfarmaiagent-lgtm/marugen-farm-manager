@@ -228,7 +228,7 @@ export default function KoiFish({
         </h2>
         <p className="text-slate-400 text-sm">Farm stock · sold · health records</p>
       </div>
-      <Fab onClick={() => { setForm(emptyKoiForm()); setShowAdd(true) }} label="Add Koi" />
+      <Fab onClick={() => { setForm(emptyKoiForm()); setShowAdd(true) }} label="Add Koi" hidden={showAdd || !!editKoi || !!viewKoi || !!sellKoi || !!deathKoi} />
 
       <div className="flex flex-wrap gap-2 text-xs">
         {[
