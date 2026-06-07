@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Fish, Plus, Search, Home, Edit2, Eye, Skull, MessageSquare, PackageCheck, X } from 'lucide-react'
+import { Fish, Search, Home, Edit2, Eye, Skull, MessageSquare, PackageCheck, X } from 'lucide-react'
 import {
   KOI_VARIETIES, CUSTOMER_KOI_DEATH_CAUSES, CUSTOMER_KOI_STATUS, CUSTOMER_KOI_STATUS_OPTIONS,
   formatCustomerKoiStatus, formatSGD, formatKoiSize, normalizeKoiSizeCm, genId, today,
@@ -8,6 +8,7 @@ import { Badge, Btn, Card, Input, Modal, PondNameInput, Select, Textarea } from 
 import Fab from '../components/Fab'
 import { readKoiImageFile } from '../lib/koiImage'
 import { openWhatsAppChat } from '../lib/invoiceWhatsApp'
+import { isAppVisibleCustomerKoi } from '../lib/retention'
 
 const tierColor = { Bronze: 'text-orange-400', Silver: 'text-slate-300', Gold: 'text-yellow-400', Platinum: 'text-cyan-400' }
 
@@ -141,7 +142,12 @@ function statusDetail(rec) {
   return formatCustomerKoiStatus(rec.status)
 }
 
-export default function CustomerKoi({ records, setRecords, customers, farmKoiList, addNotification }) {
+export default function CustomerKoi({ records, setRecords, customers, farmKoiList, addNotification, canEdit = false }) {
+  const denyEdit = () => addNotification({
+    type: 'error',
+    title: 'Permission Denied',
+    message: 'You need the "Edit records" permission. Contact the farm owner.',
+  })
   const [selectedCustomerId, setSelectedCustomerId] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
   const [search, setSearch] = useState('')
@@ -160,6 +166,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
   }, [records, customers])
 
   const filteredRecords = records.filter((r) => {
+    if (!isAppVisibleCustomerKoi(r)) return false
     if (selectedCustomerId !== 'all' && String(r.customerId) !== String(selectedCustomerId)) return false
     if (statusFilter !== 'all' && r.status !== statusFilter) return false
     const q = search.toLowerCase()
@@ -167,10 +174,10 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
   })
 
   const stats = useMemo(() => ({
-    total: records.length,
+    total: records.filter(isAppVisibleCustomerKoi).length,
     inPond: records.filter((r) => r.status === CUSTOMER_KOI_STATUS.IN_POND).length,
     collected: records.filter((r) => r.status === CUSTOMER_KOI_STATUS.COLLECTED).length,
-    deceased: records.filter((r) => r.status === CUSTOMER_KOI_STATUS.DECEASED).length,
+    deceased: records.filter((r) => r.status === CUSTOMER_KOI_STATUS.DECEASED && isAppVisibleCustomerKoi(r)).length,
     topVariety: Object.entries(records.reduce((a, r) => { a[r.variety] = (a[r.variety] || 0) + 1; return a }, {})).sort((a, b) => b[1] - a[1])[0]?.[0] || '—',
   }), [records])
 
@@ -228,6 +235,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
 
   const saveEdit = () => {
     if (!editRec) return
+    if (!canEdit) { denyEdit(); return }
     const hasSize = editRec.size !== '' && editRec.size != null
     const sizeCm = hasSize ? normalizeKoiSizeCm(editRec.size) : null
     if (hasSize && sizeCm == null) {
@@ -271,6 +279,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
 
   const confirmCollect = () => {
     if (!collectRec) return
+    if (!canEdit) { denyEdit(); return }
     setRecords((prev) => prev.map((r) => (r.id === collectRec.id ? {
       ...r,
       status: CUSTOMER_KOI_STATUS.COLLECTED,
@@ -282,6 +291,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
 
   const confirmDeath = () => {
     if (!deathRec) return
+    if (!canEdit) { denyEdit(); return }
     setRecords((prev) => prev.map((r) => (r.id === deathRec.id ? {
       ...r,
       status: CUSTOMER_KOI_STATUS.DECEASED,
@@ -473,11 +483,11 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
                   <p className="text-slate-500 text-xs mt-1">Sold {r.purchaseDate} · {formatSGD(r.purchasePrice)}</p>
                   <div className="flex flex-wrap gap-2 mt-3">
                     <Btn variant="ghost" size="sm" onClick={() => setViewRec(r)}><Eye size={12} />View</Btn>
-                    <Btn variant="ghost" size="sm" onClick={() => setEditRec({ ...r })}><Edit2 size={12} />Edit</Btn>
-                    {r.status === CUSTOMER_KOI_STATUS.IN_POND && (
+                    {canEdit && <Btn variant="ghost" size="sm" onClick={() => setEditRec({ ...r })}><Edit2 size={12} />Edit</Btn>}
+                    {canEdit && r.status === CUSTOMER_KOI_STATUS.IN_POND && (
                       <Btn variant="success" size="sm" onClick={() => { setCollectRec(r); setCollectDate(today()) }}><PackageCheck size={12} />Taken away</Btn>
                     )}
-                    {r.status !== CUSTOMER_KOI_STATUS.DECEASED && (
+                    {canEdit && r.status !== CUSTOMER_KOI_STATUS.DECEASED && (
                       <Btn variant="danger" size="sm" onClick={() => { setDeathRec(r); setDeathForm({ deathDate: today(), deathCause: CUSTOMER_KOI_DEATH_CAUSES[0], deathPhoto: null, deathNotes: '' }) }}><Skull size={12} /></Btn>
                     )}
                   </div>

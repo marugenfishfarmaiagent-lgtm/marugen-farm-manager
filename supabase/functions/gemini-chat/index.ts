@@ -9,17 +9,37 @@ import {
 } from "../_shared/aiUsage.ts";
 import { sessionTokenFrom, validateSession } from "../_shared/supabase.ts";
 
-const MODEL = "gemini-2.5-flash";
+const PRIMARY_MODEL = "gemini-2.5-flash";
+const FALLBACK_MODEL = "gemini-2.0-flash";
+const MAX_GEMINI_ATTEMPTS = 4;
+const RETRYABLE_GEMINI = /high demand|overloaded|resource.?exhausted|unavailable|try again|too many requests|deadline exceeded/i;
+
 const rateMap = new Map<string, { count: number; reset: number }>();
 const RATE_LIMIT = 30;
 const RATE_WINDOW_MS = 60_000;
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableGeminiError(status: number, message: string): boolean {
+  if (status === 429 || status === 503 || status === 500 || status === 502 || status === 504) return true;
+  return RETRYABLE_GEMINI.test(message);
+}
+
 type ChatMessage = {
   role: string;
   content?: string;
+  images?: string[];
   functionCalls?: { name: string; args: Record<string, unknown> }[];
   functionResponses?: { name: string; response: Record<string, unknown> }[];
 };
+
+function parseDataUrl(dataUrl: string): { mimeType: string; data: string } | null {
+  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) return null;
+  return { mimeType: match[1], data: match[2] };
+}
 
 function checkRateLimit(key: string): boolean {
   const now = Date.now();
@@ -56,10 +76,25 @@ function toGeminiContents(messages: ChatMessage[]) {
       continue;
     }
     if (m.role === "user" || m.role === "assistant") {
-      contents.push({
-        role: m.role === "assistant" ? "model" : "user",
-        parts: [{ text: m.content || "" }],
-      });
+      const parts: Record<string, unknown>[] = [];
+      for (const src of m.images || []) {
+        const parsed = parseDataUrl(src);
+        if (parsed) {
+          parts.push({ inlineData: { mimeType: parsed.mimeType, data: parsed.data } });
+        }
+      }
+      const text = (m.content || "").trim();
+      if (text) {
+        parts.push({ text });
+      } else if (parts.length) {
+        parts.push({ text: "Please look at the attached photo(s) and help with my Marugen farm request." });
+      }
+      if (parts.length) {
+        contents.push({
+          role: m.role === "assistant" ? "model" : "user",
+          parts,
+        });
+      }
     }
   }
 
@@ -112,7 +147,6 @@ Deno.serve(async (req) => {
     }
 
     const contents = toGeminiContents(messages || []);
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`;
 
     const payload: Record<string, unknown> = {
       systemInstruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,
@@ -125,15 +159,32 @@ Deno.serve(async (req) => {
       payload.toolConfig = { functionCallingConfig: { mode: "AUTO" } };
     }
 
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    let data: Record<string, unknown> = {};
+    let lastError = "Gemini API error";
+    let lastStatus = 500;
 
-    const data = await res.json();
-    if (!res.ok) {
-      return jsonResponse({ error: data.error?.message || "Gemini API error" }, res.status);
+    for (let attempt = 0; attempt < MAX_GEMINI_ATTEMPTS; attempt++) {
+      const model = attempt >= 2 ? FALLBACK_MODEL : PRIMARY_MODEL;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      data = await res.json();
+      if (res.ok && !data.error) break;
+
+      lastError = (data.error as { message?: string })?.message || "Gemini API error";
+      lastStatus = res.status || 500;
+      const retryable = isRetryableGeminiError(lastStatus, lastError);
+      if (!retryable || attempt === MAX_GEMINI_ATTEMPTS - 1) {
+        return jsonResponse({
+          error: lastError,
+          retryable,
+          modelAttempted: model,
+        }, lastStatus >= 400 ? lastStatus : 503);
+      }
+      await sleep(800 * (2 ** attempt));
     }
 
     const tokenDelta = parseGeminiUsage(data);

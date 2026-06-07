@@ -49,6 +49,9 @@ export const ALL_PERMISSIONS = [
   { id: 'customers', label: 'Customers' },
   { id: 'expenses', label: 'Expenses' },
   { id: 'accounting', label: 'Accounting marks' },
+  { id: 'edit', label: 'Edit records' },
+  { id: 'delete', label: 'Delete records' },
+  { id: 'refund', label: 'Refund sales' },
   { id: 'deliveries', label: 'Deliveries' },
   { id: 'calendar', label: 'Calendar' },
   { id: 'chat', label: 'AI Chat' },
@@ -256,12 +259,11 @@ export const INITIAL_CUSTOMERS = []
 /** Delivery fields copied from a customer record. */
 export function customerDeliveryFields(customer) {
   if (!customer) {
-    return { customerId: '', customerName: '', area: 'Tampines', postalCode: '', address: '' }
+    return { customerId: '', customerName: '', postalCode: '', address: '' }
   }
   return {
     customerId: String(customer.id),
     customerName: customer.name || '',
-    area: customer.area || 'Tampines',
     postalCode: customer.postalCode || '',
     address: customer.address || '',
   }
@@ -277,7 +279,7 @@ export function formatInvoiceItemsForDelivery(items = []) {
 /** Delivery fields filled from a linked invoice + customer profile. */
 export function invoiceDeliveryFields(invoice, customers = []) {
   if (!invoice) {
-    return { invoiceId: '', customerId: '', customerName: '', area: 'Tampines', postalCode: '', address: '', items: '' }
+    return { invoiceId: '', customerId: '', customerName: '', postalCode: '', address: '', items: '' }
   }
   const customer = invoice.customerId != null && invoice.customerId !== ''
     ? customers.find((c) => String(c.id) === String(invoice.customerId))
@@ -287,7 +289,6 @@ export function invoiceDeliveryFields(invoice, customers = []) {
     invoiceId: invoice.id,
     customerId: fromCustomer.customerId || (invoice.customerId != null && invoice.customerId !== '' ? String(invoice.customerId) : ''),
     customerName: invoice.customerName || fromCustomer.customerName,
-    area: fromCustomer.area,
     postalCode: fromCustomer.postalCode,
     address: invoice.customerAddress || fromCustomer.address,
     items: formatInvoiceItemsForDelivery(invoice.items),

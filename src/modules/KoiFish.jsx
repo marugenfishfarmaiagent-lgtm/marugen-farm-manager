@@ -1,14 +1,16 @@
 import { useMemo, useState } from 'react'
 import {
-  Fish, Plus, Search, MapPin, Edit2, Eye, Skull, ShoppingBag, ImagePlus, Truck, HeartPulse, RotateCcw,
+  Fish, Plus, Search, MapPin, Edit2, Eye, Skull, ShoppingBag, ImagePlus, Truck, HeartPulse, RotateCcw, Undo2,
 } from 'lucide-react'
 import {
   KOI_VARIETIES, KOI_STATUS, KOI_DEATH_CAUSES, FARM_POND_NAMES, mergePondNames,
-  formatSGD, formatKoiSize, normalizeKoiSizeCm, genId, today,
+  formatSGD, formatKoiSize, normalizeKoiSizeCm, genId, today, getInvoiceStatus,
 } from '../data/constants'
 import { Badge, Btn, Card, Input, Modal, PondNameInput, Select, Textarea } from '../components/ui'
 import Fab from '../components/Fab'
 import { readKoiImageFile } from '../lib/koiImage'
+import { formatKoiInvoiceLineName, findLinkedKoiInvoices } from '../lib/koiInvoice'
+import { isAppVisibleKoiFarm } from '../lib/retention'
 
 const STATUS_STYLE = {
   available: { badge: 'bg-emerald-500/20 text-emerald-300', border: 'border-slate-700/50' },
@@ -70,10 +72,11 @@ function KoiPhoto({ src, alt, className = '' }) {
 }
 
 export default function KoiFish({
-  koiList, setKoiList, customers, onKoiSold, addNotification,
+  koiList, setKoiList, customers, invoices = [], onKoiSold, onKoiRefund, onCreateInvoiceFromSale, addNotification,
+  canEdit = false, canRefund = false,
 }) {
   const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState('stock')
   const [varietyFilter, setVarietyFilter] = useState('all')
   const [pondFilter, setPondFilter] = useState('all')
   const [showAdd, setShowAdd] = useState(false)
@@ -84,12 +87,14 @@ export default function KoiFish({
   const [shipKoi, setShipKoi] = useState(null)
   const [shipToPond, setShipToPond] = useState('')
   const [sellForm, setSellForm] = useState({
-    customerId: '', soldPrice: '', soldDate: today(), disposition: 'taken', keepPondName: '',
+    customerId: '', soldPrice: '', soldDate: today(), disposition: 'taken', keepPondName: '', createInvoice: true,
   })
   const [deathKoi, setDeathKoi] = useState(null)
   const [deathForm, setDeathForm] = useState({
     deathDate: today(), deathCause: KOI_DEATH_CAUSES[0], deathPhoto: null, notes: '',
   })
+  const [refundKoi, setRefundKoi] = useState(null)
+  const [refundReason, setRefundReason] = useState('')
 
   const pondNames = useMemo(
     () => mergePondNames(FARM_POND_NAMES, koiList.map((k) => k.pondName)),
@@ -97,9 +102,12 @@ export default function KoiFish({
   )
 
   const filtered = koiList.filter((k) => {
+    if (!isAppVisibleKoiFarm(k)) return false
     const q = search.toLowerCase()
     const matchSearch = !q || [k.name, k.variety, k.pondName, k.id].some((x) => String(x || '').toLowerCase().includes(q))
-    const matchStatus = statusFilter === 'all' || k.status === statusFilter
+    const matchStatus = statusFilter === 'stock'
+      ? k.status !== KOI_STATUS.SOLD && k.status !== KOI_STATUS.DECEASED
+      : k.status === statusFilter
     const matchVariety = varietyFilter === 'all' || k.variety === varietyFilter
     const matchPond = pondFilter === 'all' || k.pondName === pondFilter
     return matchSearch && matchStatus && matchVariety && matchPond
@@ -109,11 +117,38 @@ export default function KoiFish({
     available: koiList.filter((k) => k.status === KOI_STATUS.AVAILABLE).length,
     sold: koiList.filter((k) => k.status === KOI_STATUS.SOLD).length,
     sick: koiList.filter((k) => k.status === KOI_STATUS.SICK).length,
-    deceased: koiList.filter((k) => k.status === KOI_STATUS.DECEASED).length,
+    deceased: koiList.filter((k) => k.status === KOI_STATUS.DECEASED && isAppVisibleKoiFarm(k)).length,
   }), [koiList])
 
   const soldFish = koiList.filter((k) => k.status === KOI_STATUS.SOLD)
-  const recentSold = [...soldFish].sort((a, b) => (b.soldDate || '').localeCompare(a.soldDate || '')).slice(0, 5)
+  const stockCount = koiList.filter((k) => k.status !== KOI_STATUS.SOLD).length
+
+  const openRefund = (koi) => {
+    if (!canRefund) {
+      addNotification?.({ type: 'error', title: 'Permission Denied', message: 'You need the "Refund sales" permission. Contact the farm owner.' })
+      return
+    }
+    setRefundKoi(koi)
+    setRefundReason('')
+  }
+
+  const confirmRefund = () => {
+    if (!refundKoi) return
+    if (!canRefund) {
+      addNotification?.({ type: 'error', title: 'Permission Denied', message: 'You need the "Refund sales" permission. Contact the farm owner.' })
+      return
+    }
+    onKoiRefund?.(refundKoi, { reason: refundReason })
+    if (viewKoi?.id === refundKoi.id) setViewKoi(null)
+    setRefundKoi(null)
+    setRefundReason('')
+  }
+
+  const refundLinkedInvoices = refundKoi
+    ? findLinkedKoiInvoices(invoices, refundKoi.id).filter(
+      (inv) => !['cancelled', 'paid'].includes(getInvoiceStatus(inv)),
+    )
+    : []
 
   const parseOptionalSize = (value) => {
     if (value == null || value === '') return null
@@ -161,6 +196,10 @@ export default function KoiFish({
 
   const saveEdit = () => {
     if (!editKoi) return
+    if (!canEdit) {
+      addNotification?.({ type: 'error', title: 'Permission Denied', message: 'You need the "Edit records" permission. Contact the farm owner.' })
+      return
+    }
     const sizeCm = parseOptionalSize(editKoi.size)
     if (sizeCm === undefined) return
     if (!editKoi.pondName?.trim()) {
@@ -259,6 +298,28 @@ export default function KoiFish({
       title: 'Koi Sold',
       message: `${sellKoi.id} sold to ${customer?.name || 'customer'} for ${formatSGD(soldPrice)} (${dispositionNote})`,
     })
+    if (sellForm.createInvoice) {
+      onCreateInvoiceFromSale?.({
+        customerId: String(customer.id),
+        customerName: customer.name,
+        manualCustomer: false,
+        items: [{
+          name: formatKoiInvoiceLineName(sellKoi),
+          qty: 1,
+          price: soldPrice,
+          productId: '',
+          manual: false,
+          koiId: sellKoi.id,
+          koiDisposition: sellForm.disposition,
+          keepPondName: sellForm.disposition === 'keep' ? keepPondName : '',
+          koiAlreadySold: true,
+        }],
+        notes: `Koi sale — ${sellKoi.name || sellKoi.variety} (${sellKoi.id})`,
+        due: soldDate,
+        discountType: 'none',
+        discountValue: '',
+      })
+    }
     setSellKoi(null)
   }
 
@@ -278,16 +339,16 @@ export default function KoiFish({
   }
 
   const customerName = (id) => customers.find((c) => String(c.id) === String(id))?.name || '—'
-  const fabHidden = showAdd || !!editKoi || !!viewKoi || !!sellKoi || !!shipKoi || !!deathKoi
+  const fabHidden = showAdd || !!editKoi || !!viewKoi || !!sellKoi || !!shipKoi || !!deathKoi || !!refundKoi
 
   return (
     <div className="space-y-4 pb-20 lg:pb-12">
       <div>
         <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2">
           <Fish className="text-cyan-400" />Koi Fish Inventory
-          <Badge className="bg-cyan-500/20 text-cyan-300">{koiList.length}</Badge>
+          <Badge className="bg-cyan-500/20 text-cyan-300">{stockCount}</Badge>
         </h2>
-        <p className="text-slate-400 text-sm">Farm stock · pond transfers · sales</p>
+        <p className="text-slate-400 text-sm">Farm stock · pond transfers · sales · refunds</p>
       </div>
       <Fab onClick={() => { setForm(emptyKoiForm()); setShowAdd(true) }} label="Add Koi" hidden={fabHidden} />
 
@@ -322,16 +383,26 @@ export default function KoiFish({
           options={[{ value: 'all', label: 'All ponds' }, ...pondNames.map((p) => ({ value: p, label: p }))]} />
       </div>
       <div className="flex gap-2 overflow-x-auto pb-1">
-        {['all', 'available', 'sold', 'sick', 'deceased'].map((s) => (
+        {[
+          ['stock', 'Stock'],
+          ['available', 'Available'],
+          ['sold', 'Sold'],
+          ['sick', 'Sick'],
+          ['deceased', 'Deceased'],
+        ].map(([s, label]) => (
           <button key={s} type="button" onClick={() => setStatusFilter(s)}
-            className={`px-3 py-2 rounded-lg text-xs font-bold capitalize shrink-0 ${statusFilter === s ? 'bg-cyan-500 text-slate-900' : 'bg-slate-700 text-slate-300'}`}>{s}</button>
+            className={`px-3 py-2 rounded-lg text-xs font-bold shrink-0 ${statusFilter === s ? 'bg-cyan-500 text-slate-900' : 'bg-slate-700 text-slate-300'}`}>{label}</button>
         ))}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {filtered.length === 0 ? (
           <Card className="p-8 text-center text-slate-500 md:col-span-2 xl:col-span-3">
-            {koiList.length === 0 ? 'No koi in stock — tap Add Koi to get started.' : 'No koi match your search or filters.'}
+            {koiList.length === 0
+              ? 'No koi in stock — tap Add Koi to get started.'
+              : statusFilter === 'sold' && soldFish.length === 0
+                ? 'No sold fish on record.'
+                : 'No koi match your search or filters.'}
           </Card>
         ) : filtered.map((k) => {
           const st = STATUS_STYLE[k.status] || STATUS_STYLE.available
@@ -359,7 +430,11 @@ export default function KoiFish({
                 <p className="text-slate-500 text-[10px]">Added {k.dateAdded}</p>
                 <div className="flex flex-wrap gap-2 pt-2">
                   <Btn variant="ghost" size="sm" onClick={() => setViewKoi(k)}><Eye size={12} />View</Btn>
-                  <Btn variant="ghost" size="sm" onClick={() => setEditKoi({ ...k })}><Edit2 size={12} />Edit</Btn>
+                  {k.status === KOI_STATUS.SOLD ? (
+                    canRefund && <Btn variant="secondary" size="sm" onClick={() => openRefund(k)}><Undo2 size={12} />Refund</Btn>
+                  ) : (
+                    canEdit && <Btn variant="ghost" size="sm" onClick={() => setEditKoi({ ...k })}><Edit2 size={12} />Edit</Btn>
+                  )}
                   {STOCK_STATUSES.includes(k.status) && (
                     <>
                       <Btn variant="secondary" size="sm" onClick={() => openShip(k)}><Truck size={12} />Ship</Btn>
@@ -371,6 +446,7 @@ export default function KoiFish({
                           soldDate: today(),
                           disposition: 'taken',
                           keepPondName: k.pondName || 'A1',
+                          createInvoice: true,
                         })
                       }}><ShoppingBag size={12} />Sell</Btn>
                       {k.status === KOI_STATUS.AVAILABLE ? (
@@ -400,32 +476,6 @@ export default function KoiFish({
           )
         })}
       </div>
-
-      {soldFish.length > 0 && (
-        <Card className="p-4">
-          <h3 className="text-sm font-bold text-white mb-3">Sold Fish Summary</h3>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4 text-sm">
-            <div><p className="text-slate-500 text-xs">Total sold</p><p className="text-white font-bold">{soldFish.length}</p></div>
-            <div><p className="text-slate-500 text-xs">Revenue</p><p className="text-emerald-400 font-bold">{formatSGD(soldFish.reduce((s, k) => s + (k.soldPrice || 0), 0))}</p></div>
-            <div><p className="text-slate-500 text-xs">Top variety</p><p className="text-cyan-400 font-bold">{Object.entries(soldFish.reduce((a, k) => { a[k.variety] = (a[k.variety] || 0) + 1; return a }, {})).sort((a, b) => b[1] - a[1])[0]?.[0] || '—'}</p></div>
-          </div>
-          <div className="space-y-2">
-            {recentSold.map((k) => (
-              <div key={k.id} className="flex items-center gap-3 text-sm border-t border-slate-700/50 pt-2">
-                {k.photo ? <img src={k.photo} alt="" className="w-10 h-10 rounded object-contain bg-slate-900" /> : <div className="w-10 h-10 rounded bg-slate-800 flex items-center justify-center"><Fish size={16} /></div>}
-                <div className="flex-1 min-w-0">
-                  <p className="text-white truncate">{k.variety} · {customerName(k.soldTo)}</p>
-                  <p className="text-slate-500 text-xs">
-                    {k.soldDate}
-                    {k.sellDisposition === 'keep' ? ` · Kept ${k.keepPondName || '—'}` : k.sellDisposition === 'taken' ? ' · Taken away' : ''}
-                  </p>
-                </div>
-                <p className="text-emerald-400 font-bold">{formatSGD(k.soldPrice)}</p>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
 
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Koi" size="lg">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -544,6 +594,20 @@ export default function KoiFish({
             )}
             <Input label="Sold price (S$)" type="number" value={sellForm.soldPrice} onChange={(e) => setSellForm((f) => ({ ...f, soldPrice: e.target.value }))} step="0.01" className="mt-3" />
             <Input label="Sold date" type="date" value={sellForm.soldDate} onChange={(e) => setSellForm((f) => ({ ...f, soldDate: e.target.value }))} className="mt-3" />
+            <label className="flex items-center gap-2.5 mt-4 cursor-pointer touch-manipulation">
+              <input
+                type="checkbox"
+                checked={sellForm.createInvoice}
+                onChange={(e) => setSellForm((f) => ({ ...f, createInvoice: e.target.checked }))}
+                className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500/50"
+              />
+              <span className="text-sm text-slate-300">Create invoice for this sale</span>
+            </label>
+            <p className="text-xs text-slate-500 mt-1 ml-6">
+              {sellForm.createInvoice
+                ? 'After confirm, Invoices opens with this fish pre-filled.'
+                : 'Invoice will not be created — only the sale is recorded.'}
+            </p>
             <div className="modal-actions mt-4 flex justify-end gap-2">
               <Btn variant="secondary" onClick={() => setSellKoi(null)}>Cancel</Btn>
               <Btn variant="success" onClick={confirmSell} disabled={customers.length === 0}><ShoppingBag size={14} />Confirm Sale</Btn>
@@ -569,6 +633,47 @@ export default function KoiFish({
         )}
       </Modal>
 
+      <Modal open={!!refundKoi} onClose={() => { setRefundKoi(null); setRefundReason('') }} title="Refund Koi Sale" size="md">
+        {refundKoi && (
+          <div className="space-y-4">
+            <div className="flex gap-3">
+              {refundKoi.photo ? (
+                <img src={refundKoi.photo} alt="" className="w-16 h-16 rounded-lg object-contain bg-slate-900" />
+              ) : (
+                <div className="w-16 h-16 rounded-lg bg-slate-800 flex items-center justify-center"><Fish size={20} /></div>
+              )}
+              <div>
+                <p className="text-white font-bold">{refundKoi.name || refundKoi.variety}</p>
+                <p className="text-slate-400 text-sm">{refundKoi.id} · {customerName(refundKoi.soldTo)}</p>
+                <p className="text-emerald-400 font-bold text-sm">{formatSGD(refundKoi.soldPrice)}</p>
+              </div>
+            </div>
+            <p className="text-slate-400 text-sm">
+              This returns the fish to <span className="text-cyan-300">available</span> stock, removes any linked Customer Koi record, and logs the refund in notes.
+            </p>
+            {refundLinkedInvoices.length > 0 && (
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-amber-200 text-sm">
+                <p className="font-semibold mb-1">Linked invoices still open</p>
+                <p className="text-xs text-amber-200/90">
+                  Cancel or adjust manually: {refundLinkedInvoices.map((inv) => inv.id).join(', ')}
+                </p>
+              </div>
+            )}
+            <Textarea
+              label="Refund reason (optional)"
+              value={refundReason}
+              onChange={(e) => setRefundReason(e.target.value)}
+              placeholder="e.g. Customer returned fish, wrong sale recorded"
+              rows={2}
+            />
+            <div className="modal-actions flex justify-end gap-2">
+              <Btn variant="secondary" onClick={() => { setRefundKoi(null); setRefundReason('') }}>Cancel</Btn>
+              <Btn variant="danger" onClick={confirmRefund}><Undo2 size={14} />Confirm Refund</Btn>
+            </div>
+          </div>
+        )}
+      </Modal>
+
       <Modal open={!!viewKoi} onClose={() => setViewKoi(null)} title={viewKoi?.id} size="lg">
         {viewKoi && (
           <div className="space-y-4">
@@ -579,17 +684,24 @@ export default function KoiFish({
               ))}
             </div>
             {viewKoi.status === 'sold' && (
-              <Card className="p-3 border-blue-500/30">
-                <p className="text-blue-300 text-xs font-bold mb-2">Sale record</p>
-                <p className="text-sm text-white">Buyer: {customerName(viewKoi.soldTo)}</p>
-                <p className="text-sm text-white">Date: {viewKoi.soldDate} · {formatSGD(viewKoi.soldPrice)}</p>
-                <p className="text-sm text-white">
-                  {viewKoi.sellDisposition === 'keep'
-                    ? `Kept at farm — ${viewKoi.keepPondName || '—'}`
-                    : viewKoi.sellDisposition === 'taken'
-                      ? 'Taken away by customer'
-                      : '—'}
-                </p>
+              <Card className="p-3 border-blue-500/30 space-y-3">
+                <div>
+                  <p className="text-blue-300 text-xs font-bold mb-2">Sale record</p>
+                  <p className="text-sm text-white">Buyer: {customerName(viewKoi.soldTo)}</p>
+                  <p className="text-sm text-white">Date: {viewKoi.soldDate} · {formatSGD(viewKoi.soldPrice)}</p>
+                  <p className="text-sm text-white">
+                    {viewKoi.sellDisposition === 'keep'
+                      ? `Kept at farm — ${viewKoi.keepPondName || '—'}`
+                      : viewKoi.sellDisposition === 'taken'
+                        ? 'Taken away by customer'
+                        : '—'}
+                  </p>
+                </div>
+                {canRefund && (
+                  <Btn variant="secondary" onClick={() => openRefund(viewKoi)} className="w-full justify-center">
+                    <Undo2 size={14} />Refund Sale
+                  </Btn>
+                )}
               </Card>
             )}
             {viewKoi.status === KOI_STATUS.DECEASED && (

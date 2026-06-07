@@ -2,9 +2,24 @@ import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
 
 const SESSION_KEY = 'marugen_session'
 
+function readSessionRaw() {
+  // iOS Safari and Home Screen PWA use separate storage — prefer localStorage so login persists in standalone mode.
+  const fromLocal = localStorage.getItem(SESSION_KEY)
+  if (fromLocal) return fromLocal
+  const fromSession = sessionStorage.getItem(SESSION_KEY)
+  if (fromSession) {
+    try {
+      localStorage.setItem(SESSION_KEY, fromSession)
+    } catch {
+      /* quota or private mode */
+    }
+  }
+  return fromSession
+}
+
 export function getSession() {
   try {
-    const raw = sessionStorage.getItem(SESSION_KEY)
+    const raw = readSessionRaw()
     return raw ? JSON.parse(raw) : null
   } catch {
     return null
@@ -12,10 +27,17 @@ export function getSession() {
 }
 
 export function setSession({ token, user }) {
-  sessionStorage.setItem(SESSION_KEY, JSON.stringify({ token, user }))
+  const json = JSON.stringify({ token, user })
+  try {
+    localStorage.setItem(SESSION_KEY, json)
+  } catch {
+    /* quota or private mode */
+  }
+  sessionStorage.setItem(SESSION_KEY, json)
 }
 
 export function clearSession() {
+  localStorage.removeItem(SESSION_KEY)
   sessionStorage.removeItem(SESSION_KEY)
 }
 

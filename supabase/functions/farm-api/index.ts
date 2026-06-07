@@ -1,6 +1,7 @@
 import { fetchTodayUsageByUser, fetchWeekUsageByUser } from "../_shared/aiUsage.ts";
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import { hashPin, verifyPin } from "../_shared/pin.ts";
+import { purgeExpiredCloudData } from "../_shared/retention.ts";
 import {
   adminClient,
   hasPermission,
@@ -112,6 +113,8 @@ Deno.serve(async (req) => {
     const db = adminClient();
 
     if (body.action === "fetch") {
+      await purgeExpiredCloudData(db);
+
       const [
         users, customers, products, invoices, expenses, deliveries, events, stockActivity,
         koiFish, customerKoi, pondRow, whatsappGroups,
@@ -161,7 +164,7 @@ Deno.serve(async (req) => {
       const { entity, data } = body;
       const perm = ENTITY_PERMS[entity];
       if (!perm || !hasPermission(user, perm)) {
-        return jsonResponse({ error: "Permission denied" }, 403);
+        return jsonResponse({ error: `Permission denied (${entity})` }, 403);
       }
 
       if (entity === "users") {

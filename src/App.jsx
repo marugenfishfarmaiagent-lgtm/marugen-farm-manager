@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { Users, Fish, FishSymbol, Contact, Droplets, FileText, TrendingUp, Truck, Calendar, MessageSquare, Bell, LogOut, Plus, Search, X, Check, AlertTriangle, Home, BarChart2, Menu, DollarSign, Boxes, Eye, Send, Phone, MapPin, Star, Activity, Zap, Clock, CheckCircle, XCircle, Info, Archive, ShoppingBag, Shield, UserCog, UserPlus, Edit2, Trash2, Lock, Printer, BookCheck, ImagePlus, Images, Camera } from "lucide-react";
+import { Users, Fish, FishSymbol, Contact, Droplets, FileText, TrendingUp, Truck, Calendar, MessageSquare, Bell, LogOut, Plus, Search, X, Check, AlertTriangle, Home, Menu, DollarSign, Boxes, Eye, Send, Phone, MapPin, Navigation, Star, Zap, Clock, CheckCircle, XCircle, Info, Archive, ShoppingBag, Shield, UserCog, UserPlus, Edit2, Trash2, Lock, Printer, BookCheck, ImagePlus, Images, Camera, ScanLine, RefreshCw } from "lucide-react";
 import KoiFish from "./modules/KoiFish";
 import CustomerKoi from "./modules/CustomerKoi";
 import PondManagement from "./modules/PondManagement";
@@ -9,6 +9,11 @@ import {
   clearLocalOnlyStorage, emptyPondData, resolveCloudKoiPayload, resolveCloudWhatsappGroups,
 } from "./lib/cloudData";
 import { deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem } from "./lib/inventoryStock";
+import {
+  applyInvoiceKoiSales, restoreInvoiceKoiSales, availableKoiForInvoice,
+  formatKoiInvoiceLineName, validateInvoiceKoiSales, findLinkedKoiInvoices, buildKoiRefundUpdate,
+} from "./lib/koiInvoice";
+import { PondNameInput } from "./components/ui";
 import InvoiceDocument from "./components/InvoiceDocument";
 import { downloadInvoicePdf } from "./lib/generateInvoicePdf";
 import { calcInvoiceAmounts } from "./lib/invoiceDesign";
@@ -19,23 +24,32 @@ import {
   buildDeliveryWhatsAppRecipients, formatDeliveryRecipientLabel, formatDeliverySchedule,
   loadWhatsappGroups, saveWhatsappGroups, sendDeliveryToRecipient,
 } from "./lib/deliveryWhatsApp";
+import { formatDeliveryLocation, openDeliveryMap } from "./lib/deliveryMaps";
 import { normalizeWhatsAppGroupLink } from "./lib/invoiceWhatsApp";
 import { fetchAiUsage, fetchAiUsageStats, sendChatMessage } from "./lib/gemini";
+import { readChatImageFile, MAX_CHAT_IMAGES } from "./lib/chatImage";
 import { AI_DAILY_FREE_TOKENS, AI_WARN_AT_TOKENS, formatTokens } from "./lib/aiUsage";
 import { AI_TOOL_DEFINITIONS } from "./lib/aiTools";
-import { buildBusinessContext, executeAiActions } from "./lib/aiActions";
+import { buildBusinessContext, executeAiActions, resolvePendingAiActions } from "./lib/aiActions";
 import * as db from "./lib/database";
+import { SYNC_ENTITIES } from "./lib/cloudSync";
+import {
+  applyCloudRetention, isAppVisibleInvoice, isAppVisibleExpense, isAppVisibleDelivery,
+  isAppVisibleEvent, isAppVisibleStockLog,
+} from "./lib/retention";
 import { isSupabaseConfigured } from "./lib/supabase";
 import * as auth from "./lib/auth";
 import {
-  FISH_TYPES, SG_AREAS, PRODUCT_CATEGORIES,
-  CUSTOMER_TIERS, PAYNOW_UEN, PAYNOW_QR_PATTERN, ALL_PERMISSIONS, DEFAULT_PERMISSIONS,
-  formatSGD, today, genId, genInvoiceId, getInvoiceStatus, calcCustomerTier, KOI_STATUS, CUSTOMER_KOI_STATUS,
+  FISH_TYPES, PRODUCT_CATEGORIES,
+  CUSTOMER_TIERS, ALL_PERMISSIONS, DEFAULT_PERMISSIONS,
+  formatSGD, formatInvoiceDate, today, genId, genInvoiceId, getInvoiceStatus, calcCustomerTier, KOI_STATUS, CUSTOMER_KOI_STATUS,
   INITIAL_PRODUCTS, INITIAL_CUSTOMERS, INITIAL_INVOICES, INITIAL_EXPENSES,
   INITIAL_DELIVERIES, INITIAL_EVENTS, LOCAL_DEMO_USERS, customerDeliveryFields, invoiceDeliveryFields, makeBookedPatch,
 } from "./data/constants";
 import logo from "./assets/logo.png";
 import Fab from "./components/Fab";
+import ToastStack from "./components/ToastStack";
+import { buildTeamNotification, buildToastNotification, isTeamNotification } from "./lib/notifications";
 
 function BookedBadge({ booked, bookedBy }) {
   if (booked) {
@@ -46,6 +60,54 @@ function BookedBadge({ booked, bookedBy }) {
     );
   }
   return <Badge className="bg-amber-500/15 text-amber-300 text-[10px]">Pending accounts</Badge>;
+}
+
+function CloudOfflineBanner({ error, onRetry, retrying }) {
+  return (
+    <div className="bg-amber-500/15 border-b border-amber-500/50 px-3 py-3 sm:px-4 flex flex-col sm:flex-row sm:items-center gap-3 shrink-0">
+      <div className="flex items-start gap-2.5 flex-1 min-w-0">
+        <AlertTriangle size={20} className="text-amber-400 shrink-0 mt-0.5" />
+        <div className="min-w-0">
+          <p className="text-amber-100 text-sm font-bold">Cloud save paused — Local mode</p>
+          <p className="text-amber-200/90 text-xs mt-0.5 leading-relaxed">
+            New invoices, sales, and expenses show here but are <strong className="text-amber-100">not saved to Supabase</strong> yet.
+            Avoid refresh or closing this tab until sync succeeds.
+          </p>
+          {error && (
+            <p className="text-amber-300/70 text-[11px] mt-1 truncate" title={error}>{error}</p>
+          )}
+        </div>
+      </div>
+      <Btn
+        size="sm"
+        variant="secondary"
+        onClick={onRetry}
+        disabled={retrying}
+        className="w-full sm:w-auto justify-center border-amber-500/40 text-amber-100 hover:bg-amber-500/20 shrink-0"
+      >
+        <RefreshCw size={14} className={retrying ? "animate-spin" : ""} />
+        {retrying ? "Saving…" : "Retry save"}
+      </Btn>
+    </div>
+  );
+}
+
+function AccountsMarkConfirmModal({ open, recordLabel, currentlyBooked, onCancel, onSubmit }) {
+  return (
+    <Modal open={open} onClose={onCancel} title={currentlyBooked ? "Remove accounts mark?" : "Mark in accounts?"} size="sm">
+      <p className="text-slate-300 text-sm mb-4">
+        {currentlyBooked
+          ? <>Remove <strong className="text-white">{recordLabel}</strong> from accounts? It will show as <span className="text-amber-300">Pending accounts</span> again.</>
+          : <>Confirm <strong className="text-white">{recordLabel}</strong> has been entered in your external accounting app.</>}
+      </p>
+      <div className="flex justify-end gap-2">
+        <Btn variant="secondary" onClick={onCancel}>Cancel</Btn>
+        <Btn variant={currentlyBooked ? "danger" : "success"} onClick={onSubmit}>
+          <BookCheck size={14} />{currentlyBooked ? "Remove mark" : "Submit"}
+        </Btn>
+      </div>
+    </Modal>
+  );
 }
 
 function AppLogo({ size = "md", className = "" }) {
@@ -67,6 +129,27 @@ function hasPermission(user, permission) {
 
 function canMarkAccounting(user) {
   return hasPermission(user, "accounting");
+}
+
+function canEditRecords(user) {
+  return hasPermission(user, "edit");
+}
+
+function canDeleteRecords(user) {
+  return hasPermission(user, "delete");
+}
+
+function canRefundSales(user) {
+  return hasPermission(user, "refund");
+}
+
+function notifyPermissionDenied(addNotification, permissionId) {
+  const label = ALL_PERMISSIONS.find((p) => p.id === permissionId)?.label || permissionId;
+  addNotification({
+    type: "error",
+    title: "Permission Denied",
+    message: `You need the "${label}" permission. Contact the farm owner.`,
+  });
 }
 
 function useIsMobile(breakpoint = 1024) {
@@ -112,7 +195,7 @@ function Modal({ open, onClose, title, children, size = "md" }) {
   );
 }
 
-function Input({ label, value, onChange, type = "text", placeholder, className = "", required, min, step, readOnly, inputMode }) {
+function Input({ label, value, onChange, onBlur, type = "text", placeholder, className = "", required, min, step, readOnly, inputMode }) {
   const isDateTimeField = type === "date" || type === "time" || type === "datetime-local";
   const fieldClass = "w-full max-w-full min-w-0 box-border bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-3 sm:py-2.5 text-white text-base sm:text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 transition-all";
   return (
@@ -120,11 +203,11 @@ function Input({ label, value, onChange, type = "text", placeholder, className =
       {label && <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wide">{label}{required && <span className="text-red-400 ml-1">*</span>}</label>}
       {isDateTimeField ? (
         <div className="w-full max-w-full min-w-0 overflow-hidden">
-          <input type={type} value={value} onChange={onChange} placeholder={placeholder} min={min} step={step} readOnly={readOnly} inputMode={inputMode}
+          <input type={type} value={value} onChange={onChange} onBlur={onBlur} placeholder={placeholder} min={min} step={step} readOnly={readOnly} inputMode={inputMode}
             className={`datetime-field ${fieldClass} ${readOnly ? "opacity-80 cursor-default" : ""}`} />
         </div>
       ) : (
-        <input type={type} value={value} onChange={onChange} placeholder={placeholder} min={min} step={step} readOnly={readOnly} inputMode={inputMode}
+        <input type={type} value={value} onChange={onChange} onBlur={onBlur} placeholder={placeholder} min={min} step={step} readOnly={readOnly} inputMode={inputMode}
           className={`${fieldClass} ${readOnly ? "opacity-80 cursor-default" : ""}`} />
       )}
     </div>
@@ -182,12 +265,23 @@ function AccessDenied({ moduleName }) {
   );
 }
 
+function actorLabel(n) {
+  if (!n.actor) return null;
+  if (n.actorRole === "owner") return `Owner · ${n.actor}`;
+  if (n.actorRole === "system") return "System alert";
+  return `${n.actor}`;
+}
+
 function NotificationPanel({ notifications, onDismiss, onClear, onMarkRead }) {
   const unread = notifications.filter(n => !n.read).length;
   return (
     <div className="space-y-2 w-full max-w-[min(100vw-2rem,320px)] sm:min-w-[320px]">
       {notifications.length === 0 ? (
-        <div className="text-center py-8 text-slate-500"><Bell size={32} className="mx-auto mb-2 opacity-40" /><p>No notifications</p></div>
+        <div className="text-center py-8 text-slate-500">
+          <Bell size={32} className="mx-auto mb-2 opacity-40" />
+          <p className="text-sm">No team alerts</p>
+          <p className="text-xs text-slate-600 mt-1">Important actions by staff or owner appear here.</p>
+        </div>
       ) : (
         <>
           <div className="flex items-center justify-between mb-3">
@@ -202,6 +296,9 @@ function NotificationPanel({ notifications, onDismiss, onClear, onMarkRead }) {
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-sm text-white font-medium leading-tight">{n.title}</p>
+                {actorLabel(n) && (
+                  <p className="text-[11px] text-cyan-400/90 font-semibold mt-0.5">{actorLabel(n)}</p>
+                )}
                 <p className="text-xs text-slate-400 mt-0.5">{n.message}</p>
                 <p className="text-xs text-slate-500 mt-1">{n.time}</p>
               </div>
@@ -338,7 +435,9 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
     return status === "pending" || status === "overdue";
   });
   const pendingRevenue = openInvoices.reduce((s, i) => s + (Number(i.total) || 0), 0);
-  const unbookedExpenses = expenses.filter((e) => !e.booked).length;
+  const canExpenses = can("expenses");
+  const canAccounting = can("accounting");
+  const unbookedExpenses = canExpenses ? expenses.filter((e) => !e.booked).length : 0;
   const unbookedInvoices = invoices.filter((i) => !i.booked && getInvoiceStatus(i) !== "cancelled").length;
   const lowStock = products.filter((p) => p.minStock > 0 && p.stock <= p.minStock);
   const todayStr = today();
@@ -347,7 +446,10 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
     .sort((a, b) => `${a.time || ""}`.localeCompare(`${b.time || ""}`));
   const scheduledDeliveries = deliveries.filter((d) => d.status === "scheduled").length;
   const todayDeliveries = deliveries.filter((d) => d.schedule?.startsWith(todayStr)).length;
-  const recentInvoices = [...invoices].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 5);
+  const recentInvoices = [...invoices]
+    .filter(isAppVisibleInvoice)
+    .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
+    .slice(0, 5);
   const recentCustomers = [...customers].sort((a, b) => (Number(b.totalSpent) || 0) - (Number(a.totalSpent) || 0)).slice(0, 5);
   const koiAvailable = koiFishList.filter((k) => k.status === KOI_STATUS.AVAILABLE).length;
   const koiSold = koiFishList.filter((k) => k.status === KOI_STATUS.SOLD).length;
@@ -357,17 +459,15 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
   const stats = [
     { label: "Revenue (Paid)", value: formatSGD(totalRevenue), icon: DollarSign, color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20", tab: can("invoices") ? "invoices" : null },
     { label: "Pending / Overdue", value: formatSGD(pendingRevenue), icon: Clock, color: "text-amber-400", bg: "bg-amber-500/10 border-amber-500/20", tab: can("invoices") ? "invoices" : null },
-    { label: "Expense Receipts", value: String(expenses.length), icon: ImagePlus, color: "text-purple-400", bg: "bg-purple-500/10 border-purple-500/20", tab: can("expenses") ? "expenses" : null },
-    {
+    ...(canExpenses ? [{ label: "Expense Receipts", value: String(expenses.length), icon: ImagePlus, color: "text-purple-400", bg: "bg-purple-500/10 border-purple-500/20", tab: "expenses" }] : []),
+    ...(canAccounting ? [{
       label: "Pending Accounts",
       value: String(unbookedExpenses + unbookedInvoices),
       icon: BookCheck,
       color: "text-cyan-400",
       bg: "bg-cyan-500/10 border-cyan-500/20",
-      tab: can("accounting")
-        ? (unbookedExpenses > 0 && unbookedInvoices === 0 && can("expenses") ? "expenses" : "invoices")
-        : null,
-    },
+      tab: unbookedExpenses > 0 && unbookedInvoices === 0 && canExpenses ? "expenses" : "invoices",
+    }] : []),
   ];
 
   const sectionLink = (tab, label) => can(tab) ? (
@@ -553,6 +653,8 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
 const EMPTY_PRODUCT_FORM = { name: "", category: "Fish Food", sku: "", price: "", unit: "kg", stock: "", minStock: "", description: "" };
 
 function InventoryModule({ products, setProducts, stockLog, setStockLog, addNotification, currentUser }) {
+  const canEdit = canEditRecords(currentUser);
+  const canDelete = canDeleteRecords(currentUser);
   const [tab, setTab] = useState("stock");
   const [showAdd, setShowAdd] = useState(false);
   const [editProduct, setEditProduct] = useState(null);
@@ -567,11 +669,20 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
   const [useNote, setUseNote] = useState("");
   const [sellQty, setSellQty] = useState(1);
   const [sellPrice, setSellPrice] = useState("");
+  const [showOlderStockLog, setShowOlderStockLog] = useState(false);
   const [form, setForm] = useState(EMPTY_PRODUCT_FORM);
 
+  const visibleStockLog = stockLog.filter((l) => showOlderStockLog || isAppVisibleStockLog(l));
+  const hiddenStockLogCount = stockLog.filter((l) => !isAppVisibleStockLog(l)).length;
+
+  const searchLower = search.toLowerCase();
   const filtered = products.filter((p) =>
     (catFilter === "All" || p.category === catFilter) &&
-    ((p.name || "").toLowerCase().includes(search.toLowerCase()) || (p.sku || "").toLowerCase().includes(search.toLowerCase()))
+    (
+      (p.name || "").toLowerCase().includes(searchLower)
+      || (p.sku || "").toLowerCase().includes(searchLower)
+      || (p.description || "").toLowerCase().includes(searchLower)
+    )
   );
 
   const stockLogEntry = (product, type, extra = {}) => ({
@@ -601,6 +712,10 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
   };
 
   const saveEditProduct = () => {
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
     if (!editProduct?.name?.trim() || editProduct.price === "" || editProduct.stock === "") {
       addNotification({ type: "error", title: "Missing Fields", message: "Enter product name, price, and stock." });
       return;
@@ -627,6 +742,10 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
 
   const confirmDeleteProduct = () => {
     if (!deleteProduct) return;
+    if (!canDelete) {
+      notifyPermissionDenied(addNotification, "delete");
+      return;
+    }
     setProducts((prev) => prev.filter((p) => p.id !== deleteProduct.id));
     addNotification({ type: "info", title: "Product Deleted", message: `${deleteProduct.name} removed from inventory` });
     setDeleteProduct(null);
@@ -721,8 +840,8 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       {isLow && <Badge className="bg-amber-500/20 text-amber-300">Low Stock</Badge>}
-                      <Btn variant="ghost" size="sm" onClick={() => setEditProduct({ ...p })} title="Edit"><Edit2 size={12} /></Btn>
-                      <Btn variant="danger" size="sm" onClick={() => setDeleteProduct(p)} title="Delete"><Trash2 size={12} /></Btn>
+                      {canEdit && <Btn variant="ghost" size="sm" onClick={() => setEditProduct({ ...p })} title="Edit"><Edit2 size={12} /></Btn>}
+                      {canDelete && <Btn variant="danger" size="sm" onClick={() => setDeleteProduct(p)} title="Delete"><Trash2 size={12} /></Btn>}
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-2 mb-4 text-center">
@@ -755,6 +874,17 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
 
       {tab === "log" && (
         <Card className="overflow-hidden">
+          {hiddenStockLogCount > 0 && (
+            <div className="px-3 pt-3">
+              <button
+                type="button"
+                onClick={() => setShowOlderStockLog((v) => !v)}
+                className="text-xs text-slate-500 hover:text-cyan-400 touch-manipulation"
+              >
+                {showOlderStockLog ? "Hide older activity" : `Show ${hiddenStockLogCount} older entr${hiddenStockLogCount === 1 ? "y" : "ies"} (2+ years)`}
+              </button>
+            </div>
+          )}
           <div className="overflow-x-auto">
           <table className="w-full text-sm min-w-[520px]">
             <thead><tr className="bg-slate-700/30 text-slate-400 text-xs">
@@ -762,9 +892,9 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
               <th className="text-right p-3">Qty</th><th className="text-right p-3">Value</th><th className="text-left p-3">Note</th><th className="text-left p-3">By</th>
             </tr></thead>
             <tbody className="divide-y divide-slate-700/30">
-              {stockLog.length === 0 ? (
+              {visibleStockLog.length === 0 ? (
                 <tr><td colSpan={7} className="text-center py-8 text-slate-500">No activity yet</td></tr>
-              ) : stockLog.map(l => (
+              ) : visibleStockLog.map(l => (
                 <tr key={l.id} className="text-slate-300 hover:bg-slate-700/20">
                   <td className="p-3 text-slate-500 text-xs">{l.date}</td>
                   <td className="p-3 font-medium">{l.productName}</td>
@@ -879,27 +1009,52 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
 // ─────────────────────────────────────────────
 // INVOICE MODULE
 // ─────────────────────────────────────────────
-function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setStockLog, customers, products, addNotification, currentUser }) {
-  const [showNew, setShowNew] = useState(false);
-  const [viewInv, setViewInv] = useState(null);
-  const [filter, setFilter] = useState("all");
-  const [bookedFilter, setBookedFilter] = useState("all");
-  const [pdfLoading, setPdfLoading] = useState(false);
-  const [formError, setFormError] = useState("");
-  const [showWhatsappInput, setShowWhatsappInput] = useState(false);
-  const [whatsappDraft, setWhatsappDraft] = useState("");
+function InvoiceModule({
+  invoices, setInvoices, setCustomers, setProducts, setStockLog, customers, products,
+  koiFishList, setKoiFishList, onKoiSold, setCustomerKoiList,
+  addNotification, currentUser, openDraft, onDraftApplied,
+}) {
   const emptyItem = () => ({ name: "", qty: 1, price: "", productId: "", manual: true });
-  const [form, setForm] = useState({
+  const buildFormFromDraft = (draft) => ({
+    customerId: draft.customerId || "",
+    customerName: draft.customerName || "",
+    manualCustomer: !!draft.manualCustomer,
+    items: draft.items?.length ? draft.items : [emptyItem()],
+    notes: draft.notes || "",
+    due: draft.due || today(),
+    discountType: draft.discountType || "none",
+    discountValue: draft.discountValue || "",
+  });
+  const emptyForm = () => ({
     customerId: "", customerName: "", manualCustomer: false, items: [emptyItem()], notes: "", due: "",
     discountType: "none", discountValue: "",
   });
 
+  const [showNew, setShowNew] = useState(!!openDraft);
+  const [viewInv, setViewInv] = useState(null);
+  const [filter, setFilter] = useState("all");
+  const [bookedFilter, setBookedFilter] = useState("all");
+  const [showOlderInvoices, setShowOlderInvoices] = useState(false);
+  const [bookedConfirm, setBookedConfirm] = useState(null);
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [showWhatsappInput, setShowWhatsappInput] = useState(false);
+  const [whatsappDraft, setWhatsappDraft] = useState("");
+  const [form, setForm] = useState(() => (openDraft ? buildFormFromDraft(openDraft) : emptyForm()));
+
+  useEffect(() => {
+    if (!openDraft) return;
+    onDraftApplied?.();
+  }, [openDraft, onDraftApplied]);
+
   const filtered = invoices.filter((i) => {
+    if (!showOlderInvoices && !isAppVisibleInvoice(i)) return false;
     if (filter !== "all" && getInvoiceStatus(i) !== filter) return false;
     if (bookedFilter === "booked" && !i.booked) return false;
     if (bookedFilter === "unbooked" && i.booked) return false;
     return true;
   });
+  const hiddenInvoiceCount = invoices.filter((i) => !isAppVisibleInvoice(i)).length;
   const unbookedInvoiceCount = invoices.filter((i) => !i.booked && i.status !== "cancelled").length;
   const activeViewInv = viewInv ? invoices.find((i) => i.id === viewInv.id) || viewInv : null;
   const canCancelInvoice = (inv) => ["pending", "overdue"].includes(getInvoiceStatus(inv));
@@ -910,21 +1065,23 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
     customers,
   );
 
-  const toggleInvoiceBooked = (id) => {
+  const requestInvoiceBookedChange = (id) => {
     if (!canMarkAccounting(currentUser)) {
       addNotification({ type: "error", title: "Permission Denied", message: "Accounting marks permission is required." });
       return;
     }
-    setInvoices((prev) => prev.map((inv) => {
-      if (inv.id !== id) return inv;
-      const patch = makeBookedPatch(!inv.booked, currentUser.name);
-      return { ...inv, ...patch };
-    }));
-    setViewInv((prev) => {
-      if (prev?.id !== id) return prev;
-      const patch = makeBookedPatch(!prev.booked, currentUser.name);
-      return { ...prev, ...patch };
-    });
+    const inv = invoices.find((i) => i.id === id);
+    if (!inv) return;
+    setBookedConfirm({ id, label: inv.id, currentlyBooked: !!inv.booked });
+  };
+
+  const applyInvoiceBookedConfirm = () => {
+    if (!bookedConfirm) return;
+    const { id, currentlyBooked } = bookedConfirm;
+    const patch = makeBookedPatch(!currentlyBooked, currentUser.name);
+    setInvoices((prev) => prev.map((inv) => (inv.id === id ? { ...inv, ...patch } : inv)));
+    setViewInv((prev) => (prev?.id === id ? { ...prev, ...patch } : prev));
+    setBookedConfirm(null);
   };
 
   const patchInvoice = (id, patch) => {
@@ -933,6 +1090,10 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
   };
 
   const applyInvoiceDiscount = (inv, discountType, discountValueRaw) => {
+    if (!canEditRecords(currentUser)) {
+      notifyPermissionDenied(addNotification, "edit");
+      return false;
+    }
     if (discountType === "percent" && (+discountValueRaw <= 0 || +discountValueRaw > 100)) {
       addNotification({ type: "error", title: "Invalid Discount", message: "Percentage must be between 1 and 100." });
       return false;
@@ -948,7 +1109,37 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
     return true;
   };
 
-  const addManualItem = () => setForm(f => ({ ...f, items: [...f.items, emptyItem()] }));
+  const stripBlankItems = (items) => items.filter(
+    (it) => it.koiId || it.productId || (it.manual && it.name?.trim()),
+  );
+
+  const addManualItem = () => setForm(f => ({ ...f, items: [...stripBlankItems(f.items), emptyItem()] }));
+  const addKoiItem = (koiId) => {
+    const koi = koiFishList.find((k) => String(k.id) === String(koiId));
+    if (!koi) return;
+    const usedIds = form.items.filter((it) => it.koiId).map((it) => String(it.koiId));
+    if (usedIds.includes(String(koiId))) {
+      addNotification({ type: "warning", title: "Already Added", message: `${koi.id} is already on this invoice.` });
+      return;
+    }
+    setForm((f) => {
+      const base = stripBlankItems(f.items);
+      return {
+        ...f,
+        items: [...base, {
+          name: formatKoiInvoiceLineName(koi),
+          qty: 1,
+          price: koi.price,
+          productId: "",
+          manual: false,
+          koiId: koi.id,
+          koiDisposition: "taken",
+          keepPondName: koi.pondName || "A1",
+          koiAlreadySold: false,
+        }],
+      };
+    });
+  };
   const addProductItem = (productId) => {
     const p = products.find((x) => String(x.id) === String(productId));
     if (!p) return;
@@ -958,11 +1149,18 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
     }
     setForm(f => ({
       ...f,
-      items: [...f.items, { name: p.name, qty: 1, price: p.price, productId: p.id, manual: false }],
+      items: [...stripBlankItems(f.items), { name: p.name, qty: 1, price: p.price, productId: p.id, manual: false }],
     }));
   };
-  const removeItem = (idx) => setForm(f => ({ ...f, items: f.items.length > 1 ? f.items.filter((_, i) => i !== idx) : [emptyItem()] }));
+  const removeItem = (idx) => setForm(f => {
+    const next = f.items.filter((_, i) => i !== idx);
+    return { ...f, items: next.length ? next : [emptyItem()] };
+  });
   const updateItem = (idx, field, val) => setForm(f => ({ ...f, items: f.items.map((it, i) => i === idx ? { ...it, [field]: val } : it) }));
+  const updateKoiDisposition = (idx, disposition) => setForm(f => ({
+    ...f,
+    items: f.items.map((it, i) => i === idx ? { ...it, koiDisposition: disposition } : it),
+  }));
   const convertToManualItem = (idx) => setForm(f => ({
     ...f,
     items: f.items.map((it, i) => i === idx ? { ...it, productId: "", manual: true } : it),
@@ -977,19 +1175,28 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
 
   const createInvoice = async () => {
     setFormError("");
+    const activeItems = stripBlankItems(form.items);
+    if (!activeItems.length) {
+      setFormError("Add at least one invoice item.");
+      return;
+    }
     if (!form.customerName?.trim()) {
       setFormError("Please select or enter a customer name.");
       return;
     }
-    if (form.items.some(it => !it.name?.trim() || it.price === '' || it.price == null)) {
+    if (activeItems.some((it) => it.koiId) && (form.manualCustomer || !form.customerId)) {
+      setFormError("Fish stock lines require a registered customer.");
+      return;
+    }
+    if (activeItems.some(it => !it.name?.trim() || it.price === '' || it.price == null)) {
       setFormError("Each item needs a name and price.");
       return;
     }
-    if (form.items.some((it) => (+it.qty || 0) <= 0)) {
+    if (activeItems.some((it) => !it.koiId && (+it.qty || 0) <= 0)) {
       setFormError("Each item needs quantity of at least 1.");
       return;
     }
-    if (form.items.some((it) => +it.price < 0)) {
+    if (activeItems.some((it) => +it.price < 0)) {
       setFormError("Item prices cannot be negative.");
       return;
     }
@@ -1010,7 +1217,15 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
       return;
     }
     const invId = genInvoiceId(invoices, issueDate);
-    const invoiceItems = form.items.map(serializeInvoiceItem);
+    const invoiceItems = activeItems.map(serializeInvoiceItem);
+    const koiValidate = validateInvoiceKoiSales({
+      items: activeItems, koiList: koiFishList, customerId: form.customerId, customers,
+    });
+    if (!koiValidate.ok) {
+      setFormError(koiValidate.message);
+      addNotification({ type: "error", title: "Fish Stock", message: koiValidate.message });
+      return;
+    }
     const stockCheck = deductStockForInvoice(setProducts, setStockLog, products, invoiceItems, {
       invoiceId: invId,
       by: currentUser?.name || "Staff",
@@ -1018,6 +1233,25 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
     if (!stockCheck.ok) {
       setFormError(stockCheck.message);
       addNotification({ type: "error", title: "Insufficient Stock", message: stockCheck.message });
+      return;
+    }
+    const koiApply = applyInvoiceKoiSales({
+      items: activeItems,
+      koiList: koiFishList,
+      setKoiList: setKoiFishList,
+      customerId: form.customerId,
+      customers,
+      soldDate: issueDate,
+      onKoiSold,
+      addNotification,
+    });
+    if (!koiApply.ok) {
+      restoreStockForInvoice(setProducts, setStockLog, products, invoiceItems, {
+        invoiceId: invId,
+        by: currentUser?.name || "Staff",
+      });
+      setFormError(koiApply.message);
+      addNotification({ type: "error", title: "Fish Stock", message: koiApply.message });
       return;
     }
     const inv = {
@@ -1048,6 +1282,10 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
   };
 
   const cancelInvoice = (id) => {
+    if (!canDeleteRecords(currentUser)) {
+      notifyPermissionDenied(addNotification, "delete");
+      return;
+    }
     const inv = invoices.find((i) => i.id === id);
     if (!inv || !canCancelInvoice(inv)) return;
     if (!confirm(`Cancel ${id} for ${inv.customerName}? This cannot be undone.`)) return;
@@ -1055,9 +1293,10 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
       invoiceId: id,
       by: currentUser?.name || "Staff",
     });
+    restoreInvoiceKoiSales(inv.items || [], setKoiFishList, setCustomerKoiList);
     setInvoices((prev) => prev.map((i) => (i.id === id ? { ...i, status: "cancelled" } : i)));
     setViewInv((prev) => (prev?.id === id ? null : prev));
-    addNotification({ type: "info", title: "Invoice Cancelled", message: `${id} has been cancelled. Inventory stock restored where applicable.` });
+    addNotification({ type: "info", title: "Invoice Cancelled", message: `${id} has been cancelled. Inventory and fish stock restored where applicable.` });
   };
 
   const markPaid = (id) => {
@@ -1150,6 +1389,15 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
             className={`px-3 py-2 rounded-lg text-xs font-bold transition-all shrink-0 touch-manipulation ${bookedFilter === s.id ? "bg-purple-500 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>{s.label}</button>
         ))}
       </div>
+      {hiddenInvoiceCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowOlderInvoices((v) => !v)}
+          className="text-xs text-slate-500 hover:text-cyan-400 touch-manipulation"
+        >
+          {showOlderInvoices ? "Hide older invoices" : `Show ${hiddenInvoiceCount} older invoice${hiddenInvoiceCount === 1 ? "" : "s"} (2+ years)`}
+        </button>
+      )}
 
       <div className="md:hidden space-y-3">
         {filtered.length === 0 ? (
@@ -1183,11 +1431,11 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
                 <Btn variant="ghost" size="sm" onClick={() => { setViewInv(inv); sendWhatsApp(inv); }} title="Send WhatsApp" disabled={pdfLoading}><MessageSquare size={14} /></Btn>
                 <Btn variant="ghost" size="sm" onClick={() => downloadPdf(inv)} title="Download PDF" disabled={pdfLoading}><Printer size={14} /></Btn>
                 {canMarkAccounting(currentUser) && (
-                  <Btn variant="ghost" size="sm" onClick={() => toggleInvoiceBooked(inv.id)} title={inv.booked ? "Undo accounts entry mark" : "Mark entered in accounts"}>
+                  <Btn variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); requestInvoiceBookedChange(inv.id); }} title={inv.booked ? "Change accounts mark" : "Mark entered in accounts"}>
                     <BookCheck size={14} className={inv.booked ? "text-emerald-400" : "text-slate-500"} />
                   </Btn>
                 )}
-                {canCancelInvoice(inv) && (
+                {canCancelInvoice(inv) && canDeleteRecords(currentUser) && (
                   <Btn variant="ghost" size="sm" onClick={() => cancelInvoice(inv.id)} title="Cancel invoice"><XCircle size={14} className="text-red-400" /></Btn>
                 )}
                 {canMarkPaid(inv) && <Btn variant="success" size="sm" onClick={() => markPaid(inv.id)}><Check size={12} />Paid</Btn>}
@@ -1235,11 +1483,11 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
                       <Btn variant="ghost" size="sm" onClick={() => { setViewInv(inv); sendWhatsApp(inv); }} title="Send WhatsApp" disabled={pdfLoading}><MessageSquare size={12} /></Btn>
                       <Btn variant="ghost" size="sm" onClick={() => downloadPdf(inv)} title="Download PDF" disabled={pdfLoading}><Printer size={12} /></Btn>
                       {canMarkAccounting(currentUser) && (
-                        <Btn variant="ghost" size="sm" onClick={() => toggleInvoiceBooked(inv.id)} title={inv.booked ? "Undo accounts mark" : "Mark in accounts"}>
+                        <Btn variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); requestInvoiceBookedChange(inv.id); }} title={inv.booked ? "Change accounts mark" : "Mark in accounts"}>
                           <BookCheck size={12} className={inv.booked ? "text-emerald-400" : "text-slate-500"} />
                         </Btn>
                       )}
-                      {canCancelInvoice(inv) && (
+                      {canCancelInvoice(inv) && canDeleteRecords(currentUser) && (
                         <Btn variant="ghost" size="sm" onClick={() => cancelInvoice(inv.id)} title="Cancel invoice"><XCircle size={12} className="text-red-400" /></Btn>
                       )}
                       {canMarkPaid(inv) && <Btn variant="success" size="sm" onClick={() => markPaid(inv.id)}><Check size={12} />Paid</Btn>}
@@ -1288,13 +1536,40 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
           <div>
             <div className="flex flex-col gap-1 mb-3">
               <label className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Invoice Items</label>
-              <p className="text-xs text-slate-500">Pick from inventory, or add a <span className="text-slate-400">Manual item</span> for products not in your list.</p>
+              <p className="text-xs text-slate-500">Pick from fish stock or inventory, or add a <span className="text-slate-400">Manual item</span> for other charges.</p>
             </div>
 
-            <div className="flex flex-col sm:flex-row gap-2 mb-3">
+            <div className="flex flex-col sm:flex-row gap-2 mb-3 flex-wrap">
+              {(() => {
+                const hasFishStock = koiFishList.some(
+                  (k) => [KOI_STATUS.AVAILABLE, KOI_STATUS.SICK].includes(k.status),
+                );
+                if (!hasFishStock) return null;
+                const usedKoiIds = form.items.filter((it) => it.koiId).map((it) => String(it.koiId));
+                const stockKoi = availableKoiForInvoice(koiFishList, usedKoiIds);
+                return (
+                  <select
+                    className={`flex-1 min-w-[200px] bg-slate-900/50 border rounded-lg px-3 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50 ${stockKoi.length ? "border-emerald-600/40" : "border-slate-600 opacity-60 cursor-not-allowed"}`}
+                    defaultValue=""
+                    disabled={!stockKoi.length}
+                    onChange={e => {
+                      if (e.target.value) { addKoiItem(e.target.value); e.target.value = ""; }
+                    }}
+                  >
+                    <option value="">
+                      {stockKoi.length ? "+ Add from Fish Stock" : "+ Add from Fish Stock (all on invoice)"}
+                    </option>
+                    {stockKoi.map((k) => (
+                      <option key={k.id} value={k.id}>
+                        {k.name || k.variety} — {formatSGD(k.price)} · {k.pondName} ({k.id})
+                      </option>
+                    ))}
+                  </select>
+                );
+              })()}
               {products.length > 0 && (
                 <select
-                  className="flex-1 bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+                  className="flex-1 min-w-[200px] bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
                   defaultValue=""
                   onChange={e => {
                     if (e.target.value) { addProductItem(e.target.value); e.target.value = ""; }
@@ -1318,18 +1593,32 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
                 <Plus size={12} />Manual Item
               </Btn>
             </div>
+            {form.items.some((it) => it.koiId) && form.manualCustomer && (
+              <p className="text-amber-300 text-xs mb-3 bg-amber-500/10 border border-amber-500/30 rounded-lg p-2">
+                Fish stock items need a registered customer — switch from walk-in to a customer from your list.
+              </p>
+            )}
 
             <div className="space-y-3">
               {form.items.map((it, idx) => {
+                const fromKoi = !!it.koiId;
                 const fromInventory = !it.manual && !!it.productId;
+                const lineType = fromKoi ? "fish" : fromInventory ? "inventory" : "manual";
                 return (
-                  <Card key={idx} className={`p-3 border-slate-700/50 ${it.manual ? "border-amber-500/20" : "border-cyan-500/20"}`}>
+                  <Card key={idx} className={`p-3 border-slate-700/50 ${lineType === "fish" ? "border-emerald-500/20" : lineType === "inventory" ? "border-cyan-500/20" : "border-amber-500/20"}`}>
                     <div className="flex items-center justify-between mb-2 gap-2">
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="text-xs font-bold text-slate-500 shrink-0">Line {idx + 1}</span>
-                        <Badge className={fromInventory ? "bg-cyan-500/20 text-cyan-300" : "bg-amber-500/20 text-amber-300"}>
-                          {fromInventory ? "Inventory" : "Manual"}
+                        <Badge className={
+                          lineType === "fish" ? "bg-emerald-500/20 text-emerald-300"
+                            : lineType === "inventory" ? "bg-cyan-500/20 text-cyan-300"
+                              : "bg-amber-500/20 text-amber-300"
+                        }>
+                          {lineType === "fish" ? "Fish Stock" : lineType === "inventory" ? "Inventory" : "Manual"}
                         </Badge>
+                        {it.koiAlreadySold && (
+                          <Badge className="bg-blue-500/20 text-blue-300 text-[10px]">Sold</Badge>
+                        )}
                       </div>
                       <button type="button" onClick={() => removeItem(idx)} className="text-red-400 hover:text-red-300 p-1 touch-manipulation shrink-0"><X size={14} /></button>
                     </div>
@@ -1346,17 +1635,66 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
                         <div>
                           <p className="text-[10px] font-semibold text-slate-500 mb-1 uppercase">Item Name</p>
                           <p className="text-white font-medium text-sm bg-slate-900/40 border border-slate-700/50 rounded-lg px-3 py-2.5">{it.name}</p>
-                          <button
-                            type="button"
-                            onClick={() => convertToManualItem(idx)}
-                            className="mt-1 text-xs text-amber-400 hover:text-amber-300 touch-manipulation"
-                          >
-                            Edit name manually
-                          </button>
+                          {!fromKoi && (
+                            <button
+                              type="button"
+                              onClick={() => convertToManualItem(idx)}
+                              className="mt-1 text-xs text-amber-400 hover:text-amber-300 touch-manipulation"
+                            >
+                              Edit name manually
+                            </button>
+                          )}
                         </div>
                       )}
+                      {fromKoi && !it.koiAlreadySold && (
+                        <div>
+                          <p className="text-[10px] font-semibold text-slate-500 mb-1.5 uppercase">After sale</p>
+                          <div className="flex gap-2">
+                            {[
+                              ["taken", "Taken away"],
+                              ["keep", "Keep at farm"],
+                            ].map(([value, label]) => (
+                              <button
+                                key={value}
+                                type="button"
+                                onClick={() => updateKoiDisposition(idx, value)}
+                                className={`flex-1 px-3 py-2 rounded-lg text-xs font-bold transition-colors ${(it.koiDisposition || "taken") === value ? "bg-cyan-500 text-slate-900" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                          <p className="text-slate-500 text-[10px] mt-1.5">
+                            {(it.koiDisposition || "taken") === "keep"
+                              ? "Fish stays at farm — Customer Koi record will be created."
+                              : "Customer takes the fish — no Customer Koi record."}
+                          </p>
+                          {(it.koiDisposition || "taken") === "keep" && (
+                            <PondNameInput
+                              label="Keep in pond"
+                              value={it.keepPondName || ""}
+                              onChange={(e) => updateItem(idx, "keepPondName", e.target.value)}
+                              className="mt-2"
+                              required
+                            />
+                          )}
+                        </div>
+                      )}
+                      {fromKoi && it.koiAlreadySold && (
+                        <p className="text-xs text-blue-300/80 bg-blue-500/10 border border-blue-500/20 rounded-lg px-3 py-2">
+                          Already marked sold — this line documents the sale on the invoice.
+                          {(it.koiDisposition || "taken") === "keep" && it.keepPondName ? ` Kept at ${it.keepPondName}.` : " Taken away."}
+                        </p>
+                      )}
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                        <Input label="Qty" type="number" value={it.qty} onChange={e => updateItem(idx, "qty", e.target.value)} min="1" />
+                        <Input
+                          label="Qty"
+                          type="number"
+                          value={fromKoi ? 1 : it.qty}
+                          onChange={e => updateItem(idx, "qty", e.target.value)}
+                          min="1"
+                          readOnly={fromKoi}
+                        />
                         <Input label="Price (S$)" type="number" value={it.price} onChange={e => updateItem(idx, "price", e.target.value)} step="0.01" className="sm:col-span-2" />
                       </div>
                       <p className="text-right text-sm text-emerald-400 font-bold">
@@ -1463,14 +1801,14 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
                     <Check size={14} />Mark Paid
                   </Btn>
                 )}
-                {canCancelInvoice(activeViewInv) && (
+                {canCancelInvoice(activeViewInv) && canDeleteRecords(currentUser) && (
                   <Btn variant="danger" onClick={() => cancelInvoice(activeViewInv.id)} className="flex-1 sm:flex-none justify-center">
                     <XCircle size={14} />Cancel Invoice
                   </Btn>
                 )}
               </div>
             </div>
-            {canEditDiscount && (
+            {canEditDiscount && canEditRecords(currentUser) && (
               <Card className="no-print p-4 border-slate-700/50">
                 <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Discount</p>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -1549,6 +1887,14 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
           </div>
         );})()}
       </Modal>
+
+      <AccountsMarkConfirmModal
+        open={!!bookedConfirm}
+        recordLabel={bookedConfirm?.label || ""}
+        currentlyBooked={!!bookedConfirm?.currentlyBooked}
+        onCancel={() => setBookedConfirm(null)}
+        onSubmit={applyInvoiceBookedConfirm}
+      />
     </div>
   );
 }
@@ -1556,7 +1902,9 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
 // ─────────────────────────────────────────────
 // CUSTOMER CRM
 // ─────────────────────────────────────────────
-function CustomerModule({ customers, setCustomers, addNotification }) {
+function CustomerModule({ customers, setCustomers, addNotification, currentUser }) {
+  const canEdit = canEditRecords(currentUser);
+  const canDelete = canDeleteRecords(currentUser);
   const emptyForm = () => ({
     name: "", whatsapp: "", postalCode: "", address: "", fishTypes: [], notes: "",
   });
@@ -1651,6 +1999,10 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
 
   const saveEdit = () => {
     if (!editCustomer) return;
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
     const name = editCustomer.name?.trim();
     const whatsapp = editCustomer.whatsapp?.trim();
     if (!name) {
@@ -1682,6 +2034,10 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
 
   const confirmDeleteCustomer = () => {
     if (!deleteCustomer) return;
+    if (!canDelete) {
+      notifyPermissionDenied(addNotification, "delete");
+      return;
+    }
     const id = deleteCustomer.id;
     setCustomers((prev) => prev.filter((c) => String(c.id) !== String(id)));
     if (String(viewId) === String(id)) setViewId(null);
@@ -1749,8 +2105,8 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
             </div>
             <div className="flex flex-wrap gap-2">
               <Btn variant="ghost" size="sm" onClick={() => setViewId(c.id)}><Eye size={12} />View</Btn>
-              <Btn variant="ghost" size="sm" onClick={() => { editAddressManual.current = false; setEditCustomer({ ...c, fishTypes: [...(c.fishTypes || [])] }); }}><Edit2 size={12} />Edit</Btn>
-              <Btn variant="danger" size="sm" onClick={() => setDeleteCustomer(c)}><Trash2 size={12} />Delete</Btn>
+              {canEdit && <Btn variant="ghost" size="sm" onClick={() => { editAddressManual.current = false; setEditCustomer({ ...c, fishTypes: [...(c.fishTypes || [])] }); }}><Edit2 size={12} />Edit</Btn>}
+              {canDelete && <Btn variant="danger" size="sm" onClick={() => setDeleteCustomer(c)}><Trash2 size={12} />Delete</Btn>}
               <Btn variant="success" size="sm" onClick={() => generateWhatsApp(c)}><MessageSquare size={12} />WhatsApp</Btn>
             </div>
           </Card>
@@ -1796,8 +2152,8 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
             <div><p className="text-slate-500 text-xs mb-2">Fish Types</p><div className="flex flex-wrap gap-2">{(view.fishTypes || []).length ? (view.fishTypes || []).map((f) => <Badge key={f} className="bg-slate-700 text-slate-300">{f}</Badge>) : <span className="text-slate-500 text-sm">—</span>}</div></div>
             {view.notes && <div className="bg-slate-900/50 rounded-lg p-3"><p className="text-slate-500 text-xs">Notes</p><p className="text-slate-300 text-sm">{view.notes}</p></div>}
             <div className="flex flex-wrap gap-2">
-              <Btn variant="ghost" size="sm" onClick={() => { editAddressManual.current = false; setEditCustomer({ ...view, fishTypes: [...(view.fishTypes || [])] }); setViewId(null); }}><Edit2 size={12} />Edit</Btn>
-              <Btn variant="danger" size="sm" onClick={() => { setDeleteCustomer(view); setViewId(null); }}><Trash2 size={12} />Delete</Btn>
+              {canEdit && <Btn variant="ghost" size="sm" onClick={() => { editAddressManual.current = false; setEditCustomer({ ...view, fishTypes: [...(view.fishTypes || [])] }); setViewId(null); }}><Edit2 size={12} />Edit</Btn>}
+              {canDelete && <Btn variant="danger" size="sm" onClick={() => { setDeleteCustomer(view); setViewId(null); }}><Trash2 size={12} />Delete</Btn>}
               <Btn variant="success" size="sm" onClick={() => generateWhatsApp(view)}><Send size={12} />Send on WhatsApp</Btn>
             </div>
             <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4">
@@ -1870,32 +2226,68 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
   const [showAdd, setShowAdd] = useState(false);
   const [viewExpenseId, setViewExpenseId] = useState(null);
   const [bookedFilter, setBookedFilter] = useState("all");
+  const [showOlderExpenses, setShowOlderExpenses] = useState(false);
+  const [bookedConfirm, setBookedConfirm] = useState(null);
   const [uploadPreview, setUploadPreview] = useState(null);
   const [uploadName, setUploadName] = useState("");
   const [uploadNote, setUploadNote] = useState("");
+  const [uploadDate, setUploadDate] = useState(today());
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [viewEditDate, setViewEditDate] = useState("");
   const [uploading, setUploading] = useState(false);
   const albumInputRef = useRef(null);
   const cameraInputRef = useRef(null);
-
-  if (!hasPermission(currentUser, "expenses")) return <AccessDenied moduleName="Expenses" />;
 
   const viewExpense = viewExpenseId != null
     ? expenses.find((e) => String(e.id) === String(viewExpenseId))
     : null;
 
+  if (!hasPermission(currentUser, "expenses")) return <AccessDenied moduleName="Expenses" />;
+
+  const canDelete = canDeleteRecords(currentUser);
+
   const unbookedExpenseCount = expenses.filter((e) => !e.booked).length;
-  const visibleExpenses = [...expenses].reverse().filter((e) => {
-    if (bookedFilter === "booked") return e.booked;
-    if (bookedFilter === "unbooked") return !e.booked;
+  const dateFilterActive = !!(dateFrom || dateTo);
+  const dateRangeInvalid = !!(dateFrom && dateTo && dateFrom > dateTo);
+
+  const matchesBookedAndAge = (e) => {
+    if (!showOlderExpenses && !isAppVisibleExpense(e)) return false;
+    if (bookedFilter === "booked" && !e.booked) return false;
+    if (bookedFilter === "unbooked" && e.booked) return false;
     return true;
-  });
+  };
+
+  const matchesDateFilter = (e) => {
+    if (!dateFilterActive || dateRangeInvalid) return true;
+    const d = e.date || "";
+    if (!d) return false;
+    if (dateFrom && d < dateFrom) return false;
+    if (dateTo && d > dateTo) return false;
+    return true;
+  };
+
+  const hiddenNoDateCount = dateFilterActive && !dateRangeInvalid
+    ? expenses.filter((e) => matchesBookedAndAge(e) && !e.date).length
+    : 0;
+
+  const visibleExpenses = [...expenses]
+    .filter((e) => matchesBookedAndAge(e) && matchesDateFilter(e))
+    .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (Number(b.id) || 0) - (Number(a.id) || 0));
+  const hiddenExpenseCount = expenses.filter((e) => !isAppVisibleExpense(e)).length;
 
   const resetUpload = () => {
     setUploadPreview(null);
     setUploadName("");
     setUploadNote("");
+    setUploadDate(today());
     if (albumInputRef.current) albumInputRef.current.value = "";
     if (cameraInputRef.current) cameraInputRef.current.value = "";
+  };
+
+  const openCamera = () => {
+    if (uploading) return;
+    cameraInputRef.current?.click();
   };
 
   const handleImagePick = async (file) => {
@@ -1913,23 +2305,44 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
     }
   };
 
-  const toggleExpenseBooked = (id) => {
+  const requestExpenseBookedChange = (id) => {
     if (!canMarkAccounting(currentUser)) {
       addNotification({ type: "error", title: "Permission Denied", message: "Accounting marks permission is required." });
       return;
     }
-    setExpenses((prev) => prev.map((e) => {
-      if (String(e.id) !== String(id)) return e;
-      return { ...e, ...makeBookedPatch(!e.booked, currentUser.name) };
-    }));
+    const expense = expenses.find((e) => String(e.id) === String(id));
+    if (!expense) return;
+    const label = expense.imageName || expense.date || "Receipt";
+    setBookedConfirm({ id, label, currentlyBooked: !!expense.booked });
+  };
+
+  const applyExpenseBookedConfirm = () => {
+    if (!bookedConfirm) return;
+    const { id, currentlyBooked } = bookedConfirm;
+    const patch = makeBookedPatch(!currentlyBooked, currentUser.name);
+    setExpenses((prev) => prev.map((e) => (String(e.id) === String(id) ? { ...e, ...patch } : e)));
+    setBookedConfirm(null);
   };
 
   const deleteExpense = (expense) => {
+    if (!canDelete) {
+      notifyPermissionDenied(addNotification, "delete");
+      return;
+    }
     const label = expense.imageName || expense.date || "this receipt";
     if (!confirm(`Delete ${label}? This cannot be undone.`)) return;
     setExpenses((prev) => prev.filter((e) => e.id !== expense.id));
     setViewExpenseId((prev) => (String(prev) === String(expense.id) ? null : prev));
     addNotification({ type: "info", title: "Receipt Deleted", message: "Expense receipt removed." });
+  };
+
+  const updateExpenseDate = (id, date) => {
+    if (!date) {
+      addNotification({ type: "error", title: "Date Required", message: "Choose a receipt date before saving." });
+      return;
+    }
+    setExpenses((prev) => prev.map((e) => (String(e.id) === String(id) ? { ...e, date } : e)));
+    addNotification({ type: "success", title: "Date Updated", message: "Receipt date saved." });
   };
 
   const saveReceipt = () => {
@@ -1938,11 +2351,15 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
       return;
     }
     if (uploading) return;
+    if (!uploadDate) {
+      addNotification({ type: "error", title: "Date Required", message: "Choose the receipt date before saving." });
+      return;
+    }
     const e = {
       id: Date.now(),
       category: null,
       amount: null,
-      date: today(),
+      date: uploadDate,
       note: uploadNote?.trim() || "",
       imageData: uploadPreview,
       imageName: uploadName,
@@ -1979,6 +2396,48 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
             className={`px-3 py-2 rounded-lg text-xs font-bold transition-all shrink-0 touch-manipulation ${bookedFilter === s.id ? "bg-purple-500 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>{s.label}</button>
         ))}
       </div>
+      <Card className="p-3 sm:p-4">
+        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Search by receipt date</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Input label="From" type="date" value={dateFrom} onChange={(ev) => setDateFrom(ev.target.value)} />
+          <Input label="To" type="date" value={dateTo} onChange={(ev) => setDateTo(ev.target.value)} />
+        </div>
+        {dateRangeInvalid && (
+          <p className="text-amber-400/90 text-xs mt-3">From date must be on or before To date.</p>
+        )}
+        {hiddenNoDateCount > 0 && (
+          <p className="text-slate-500 text-xs mt-3">
+            {hiddenNoDateCount} receipt{hiddenNoDateCount === 1 ? "" : "s"} without a date {hiddenNoDateCount === 1 ? "is" : "are"} hidden while the date filter is active. Open a receipt and set its date to include it.
+          </p>
+        )}
+        {dateFilterActive && !dateRangeInvalid && (
+          <div className="flex flex-wrap items-center justify-between gap-2 mt-3">
+            <p className="text-xs text-slate-500">
+              {visibleExpenses.length} receipt{visibleExpenses.length === 1 ? "" : "s"}
+              {dateFrom && dateTo ? ` from ${formatInvoiceDate(dateFrom)} to ${formatInvoiceDate(dateTo)}` : dateFrom ? ` from ${formatInvoiceDate(dateFrom)}` : ` until ${formatInvoiceDate(dateTo)}`}
+            </p>
+            <button type="button" onClick={() => { setDateFrom(""); setDateTo(""); }} className="text-xs text-cyan-400 hover:text-cyan-300 font-semibold touch-manipulation">
+              Clear dates
+            </button>
+          </div>
+        )}
+        {dateFilterActive && dateRangeInvalid && (
+          <div className="flex justify-end mt-3">
+            <button type="button" onClick={() => { setDateFrom(""); setDateTo(""); }} className="text-xs text-cyan-400 hover:text-cyan-300 font-semibold touch-manipulation">
+              Clear dates
+            </button>
+          </div>
+        )}
+      </Card>
+      {hiddenExpenseCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowOlderExpenses((v) => !v)}
+          className="text-xs text-slate-500 hover:text-cyan-400 touch-manipulation"
+        >
+          {showOlderExpenses ? "Hide older receipts" : `Show ${hiddenExpenseCount} older receipt${hiddenExpenseCount === 1 ? "" : "s"} (2+ years)`}
+        </button>
+      )}
 
       {visibleExpenses.length === 0 ? (
         <Card className="p-10 text-center">
@@ -1986,7 +2445,11 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
           <p className="text-slate-400 text-sm">
             {expenses.length === 0
               ? "No expense receipts yet — upload supplier invoice photos here."
-              : "No receipts match this accounts filter."}
+              : dateRangeInvalid
+                ? "Fix the date range above — From must be on or before To."
+                : dateFilterActive
+                  ? "No receipts for this date range."
+                  : "No receipts match this filter."}
           </p>
           {expenses.length === 0 && (
             <Btn className="mt-4 mx-auto" onClick={() => { resetUpload(); setShowAdd(true); }}><ImagePlus size={14} />Upload first receipt</Btn>
@@ -1997,7 +2460,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
           {visibleExpenses.map((e) => {
             const src = expenseImageSrc(e);
             return (
-              <Card key={e.id} className="overflow-hidden hover:border-slate-600 transition-colors cursor-pointer" onClick={() => setViewExpenseId(e.id)}>
+              <Card key={e.id} className="overflow-hidden hover:border-slate-600 transition-colors cursor-pointer" onClick={() => { setViewEditDate(e.date || ""); setViewExpenseId(e.id); }}>
                 <div className="aspect-[3/4] bg-slate-900 relative">
                   {src ? (
                     <img src={src} alt={e.imageName || "Expense receipt"} className="w-full h-full object-cover" />
@@ -2010,19 +2473,22 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
                   )}
                   <div className="absolute top-2 right-2 flex items-center gap-1">
                     <BookedBadge booked={e.booked} bookedBy={e.bookedBy} />
-                    <button
-                      type="button"
-                      onClick={(ev) => { ev.stopPropagation(); deleteExpense(e); }}
-                      className="p-1.5 rounded-lg bg-slate-900/80 text-red-400 hover:text-red-300 hover:bg-slate-800 touch-manipulation"
-                      title="Delete receipt"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    {canDelete && (
+                      <button
+                        type="button"
+                        onClick={(ev) => { ev.stopPropagation(); deleteExpense(e); }}
+                        className="p-1.5 rounded-lg bg-slate-900/80 text-red-400 hover:text-red-300 hover:bg-slate-800 touch-manipulation"
+                        title="Delete receipt"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
                   </div>
                 </div>
                 <div className="p-2.5">
-                  <p className="text-white text-xs font-medium truncate">{e.imageName || e.category || "Receipt"}</p>
-                  <p className="text-slate-500 text-[10px]">{e.date} · {e.addedBy}{e.note ? ` · ${e.note}` : ""}</p>
+                  <p className="text-cyan-300/90 text-[10px] font-semibold">{e.date ? formatInvoiceDate(e.date) : "—"}</p>
+                  <p className="text-white text-xs font-medium truncate mt-0.5">{e.imageName || e.category || "Receipt"}</p>
+                  <p className="text-slate-500 text-[10px]">{e.addedBy}{e.note ? ` · ${e.note}` : ""}</p>
                 </div>
               </Card>
             );
@@ -2032,7 +2498,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
 
       <Modal open={showAdd} onClose={() => { setShowAdd(false); resetUpload(); }} title="Upload Expense Receipt" size="md">
         <div className="space-y-4">
-          <p className="text-slate-400 text-sm">Take a photo or choose an image of the supplier invoice / receipt.</p>
+          <p className="text-slate-400 text-sm">Take a photo or choose an image of the supplier invoice / receipt, then set the receipt date.</p>
           <input
             ref={albumInputRef}
             type="file"
@@ -2048,6 +2514,13 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
             className="hidden"
             onChange={(ev) => handleImagePick(ev.target.files?.[0])}
           />
+          {uploading && (
+            <div className="rounded-lg px-3 py-2 text-xs flex items-center gap-2 bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">
+              <RefreshCw size={14} className="animate-spin shrink-0" />
+              <span>Processing photo…</span>
+            </div>
+          )}
+          <Input label="Receipt date" type="date" value={uploadDate} onChange={(ev) => setUploadDate(ev.target.value)} required />
           {uploadPreview ? (
             <div className="rounded-xl overflow-hidden border border-slate-600 bg-slate-900">
               <img src={uploadPreview} alt="Preview" className="w-full max-h-[50vh] object-contain" />
@@ -2066,13 +2539,13 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
               </button>
               <button
                 type="button"
-                onClick={() => cameraInputRef.current?.click()}
+                onClick={openCamera}
                 disabled={uploading}
                 className="rounded-xl border-2 border-dashed border-slate-600 hover:border-cyan-500/50 bg-slate-900/50 p-8 text-center transition-colors touch-manipulation"
               >
                 <Camera size={32} className="mx-auto text-emerald-400 mb-3" />
                 <p className="text-white font-semibold text-sm">{uploading ? "Processing..." : "Take photo"}</p>
-                <p className="text-slate-500 text-xs mt-1">Open camera</p>
+                <p className="text-slate-500 text-xs mt-1">Camera</p>
               </button>
             </div>
           )}
@@ -2081,8 +2554,8 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
               <Btn variant="secondary" onClick={() => albumInputRef.current?.click()} disabled={uploading} className="w-full justify-center">
                 <Images size={14} />Choose from album
               </Btn>
-              <Btn variant="secondary" onClick={() => cameraInputRef.current?.click()} disabled={uploading} className="w-full justify-center">
-                <Camera size={14} />Take new photo
+              <Btn variant="secondary" onClick={openCamera} disabled={uploading} className="w-full justify-center">
+                <Camera size={14} />Take again
               </Btn>
             </div>
           )}
@@ -2100,15 +2573,36 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
         </div>
       </Modal>
 
-      <Modal open={!!viewExpense} onClose={() => setViewExpenseId(null)} title="Expense Receipt" size="lg">
+      <Modal
+        open={!!viewExpense}
+        onClose={() => {
+          if (viewExpense && viewEditDate && viewEditDate !== (viewExpense.date || "")) {
+            updateExpenseDate(viewExpense.id, viewEditDate);
+          }
+          setViewExpenseId(null);
+        }}
+        title="Expense Receipt"
+        size="lg"
+      >
         {viewExpense && (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <BookedBadge booked={viewExpense.booked} bookedBy={viewExpense.bookedBy} />
-              <span className="text-slate-500">{viewExpense.date}</span>
-              <span className="text-slate-500">· {viewExpense.addedBy}</span>
+              <span className="text-slate-500">{viewExpense.addedBy}</span>
               {viewExpense.imageName && <span className="text-slate-500">· {viewExpense.imageName}</span>}
             </div>
+            <Input
+              label="Receipt date"
+              type="date"
+              value={viewEditDate}
+              onChange={(ev) => setViewEditDate(ev.target.value)}
+              onBlur={() => {
+                if (viewEditDate !== (viewExpense.date || "")) {
+                  updateExpenseDate(viewExpense.id, viewEditDate);
+                }
+              }}
+              required
+            />
             {(viewExpense.category || viewExpense.amount > 0) && (
               <p className="text-amber-400/90 text-xs">
                 Legacy record{viewExpense.category ? ` · ${viewExpense.category}` : ""}
@@ -2132,19 +2626,29 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
               {canMarkAccounting(currentUser) && (
                 <Btn
                   variant={viewExpense.booked ? "secondary" : "success"}
-                  onClick={() => toggleExpenseBooked(viewExpense.id)}
+                  onClick={() => requestExpenseBookedChange(viewExpense.id)}
                   className="flex-1 justify-center"
                 >
-                  <BookCheck size={14} />{viewExpense.booked ? "Undo accounts mark" : "Mark entered in accounts"}
+                  <BookCheck size={14} />{viewExpense.booked ? "Change accounts mark" : "Mark entered in accounts"}
                 </Btn>
               )}
-              <Btn variant="danger" onClick={() => deleteExpense(viewExpense)} className="flex-1 justify-center">
-                <Trash2 size={14} />Delete Receipt
-              </Btn>
+              {canDelete && (
+                <Btn variant="danger" onClick={() => deleteExpense(viewExpense)} className="flex-1 justify-center">
+                  <Trash2 size={14} />Delete Receipt
+                </Btn>
+              )}
             </div>
           </div>
         )}
       </Modal>
+
+      <AccountsMarkConfirmModal
+        open={!!bookedConfirm}
+        recordLabel={bookedConfirm?.label || ""}
+        currentlyBooked={!!bookedConfirm?.currentlyBooked}
+        onCancel={() => setBookedConfirm(null)}
+        onSubmit={applyExpenseBookedConfirm}
+      />
     </div>
   );
 }
@@ -2157,14 +2661,13 @@ function DeliveryModule({
   addNotification, currentUser, cloudMode,
 }) {
   const emptyDeliveryForm = () => ({
-    invoiceId: "", customerId: "", customerName: "", area: "Tampines", postalCode: "", address: "",
+    invoiceId: "", customerId: "", customerName: "", postalCode: "", address: "",
     schedule: "", items: "", driver: "", notes: "", status: "scheduled",
   });
   const deliveryToForm = (d) => ({
     invoiceId: d.invoiceId || "",
     customerId: d.customerId != null && d.customerId !== "" ? String(d.customerId) : "",
     customerName: d.customerName || "",
-    area: d.area || "Tampines",
     postalCode: d.postalCode || "",
     address: d.address || "",
     schedule: d.schedule || "",
@@ -2186,16 +2689,36 @@ function DeliveryModule({
   const [whatsappDraft, setWhatsappDraft] = useState("");
   const [showManageGroups, setShowManageGroups] = useState(false);
   const [groupForm, setGroupForm] = useState({ name: "", link: "" });
+  const [postalLookupDelivery, setPostalLookupDelivery] = useState(false);
+  const deliveryAddressManual = useRef(false);
 
   if (!hasPermission(currentUser, "deliveries")) return <AccessDenied moduleName="Deliveries" />;
+
+  const canEdit = canEditRecords(currentUser);
+  const canDelete = canDeleteRecords(currentUser);
+
+  const onDeliveryPostalChange = (value) => {
+    const postalCode = value.replace(/\D/g, "").slice(0, 6);
+    deliveryAddressManual.current = false;
+    setForm((f) => ({ ...f, postalCode }));
+    if (postalCode.length !== 6) return;
+    setPostalLookupDelivery(true);
+    lookupSingaporePostalAddress(postalCode).then((result) => {
+      setPostalLookupDelivery(false);
+      if (result?.address && !deliveryAddressManual.current) {
+        setForm((f) => ({ ...f, address: result.address }));
+      }
+    });
+  };
 
   const whatsappDelivery = whatsappDeliveryId != null
     ? deliveries.find((d) => String(d.id) === String(whatsappDeliveryId))
     : null;
 
   const filtered = deliveries
-    .filter((d) => filter === "all" || d.status === filter)
+    .filter((d) => (filter === "all" || d.status === filter) && isAppVisibleDelivery(d))
     .sort((a, b) => (a.schedule || "").localeCompare(b.schedule || ""));
+  const hiddenDeliveryCount = deliveries.filter((d) => !isAppVisibleDelivery(d)).length;
   const linkedInvoice = form.invoiceId ? invoices.find((i) => i.id === form.invoiceId) : null;
   const linkedInvoiceDoc = linkedInvoice ? enrichInvoiceCustomer(linkedInvoice, customers) : null;
   const linkableInvoices = [...invoices]
@@ -2207,20 +2730,30 @@ function DeliveryModule({
     setEditDeliveryId(null);
     setForm(emptyDeliveryForm());
     setShowLinkedInvoicePreview(true);
+    deliveryAddressManual.current = false;
+    setPostalLookupDelivery(false);
   };
 
   const openAddDelivery = () => {
     setEditDeliveryId(null);
     setForm(emptyDeliveryForm());
     setShowLinkedInvoicePreview(true);
+    deliveryAddressManual.current = false;
+    setPostalLookupDelivery(false);
     setShowAdd(true);
   };
 
   const openEditDelivery = (d) => {
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
     setShowAdd(false);
     setEditDeliveryId(d.id);
     setForm(deliveryToForm(d));
     setShowLinkedInvoicePreview(true);
+    deliveryAddressManual.current = false;
+    setPostalLookupDelivery(false);
   };
 
   const validateDeliveryForm = () => {
@@ -2243,6 +2776,10 @@ function DeliveryModule({
   };
 
   const saveDelivery = () => {
+    if (isEditing && !canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
     const validated = validateDeliveryForm();
     if (!validated) return;
     const { customerName, address, schedule } = validated;
@@ -2272,13 +2809,17 @@ function DeliveryModule({
       addNotification({
         type: "info",
         title: "Delivery Scheduled",
-        message: d.invoiceId ? `${d.id} linked to ${d.invoiceId} → ${d.customerName}` : `${d.id} → ${d.customerName} at ${d.area}`,
+        message: d.invoiceId ? `${d.id} linked to ${d.invoiceId} → ${d.customerName}` : `${d.id} → ${d.customerName}`,
       });
     }
     closeDeliveryForm();
   };
 
   const deleteDelivery = (d) => {
+    if (!canDelete) {
+      notifyPermissionDenied(addNotification, "delete");
+      return;
+    }
     const label = `${d.id} → ${d.customerName}`;
     if (!confirm(`Delete ${label}? This cannot be undone.`)) return;
     setDeliveries((prev) => prev.filter((x) => String(x.id) !== String(d.id)));
@@ -2295,6 +2836,7 @@ function DeliveryModule({
     const inv = invoices.find((i) => i.id === invoiceId);
     if (!inv) return;
     const enriched = enrichInvoiceCustomer(inv, customers);
+    deliveryAddressManual.current = false;
     setForm((f) => ({
       ...f,
       ...invoiceDeliveryFields(enriched, customers),
@@ -2308,10 +2850,12 @@ function DeliveryModule({
 
   const selectDeliveryCustomer = (customerId) => {
     if (!customerId) {
-      setForm((f) => ({ ...f, invoiceId: "", customerId: "", customerName: "", area: "Tampines", postalCode: "", address: "" }));
+      deliveryAddressManual.current = false;
+      setForm((f) => ({ ...f, invoiceId: "", customerId: "", customerName: "", postalCode: "", address: "" }));
       return;
     }
     const c = customers.find((x) => String(x.id) === String(customerId));
+    deliveryAddressManual.current = false;
     setForm((f) => ({ ...f, invoiceId: "", ...customerDeliveryFields(c), schedule: f.schedule, items: f.items, driver: f.driver, notes: f.notes, status: f.status }));
   };
 
@@ -2354,6 +2898,10 @@ function DeliveryModule({
   };
 
   const deleteWhatsappGroup = (id) => {
+    if (!canDelete) {
+      notifyPermissionDenied(addNotification, "delete");
+      return;
+    }
     persistWhatsappGroups(whatsappGroups.filter((g) => g.id !== id));
   };
 
@@ -2372,7 +2920,7 @@ function DeliveryModule({
 
   const confirmSendDeliveryWhatsapp = async () => {
     if (!whatsappDelivery) return;
-    let recipient = null;
+    let recipient;
     if (whatsappRecipientId === "custom") {
       const phone = whatsappDraft.trim();
       if (!phone) {
@@ -2421,6 +2969,9 @@ function DeliveryModule({
             className={`px-3 py-2 rounded-lg text-xs font-bold capitalize transition-all shrink-0 touch-manipulation ${filter === s ? "bg-cyan-500 text-slate-900" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>{s}</button>
         ))}
       </div>
+      {hiddenDeliveryCount > 0 && filter === "all" && (
+        <p className="text-xs text-slate-500">{hiddenDeliveryCount} completed delivery{hiddenDeliveryCount === 1 ? "" : "ies"} older than 6 months hidden</p>
+      )}
 
       <div className="space-y-3">
         {filtered.length === 0 ? (
@@ -2446,8 +2997,34 @@ function DeliveryModule({
                     <Badge className={statusColor[d.status]}>{d.status}</Badge>
                   </div>
                   <p className="text-white font-bold">{d.customerName}</p>
-                  <p className="text-slate-400 text-sm flex items-center gap-1"><MapPin size={12} />{d.address}{d.postalCode ? `, Singapore ${d.postalCode}` : ""}</p>
-                  <p className="text-slate-500 text-xs">{d.area}</p>
+                  {formatDeliveryLocation(d) ? (
+                    <>
+                      <p className="text-slate-400 text-sm flex items-start gap-1 mt-0.5">
+                        <MapPin size={12} className="mt-0.5 shrink-0" />
+                        <span>{formatDeliveryLocation(d)}</span>
+                      </p>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        <button
+                          type="button"
+                          onClick={() => openDeliveryMap(d, "google")}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-200 border border-slate-600 hover:bg-slate-700 hover:border-cyan-500/40 transition-colors touch-manipulation"
+                        >
+                          <Navigation size={12} className="text-cyan-400" />
+                          Google Maps
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openDeliveryMap(d, "apple")}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-200 border border-slate-600 hover:bg-slate-700 hover:border-cyan-500/40 transition-colors touch-manipulation"
+                        >
+                          <Navigation size={12} className="text-cyan-400" />
+                          Apple Maps
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-slate-500 text-sm flex items-center gap-1"><MapPin size={12} />No address</p>
+                  )}
                   <div className="flex flex-wrap gap-4 mt-2 text-xs text-slate-500">
                     <span><Clock size={10} className="inline mr-1" />{formatDeliverySchedule(d.schedule)}</span>
                     {d.items && <span>Items: {d.items}</span>}
@@ -2457,12 +3034,16 @@ function DeliveryModule({
                   {d.createdBy && <p className="text-slate-600 text-[10px] mt-1">Scheduled by {d.createdBy}</p>}
                 </div>
                 <div className="flex flex-col gap-2">
-                  <Btn variant="ghost" size="sm" onClick={() => openEditDelivery(d)} title="Edit delivery">
-                    <Edit2 size={14} className="text-cyan-400" />
-                  </Btn>
-                  <Btn variant="ghost" size="sm" onClick={() => deleteDelivery(d)} title="Delete delivery">
-                    <Trash2 size={14} className="text-red-400" />
-                  </Btn>
+                  {canEdit && (
+                    <Btn variant="ghost" size="sm" onClick={() => openEditDelivery(d)} title="Edit delivery">
+                      <Edit2 size={14} className="text-cyan-400" />
+                    </Btn>
+                  )}
+                  {canDelete && (
+                    <Btn variant="ghost" size="sm" onClick={() => deleteDelivery(d)} title="Delete delivery">
+                      <Trash2 size={14} className="text-red-400" />
+                    </Btn>
+                  )}
                   {d.status !== "cancelled" && (
                     <Btn variant="ghost" size="sm" onClick={() => openWhatsappPicker(d)} title="Send schedule on WhatsApp">
                       <MessageSquare size={14} className="text-emerald-400" />
@@ -2527,11 +3108,18 @@ function DeliveryModule({
           <Select label="Customer" value={form.customerId}
             onChange={e => selectDeliveryCustomer(e.target.value)}
             options={[{ value: "", label: "-- Select --" }, ...customers.map(c => ({ value: c.id, label: c.name }))]} />
-          <Select label="Area" value={form.area} onChange={e => setForm(f => ({ ...f, area: e.target.value }))} options={SG_AREAS} />
-          <Input label="Postal Code" value={form.postalCode} onChange={e => setForm(f => ({ ...f, postalCode: e.target.value.replace(/\D/g, "").slice(0, 6) }))} placeholder="e.g. 521123" inputMode="numeric" />
-          <Input label="Address Details" value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} placeholder="Blk / Unit / Street" required className="sm:col-span-2" />
+          <Input label="Postal Code" value={form.postalCode} onChange={e => onDeliveryPostalChange(e.target.value)} placeholder="e.g. 521123" inputMode="numeric" />
+          <Input
+            label="Address Details"
+            value={form.address}
+            onChange={e => { deliveryAddressManual.current = true; setForm(f => ({ ...f, address: e.target.value })); }}
+            placeholder="Blk / Unit / Street — auto-fills from postal code"
+            required
+            className="sm:col-span-2"
+          />
+          {postalLookupDelivery && <p className="sm:col-span-2 text-xs text-cyan-400/80">Looking up address…</p>}
           {form.customerId && form.address && !form.invoiceId && (
-            <p className="sm:col-span-2 text-xs text-cyan-400/80">Filled from customer profile — edit here if this delivery goes elsewhere.</p>
+            <p className="sm:col-span-2 text-xs text-cyan-400/80">Filled from customer profile — edit postal or address if this delivery goes elsewhere.</p>
           )}
           <Input label="Schedule" type="datetime-local" value={form.schedule} onChange={e => setForm(f => ({ ...f, schedule: e.target.value }))} required className="w-full max-w-full" />
           {isEditing && (
@@ -2552,7 +3140,7 @@ function DeliveryModule({
           <Textarea label="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="sm:col-span-2" rows={2} />
         </div>
         <div className="modal-actions">
-          {isEditing && (
+          {isEditing && canDelete && (
             <Btn variant="danger" onClick={() => {
               const d = deliveries.find((x) => String(x.id) === String(editDeliveryId));
               if (d) deleteDelivery(d);
@@ -2595,7 +3183,7 @@ function DeliveryModule({
                     <p className="text-white font-semibold text-sm truncate">{g.name}</p>
                     <p className="text-slate-500 text-xs truncate">{g.link}</p>
                   </div>
-                  <Btn variant="danger" size="sm" onClick={() => deleteWhatsappGroup(g.id)}><Trash2 size={12} /></Btn>
+                  {canDelete && <Btn variant="danger" size="sm" onClick={() => deleteWhatsappGroup(g.id)}><Trash2 size={12} /></Btn>}
                 </Card>
               ))}
             </div>
@@ -2673,6 +3261,9 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
 
   if (!hasPermission(currentUser, "calendar")) return <AccessDenied moduleName="Calendar" />;
 
+  const canEdit = canEditRecords(currentUser);
+  const canDelete = canDeleteRecords(currentUser);
+
   const isEditing = editEventId != null;
   const formOpen = showAdd || isEditing;
 
@@ -2689,6 +3280,10 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
   };
 
   const openEditEvent = (e) => {
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
     setShowAdd(false);
     setEditEventId(e.id);
     setForm(eventToForm(e));
@@ -2714,6 +3309,10 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
     };
 
     if (isEditing) {
+      if (!canEdit) {
+        notifyPermissionDenied(addNotification, "edit");
+        return;
+      }
       setEvents((prev) => prev.map((e) => (
         String(e.id) === String(editEventId)
           ? { ...e, ...payload, createdBy: e.createdBy || currentUser?.name || "Staff" }
@@ -2729,6 +3328,10 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
   };
 
   const deleteEvent = (e) => {
+    if (!canDelete) {
+      notifyPermissionDenied(addNotification, "delete");
+      return;
+    }
     const label = e.title || "this event";
     if (!confirm(`Delete "${label}" on ${e.date}? This cannot be undone.`)) return;
     setEvents((prev) => prev.filter((x) => String(x.id) !== String(e.id)));
@@ -2740,8 +3343,8 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
   const todayStr = today();
   const todayEvents = sorted.filter((e) => e.date === todayStr);
   const upcoming = sorted.filter((e) => e.date > todayStr);
-  const past = sorted.filter((e) => e.date < todayStr);
-  const visiblePast = showAllPast ? past : past.slice(0, 5);
+  const past = sorted.filter((e) => e.date < todayStr && isAppVisibleEvent(e));
+  const visiblePast = showAllPast ? past : past.slice(-5).reverse();
 
   const EventCard = ({ e }) => (
     <div className={`p-3 rounded-xl border ${eventTypeColor[e.type] || eventTypeColor.other} flex items-start justify-between gap-3`}>
@@ -2752,12 +3355,16 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
         {e.createdBy && <p className="text-[10px] mt-1 opacity-50">Added by {e.createdBy}</p>}
       </div>
       <div className="flex flex-col gap-1 shrink-0">
-        <button type="button" onClick={() => openEditEvent(e)} className="opacity-60 hover:opacity-100 touch-manipulation" title="Edit event">
-          <Edit2 size={12} className="text-cyan-400" />
-        </button>
-        <button type="button" onClick={() => deleteEvent(e)} className="opacity-60 hover:opacity-100 touch-manipulation" title="Delete event">
-          <Trash2 size={12} className="text-red-400" />
-        </button>
+        {canEdit && (
+          <button type="button" onClick={() => openEditEvent(e)} className="opacity-60 hover:opacity-100 touch-manipulation" title="Edit event">
+            <Edit2 size={12} className="text-cyan-400" />
+          </button>
+        )}
+        {canDelete && (
+          <button type="button" onClick={() => deleteEvent(e)} className="opacity-60 hover:opacity-100 touch-manipulation" title="Delete event">
+            <Trash2 size={12} className="text-red-400" />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -2828,7 +3435,7 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
           <Textarea label="Note" value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} rows={2} />
         </div>
         <div className="modal-actions">
-          {isEditing && (
+          {isEditing && canDelete && (
             <Btn
               variant="danger"
               onClick={() => {
@@ -2851,7 +3458,7 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
 // ─────────────────────────────────────────────
 // CHANGE MY PIN
 // ─────────────────────────────────────────────
-function ChangePinModal({ open, onClose, currentUser, users, setUsers, cloudMode, addNotification }) {
+function ChangePinModal({ open, onClose, currentUser, users, setUsers, addNotification }) {
   const [currentPin, setCurrentPin] = useState("");
   const [newPin, setNewPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
@@ -3048,6 +3655,9 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
 
   if (!hasPermission(currentUser, "users")) return <AccessDenied moduleName="Team & Permissions" />;
 
+  const canEdit = canEditRecords(currentUser);
+  const canDelete = canDeleteRecords(currentUser);
+
   const openAdd = () => {
     setForm({ name: "", role: "staff", pin: "", permissions: [...DEFAULT_PERMISSIONS.staff], active: true });
     setEditUser(null);
@@ -3055,6 +3665,10 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
   };
 
   const openEdit = (user) => {
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
     setForm({ name: user.name, role: user.role, pin: "", permissions: [...user.permissions], active: user.active !== false });
     setEditUser(user);
     setShowAdd(true);
@@ -3074,6 +3688,10 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
   };
 
   const saveUser = async () => {
+    if (editUser && !canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
     if (!form.name.trim()) {
       addNotification({ type: "error", title: "Validation Error", message: "Name is required." });
       return;
@@ -3183,6 +3801,10 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
   };
 
   const deleteUser = async (user) => {
+    if (!canDelete) {
+      notifyPermissionDenied(addNotification, "delete");
+      return;
+    }
     if (sameUserId(user.id, currentUser.id)) {
       addNotification({ type: "error", title: "Cannot Delete", message: "You cannot delete your own account." });
       return;
@@ -3213,6 +3835,10 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
   };
 
   const toggleActive = async (user) => {
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
     if (sameUserId(user.id, currentUser.id)) {
       addNotification({ type: "error", title: "Cannot Deactivate", message: "You cannot deactivate your own account." });
       return;
@@ -3294,11 +3920,13 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
                 </div>
               </div>
               <div className="flex gap-2">
-                <Btn variant="ghost" size="sm" onClick={() => openEdit(user)}><Edit2 size={12} />Edit</Btn>
-                <Btn variant={user.active === false ? "success" : "secondary"} size="sm" onClick={() => toggleActive(user)}>
-                  {user.active === false ? "Activate" : "Deactivate"}
-                </Btn>
-                {!user.isSystem && <Btn variant="danger" size="sm" onClick={() => deleteUser(user)}><Trash2 size={12} /></Btn>}
+                {canEdit && <Btn variant="ghost" size="sm" onClick={() => openEdit(user)}><Edit2 size={12} />Edit</Btn>}
+                {canEdit && (
+                  <Btn variant={user.active === false ? "success" : "secondary"} size="sm" onClick={() => toggleActive(user)}>
+                    {user.active === false ? "Activate" : "Deactivate"}
+                  </Btn>
+                )}
+                {!user.isSystem && canDelete && <Btn variant="danger" size="sm" onClick={() => deleteUser(user)}><Trash2 size={12} /></Btn>}
               </div>
             </div>
             <div className="flex flex-wrap gap-1.5 mt-3 pt-3 border-t border-slate-700/50">
@@ -3371,19 +3999,33 @@ const CHAT_STORAGE_KEY = "marugen_chat_history";
 const INITIAL_CHAT_MESSAGES = [
   {
     role: "assistant",
-    content: "Hello! I'm your Marugen Farm AI Assistant.\n\nTalk naturally — I understand everyday requests and will do the work in the app for you.\n\nExamples:\n• \"Sarah paid already\"\n• \"We're low on pellets — 20kg just came in\"\n• \"Bill Ahmad for 3 koi and some food\"\n• \"Who hasn't paid yet?\"\n• \"Deliver to Tan tomorrow morning\"",
+    content: "Hello! I'm your Marugen Farm AI Assistant.\n\nTalk naturally — I understand everyday requests and will do the work in the app for you. You can also attach photos (koi, receipts, pond tests) and I'll look at them.\n\nExamples:\n• \"Sarah paid already\"\n• \"We're low on pellets — 20kg just came in\"\n• \"Bill Ahmad for 3 koi and some food\"\n• \"Who hasn't paid yet?\"\n• Attach a koi photo: \"What variety is this?\"\n• Attach a receipt: \"Record this expense\"",
   },
 ];
 
 const CHAT_HISTORY_MAX = 50;
 
+function slimChatMessageForStorage(m) {
+  const { images, ...rest } = m;
+  if (images?.length) {
+    return {
+      ...rest,
+      hadImages: true,
+      content: rest.content?.trim() || "📷 Photo",
+    };
+  }
+  return rest;
+}
+
 function sanitizeChatMessages(parsed) {
   if (!Array.isArray(parsed)) return null;
   const clean = parsed
-    .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string" && m.content.trim())
+    .filter((m) => m && (m.role === "user" || m.role === "assistant")
+      && ((typeof m.content === "string" && m.content.trim()) || m.hadImages))
     .map((m) => ({
       role: m.role,
       content: m.content,
+      ...(m.hadImages ? { hadImages: true } : {}),
       ...(Array.isArray(m.executed) && m.executed.length ? { executed: m.executed } : {}),
     }));
   return clean.length ? clean.slice(-CHAT_HISTORY_MAX) : null;
@@ -3428,24 +4070,29 @@ function AiUsageBar({ usage }) {
 
 function ChatModule({ aiContext, messages, setMessages }) {
   const aiContextRef = useRef(aiContext);
-  aiContextRef.current = aiContext;
   const [input, setInput] = useState("");
+  const [pendingImages, setPendingImages] = useState([]);
+  const [imageUploading, setImageUploading] = useState(false);
+  const chatAlbumRef = useRef(null);
+  const chatCameraRef = useRef(null);
   const [loading, setLoading] = useState(false);
   const [usage, setUsage] = useState(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmMsg, setConfirmMsg] = useState("");
   const [pendingThread, setPendingThread] = useState(null);
+  const [actionConfirmOpen, setActionConfirmOpen] = useState(false);
+  const [actionConfirmMsg, setActionConfirmMsg] = useState("");
+  const [pendingActionResume, setPendingActionResume] = useState(null);
+  const [retryThread, setRetryThread] = useState(null);
   const endRef = useRef(null);
   const warnNotified = useRef(false);
   const limitNotified = useRef(false);
 
-  if (!hasPermission(aiContext.currentUser, "chat")) return <AccessDenied moduleName="AI Chat" />;
-
+  useEffect(() => { aiContextRef.current = aiContext; });
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  useEffect(() => { fetchAiUsage().then(setUsage).catch(() => {}); }, []);
 
-  useEffect(() => {
-    fetchAiUsage().then(setUsage).catch(() => {});
-  }, []);
+  if (!hasPermission(aiContext.currentUser, "chat")) return <AccessDenied moduleName="AI Chat" />;
 
   const applyUsageResult = (result) => {
     if (result.usage) setUsage(result.usage);
@@ -3468,6 +4115,17 @@ function ChatModule({ aiContext, messages, setMessages }) {
     }
   };
 
+  const appendAssistantError = (err, thread) => {
+    const msg = err?.message || "Connection error. Please log in and try again.";
+    if (err?.retryable !== false) setRetryThread(thread);
+    else setRetryThread(null);
+    setMessages((prev) => [...prev, {
+      role: "assistant",
+      content: msg,
+      retryable: err?.retryable !== false,
+    }]);
+  };
+
   const runChat = async (thread, confirmOverage = false) => {
     const systemPrompt = buildBusinessContext(aiContextRef.current);
     const result = await sendChatMessage({
@@ -3486,7 +4144,21 @@ function ChatModule({ aiContext, messages, setMessages }) {
       return;
     }
 
+    if (result.requiresActionConfirm) {
+      setPendingActionResume(result.resumeState);
+      setActionConfirmMsg(
+        result.confirmSummaries?.length > 1
+          ? result.confirmSummaries.map((s, i) => `${i + 1}. ${s}`).join("\n\n")
+          : (result.confirmSummaries?.[0] || "Proceed with this action?"),
+      );
+      setActionConfirmOpen(true);
+      applyUsageResult(result);
+      setRetryThread(null);
+      return;
+    }
+
     applyUsageResult(result);
+    setRetryThread(null);
     const replyText = result.text?.trim()
       || (result.executed?.length
         ? result.executed.map((a) => (a.success ? `✓ ${a.message || a.name}` : `✗ ${a.error || a.name}`)).join("\n")
@@ -3498,18 +4170,61 @@ function ChatModule({ aiContext, messages, setMessages }) {
     }]);
   };
 
+  const retryLastChat = async () => {
+    if (!retryThread || loading) return;
+    setLoading(true);
+    try {
+      await runChat(retryThread, true);
+    } catch (err) {
+      appendAssistantError(err, retryThread);
+    }
+    setLoading(false);
+  };
+
   const clearChat = () => {
     if (!confirm("Clear this chat history?")) return;
     setMessages(INITIAL_CHAT_MESSAGES);
+    setPendingImages([]);
     setPendingThread(null);
     setConfirmOpen(false);
+    setPendingActionResume(null);
+    setActionConfirmOpen(false);
+    setRetryThread(null);
     warnNotified.current = false;
     limitNotified.current = false;
   };
 
+  const handleChatImagePick = async (file) => {
+    if (!file || imageUploading) return;
+    if (pendingImages.length >= MAX_CHAT_IMAGES) {
+      aiContextRef.current.addNotification?.({
+        type: "warning",
+        title: "Photo Limit",
+        message: `You can attach up to ${MAX_CHAT_IMAGES} photos per message.`,
+      });
+      return;
+    }
+    try {
+      setImageUploading(true);
+      const dataUrl = await readChatImageFile(file);
+      setPendingImages((prev) => [...prev, dataUrl]);
+    } catch (err) {
+      aiContextRef.current.addNotification?.({
+        type: "error",
+        title: "Photo Failed",
+        message: err?.message || "Could not process image.",
+      });
+    } finally {
+      setImageUploading(false);
+      if (chatAlbumRef.current) chatAlbumRef.current.value = "";
+      if (chatCameraRef.current) chatCameraRef.current.value = "";
+    }
+  };
+
   const sendMessage = async () => {
     const text = input.trim();
-    if (!text || loading) return;
+    const images = [...pendingImages];
+    if ((!text && !images.length) || loading || imageUploading) return;
     if (!isSupabaseConfigured) {
       aiContextRef.current.addNotification?.({
         type: "error",
@@ -3518,15 +4233,20 @@ function ChatModule({ aiContext, messages, setMessages }) {
       });
       return;
     }
-    const userMsg = { role: "user", content: text };
+    const userMsg = {
+      role: "user",
+      content: text || (images.length ? "Please look at this photo." : ""),
+      ...(images.length ? { images } : {}),
+    };
     const thread = [...messages.filter((m) => m.role === "user" || m.role === "assistant"), userMsg].slice(-CHAT_HISTORY_MAX);
     setMessages((prev) => [...prev.slice(-CHAT_HISTORY_MAX - 1), userMsg]);
     setInput("");
+    setPendingImages([]);
     setLoading(true);
     try {
       await runChat(thread);
     } catch (err) {
-      setMessages((prev) => [...prev, { role: "assistant", content: err?.message || "Connection error. Please log in and try again." }]);
+      appendAssistantError(err, thread);
     }
     setLoading(false);
   };
@@ -3538,10 +4258,40 @@ function ChatModule({ aiContext, messages, setMessages }) {
     try {
       await runChat(pendingThread, true);
     } catch (err) {
-      setMessages(prev => [...prev, { role: "assistant", content: err?.message || "Connection error." }]);
+      appendAssistantError(err, pendingThread);
     }
     setPendingThread(null);
     setLoading(false);
+  };
+
+  const handleActionConfirm = async () => {
+    if (!pendingActionResume) return;
+    setActionConfirmOpen(false);
+    setLoading(true);
+    const { thread, functionCalls, partialResults } = pendingActionResume;
+    setPendingActionResume(null);
+    try {
+      const finalResults = resolvePendingAiActions(partialResults, aiContextRef.current);
+      const newThread = [
+        ...thread,
+        { role: "assistant", functionCalls },
+        { role: "user", functionResponses: finalResults },
+      ];
+      await runChat(newThread, true);
+    } catch (err) {
+      appendAssistantError(err, [
+        ...thread,
+        { role: "assistant", functionCalls },
+        { role: "user", functionResponses: partialResults },
+      ]);
+    }
+    setLoading(false);
+  };
+
+  const handleActionCancel = () => {
+    setActionConfirmOpen(false);
+    setPendingActionResume(null);
+    setMessages((prev) => [...prev, { role: "assistant", content: "Cancelled — no changes were made." }]);
   };
 
   return (
@@ -3550,7 +4300,7 @@ function ChatModule({ aiContext, messages, setMessages }) {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h2 className="text-xl sm:text-2xl font-black text-white">AI Assistant</h2>
-            <p className="text-slate-400 text-sm">Powered by Gemini · {formatTokens(AI_DAILY_FREE_TOKENS)} free tokens/day</p>
+            <p className="text-slate-400 text-sm">Powered by Gemini · photos supported · {formatTokens(AI_DAILY_FREE_TOKENS)} free tokens/day</p>
           </div>
           <Btn variant="secondary" size="sm" onClick={clearChat} className="w-full sm:w-auto justify-center shrink-0">
             <Trash2 size={14} />Clear chat
@@ -3576,14 +4326,33 @@ function ChatModule({ aiContext, messages, setMessages }) {
         </div>
       </Modal>
 
+      <Modal open={actionConfirmOpen} onClose={handleActionCancel} title="Confirm Action" size="sm">
+        <p className="text-slate-300 text-sm mb-4 whitespace-pre-wrap">{actionConfirmMsg}</p>
+        <p className="text-amber-400/90 text-xs mb-4">This may change or delete data. Only proceed if you intend to do this.</p>
+        <div className="flex justify-end gap-2">
+          <Btn variant="secondary" onClick={handleActionCancel}>Cancel</Btn>
+          <Btn variant="danger" onClick={handleActionConfirm}><Check size={14} />Yes, proceed</Btn>
+        </div>
+      </Modal>
+
       <Card className="flex-1 overflow-hidden flex flex-col min-h-0">
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {messages.map((m, i) => (
-            <div key={`${m.role}-${i}-${m.content.slice(0, 24)}`} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+            <div key={`${m.role}-${i}-${(m.content || "").slice(0, 24)}-${m.hadImages ? "img" : ""}`} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
               {m.role === "assistant" && (
                 <AppLogo size="sm" className="mr-2 mt-1 ring-1 ring-slate-600" />
               )}
               <div className={`max-w-[85%] px-4 py-3 rounded-2xl text-sm whitespace-pre-wrap leading-relaxed ${m.role === "user" ? "bg-cyan-500 text-slate-900 font-medium rounded-br-sm" : "bg-slate-700 text-slate-100 rounded-bl-sm"}`}>
+                {m.images?.length > 0 && (
+                  <div className={`flex flex-wrap gap-2 ${m.content ? "mb-2" : ""}`}>
+                    {m.images.map((src, j) => (
+                      <img key={j} src={src} alt="" className="rounded-lg max-h-40 max-w-full border border-black/20 object-cover" />
+                    ))}
+                  </div>
+                )}
+                {m.hadImages && !m.images?.length && (
+                  <p className="text-xs opacity-70 mb-1">📷 Photo (not stored after refresh)</p>
+                )}
                 {m.content}
                 {m.executed?.length > 0 && (
                   <div className="mt-2 pt-2 border-t border-slate-600/50 space-y-1">
@@ -3610,7 +4379,7 @@ function ChatModule({ aiContext, messages, setMessages }) {
 
         <div className="border-t border-slate-700 p-4">
           <div className="flex gap-3 flex-wrap mb-2">
-            {["Who hasn't paid yet?", "Pellets came in, add 20kg", "Sarah paid already", "What's running low?"].map(q => (
+            {["Who hasn't paid yet?", "Show koi in stock", "What variety is this koi?", "Read this receipt"].map(q => (
               <button
                 key={q}
                 type="button"
@@ -3622,7 +4391,66 @@ function ChatModule({ aiContext, messages, setMessages }) {
               </button>
             ))}
           </div>
+          {retryThread && !loading && (
+            <div className="mb-2 flex items-center gap-2 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30">
+              <AlertTriangle size={16} className="text-amber-400 shrink-0" />
+              <span className="text-xs text-amber-100 flex-1">Gemini was busy — your last request is saved. Wait a few seconds, then retry.</span>
+              <Btn size="sm" variant="secondary" onClick={retryLastChat} className="shrink-0 border-amber-500/40 text-amber-100">
+                <RefreshCw size={12} />Retry
+              </Btn>
+            </div>
+          )}
+          {pendingImages.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {pendingImages.map((src, idx) => (
+                <div key={idx} className="relative">
+                  <img src={src} alt="" className="h-16 w-16 rounded-lg object-cover border border-slate-600" />
+                  <button
+                    type="button"
+                    onClick={() => setPendingImages((prev) => prev.filter((_, i) => i !== idx))}
+                    className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-500 text-white flex items-center justify-center text-xs"
+                    aria-label="Remove photo"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <input
+            ref={chatAlbumRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => handleChatImagePick(e.target.files?.[0])}
+          />
+          <input
+            ref={chatCameraRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => handleChatImagePick(e.target.files?.[0])}
+          />
           <div className="flex gap-2">
+            <Btn
+              variant="secondary"
+              onClick={() => chatAlbumRef.current?.click()}
+              disabled={loading || imageUploading || pendingImages.length >= MAX_CHAT_IMAGES}
+              className="px-3 py-3 shrink-0"
+              title="Attach photo"
+            >
+              <ImagePlus size={16} />
+            </Btn>
+            <Btn
+              variant="secondary"
+              onClick={() => chatCameraRef.current?.click()}
+              disabled={loading || imageUploading || pendingImages.length >= MAX_CHAT_IMAGES}
+              className="px-3 py-3 shrink-0 sm:hidden"
+              title="Take photo"
+            >
+              <ScanLine size={16} />
+            </Btn>
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -3632,11 +4460,17 @@ function ChatModule({ aiContext, messages, setMessages }) {
                   sendMessage();
                 }
               }}
-              placeholder="Ask a question..."
-              disabled={loading}
+              placeholder={pendingImages.length ? "Add a question about the photo…" : "Ask a question or attach a photo…"}
+              disabled={loading || imageUploading}
               className="flex-1 min-w-0 bg-slate-900/50 border border-slate-600 rounded-xl px-4 py-3 text-white text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/50 disabled:opacity-60"
             />
-            <Btn onClick={sendMessage} disabled={loading || !input.trim() || !isSupabaseConfigured} className="px-4 py-3 min-w-[48px] justify-center shrink-0"><Send size={16} /></Btn>
+            <Btn
+              onClick={sendMessage}
+              disabled={loading || imageUploading || (!input.trim() && !pendingImages.length) || !isSupabaseConfigured}
+              className="px-4 py-3 min-w-[48px] justify-center shrink-0"
+            >
+              <Send size={16} />
+            </Btn>
           </div>
         </div>
       </Card>
@@ -3685,7 +4519,9 @@ export default function App() {
   const [dataReady, setDataReady] = useState(!isSupabaseConfigured);
   const [cloudSync, setCloudSync] = useState(isSupabaseConfigured);
   const [cloudError, setCloudError] = useState(null);
+  const [cloudRetrying, setCloudRetrying] = useState(false);
   const lowStockNotified = useRef(false);
+  const lastSyncWarnRef = useRef(0);
 
   const [users, setUsers] = useState(isSupabaseConfigured ? [] : LOCAL_DEMO_USERS);
   const [customers, setCustomers] = useState(INITIAL_CUSTOMERS);
@@ -3700,11 +4536,62 @@ export default function App() {
   const [pondData, setPondData] = useState(() => (isSupabaseConfigured ? emptyPondData() : loadPondData()));
   const [whatsappGroups, setWhatsappGroups] = useState(() => (isSupabaseConfigured ? [] : loadWhatsappGroups()));
   const [notifications, setNotifications] = useState([]);
+  const [toasts, setToasts] = useState([]);
+  const toastTimers = useRef(new Map());
+  const [invoiceOpenDraft, setInvoiceOpenDraft] = useState(null);
+  const [invoiceDraftSignal, setInvoiceDraftSignal] = useState(0);
+
+  const dismissToast = useCallback((id) => {
+    const timer = toastTimers.current.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      toastTimers.current.delete(id);
+    }
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  const showProminentToast = useCallback((n) => {
+    const id = n.id || `prominent-${Date.now()}`;
+    const toast = { ...buildToastNotification({ ...n, id }), prominent: true };
+    const existingTimer = toastTimers.current.get(id);
+    if (existingTimer) clearTimeout(existingTimer);
+    setToasts((prev) => [...prev.filter((t) => t.id !== id), toast].slice(-5));
+    const duration = n.duration ?? 15000;
+    if (duration > 0) {
+      const timer = setTimeout(() => dismissToast(id), duration);
+      toastTimers.current.set(id, timer);
+    }
+  }, [dismissToast]);
+
+  const warnCloudSaveFailed = useCallback((detail, { force = false } = {}) => {
+    const now = Date.now();
+    if (!force && now - lastSyncWarnRef.current < 20000) return;
+    lastSyncWarnRef.current = now;
+    showProminentToast({
+      id: "cloud-sync-warn",
+      type: "error",
+      title: "Not saved to cloud",
+      message: detail
+        ? `Sync failed: ${detail}. Do not refresh — use Retry save when back online.`
+        : "Cloud sync failed. Changes are only on this screen until sync succeeds.",
+      duration: 20000,
+    });
+  }, [showProminentToast]);
 
   const addNotification = useCallback((n) => {
-    const notif = { ...n, id: Date.now(), time: "Just now", read: false };
-    setNotifications(prev => [notif, ...prev].slice(0, 20));
-  }, []);
+    if (isTeamNotification(n)) {
+      const teamActor = n.actorRole === "system" ? n.actor || "System" : (n.actor || currentUser?.name || "Unknown");
+      setNotifications((prev) => [
+        buildTeamNotification({ ...n, actor: teamActor }, currentUser),
+        ...prev,
+      ].slice(0, 30));
+      return;
+    }
+    const toast = buildToastNotification(n);
+    setToasts((prev) => [...prev, toast].slice(-4));
+    const timer = setTimeout(() => dismissToast(toast.id), 4500);
+    toastTimers.current.set(toast.id, timer);
+  }, [currentUser, dismissToast]);
 
   useEffect(() => { if (!isSupabaseConfigured) saveKoiFish(koiFishList) }, [koiFishList]);
   useEffect(() => { if (!isSupabaseConfigured) saveCustomerKoi(customerKoiList) }, [customerKoiList]);
@@ -3714,22 +4601,36 @@ export default function App() {
 
   const applyCloudData = useCallback((data) => {
     if (!data) return;
-    setUsers(data.users);
-    setCustomers(data.customers || []);
-    setProducts(data.products || []);
-    setInvoices(data.invoices || []);
-    setExpenses(data.expenses || []);
-    setDeliveries(data.deliveries || []);
-    setEvents(data.events || []);
-    setStockLog(data.stockActivity || []);
 
     const koi = resolveCloudKoiPayload(data);
-    setKoiFishList(koi.koiFish);
-    setCustomerKoiList(koi.customerKoi);
-    setPondData(koi.pondData);
-
     const whatsapp = resolveCloudWhatsappGroups(data.whatsappGroups);
-    setWhatsappGroups(whatsapp.groups);
+    const { data: cleaned, purged, stats } = applyCloudRetention({
+      users: data.users,
+      customers: data.customers || [],
+      products: data.products || [],
+      invoices: data.invoices || [],
+      expenses: data.expenses || [],
+      deliveries: data.deliveries || [],
+      events: data.events || [],
+      stockLog: data.stockActivity || [],
+      koiFishList: koi.koiFish,
+      customerKoiList: koi.customerKoi,
+      pondData: koi.pondData,
+      whatsappGroups: whatsapp.groups,
+    });
+
+    setUsers(cleaned.users || data.users);
+    setCustomers(cleaned.customers);
+    setProducts(cleaned.products);
+    setInvoices(cleaned.invoices);
+    setExpenses(cleaned.expenses);
+    setDeliveries(cleaned.deliveries);
+    setEvents(cleaned.events);
+    setStockLog(cleaned.stockLog);
+    setKoiFishList(cleaned.koiFishList);
+    setCustomerKoiList(cleaned.customerKoiList);
+    setPondData(cleaned.pondData);
+    setWhatsappGroups(cleaned.whatsappGroups || whatsapp.groups);
 
     if (koi.migratedFromLocal || whatsapp.migratedFromLocal) {
       clearLocalOnlyStorage();
@@ -3737,6 +4638,17 @@ export default function App() {
         type: "info",
         title: "Uploaded to Cloud",
         message: "Data from this device was saved to Supabase. You can now access it on any device after login.",
+      });
+    }
+
+    if (purged) {
+      const parts = Object.entries(stats).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`)
+      addNotification({
+        type: "info",
+        title: "Data Retention",
+        message: `Expired records cleaned from cloud: ${parts.join(", ")}.`,
+        actor: "System",
+        actorRole: "system",
       });
     }
   }, [addNotification]);
@@ -3783,37 +4695,91 @@ export default function App() {
     loadFromCloud();
   }, [applyCloudData]);
 
-  const syncDebounced = useCallback((fn, data) => {
-    if (!dataReady || !isSupabaseConfigured || !auth.getSessionToken()) return;
+  const handleSyncFailure = useCallback((err) => {
+    const msg = err?.message || "Sync failed";
+    setCloudError((prev) => {
+      if (!prev) warnCloudSaveFailed(msg, { force: true });
+      else warnCloudSaveFailed(msg);
+      return msg;
+    });
+    setCloudSync(false);
+    if (msg.includes("Session expired")) {
+      auth.clearSession();
+      setCurrentUser(null);
+    }
+  }, [warnCloudSaveFailed]);
+
+  const syncDebounced = useCallback((perm, label, fn, data) => {
+    if (!dataReady || !isSupabaseConfigured || !auth.getSessionToken() || !currentUser) return;
+    if (!hasPermission(currentUser, perm)) return;
     const timer = setTimeout(() => {
       fn(data).catch((err) => {
-        setCloudSync(false);
-        setCloudError(err?.message || "Sync failed");
-        if (err?.message?.includes("Session expired")) {
-          auth.clearSession();
-          setCurrentUser(null);
-        }
+        const msg = err?.message || "Sync failed";
+        handleSyncFailure(new Error(`${label}: ${msg}`));
       });
     }, 800);
     return () => clearTimeout(timer);
-  }, [dataReady]);
+  }, [dataReady, currentUser, handleSyncFailure]);
 
-  useEffect(() => syncDebounced(db.syncCustomers, customers), [customers, syncDebounced]);
-  useEffect(() => syncDebounced(db.syncProducts, products), [products, syncDebounced]);
-  useEffect(() => syncDebounced(db.syncInvoices, invoices), [invoices, syncDebounced]);
-  useEffect(() => syncDebounced(db.syncExpenses, expenses), [expenses, syncDebounced]);
-  useEffect(() => syncDebounced(db.syncDeliveries, deliveries), [deliveries, syncDebounced]);
-  useEffect(() => syncDebounced(db.syncEvents, events), [events, syncDebounced]);
-  useEffect(() => syncDebounced(db.syncStockActivity, stockLog), [stockLog, syncDebounced]);
-  useEffect(() => syncDebounced(db.syncKoiFish, koiFishList), [koiFishList, syncDebounced]);
-  useEffect(() => syncDebounced(db.syncCustomerKoi, customerKoiList), [customerKoiList, syncDebounced]);
-  useEffect(() => syncDebounced(db.syncPondData, pondData), [pondData, syncDebounced]);
-  useEffect(() => syncDebounced(db.syncWhatsappGroups, whatsappGroups), [whatsappGroups, syncDebounced]);
+  const syncState = useMemo(() => ({
+    customers, products, invoices, expenses, deliveries, events, stockLog,
+    koiFishList, customerKoiList, pondData, whatsappGroups,
+  }), [customers, products, invoices, expenses, deliveries, events, stockLog, koiFishList, customerKoiList, pondData, whatsappGroups]);
+
+  const retryCloudSync = useCallback(async () => {
+    if (!isSupabaseConfigured || !auth.getSessionToken() || !currentUser) return;
+    setCloudRetrying(true);
+    try {
+      const tasks = SYNC_ENTITIES.filter((e) => hasPermission(currentUser, e.perm));
+      const results = await Promise.allSettled(tasks.map((e) => e.sync(syncState[e.key])));
+      const failed = results
+        .map((r, i) => (r.status === "rejected" ? tasks[i].label : null))
+        .filter(Boolean);
+      if (failed.length) {
+        const reason = results.find((r) => r.status === "rejected")?.reason;
+        throw new Error(`Sync failed: ${failed.join(", ")} — ${reason?.message || "unknown error"}`);
+      }
+      setCloudSync(true);
+      setCloudError(null);
+      dismissToast("cloud-sync-warn");
+      const skipped = SYNC_ENTITIES.length - tasks.length;
+      showProminentToast({
+        id: "cloud-sync-ok",
+        type: "success",
+        title: "Saved to cloud",
+        message: skipped
+          ? `Your permitted modules synced to Supabase (${skipped} module${skipped === 1 ? "" : "s"} skipped — no permission).`
+          : "All farm data synced to Supabase.",
+        duration: 6000,
+      });
+    } catch (err) {
+      handleSyncFailure(err);
+    } finally {
+      setCloudRetrying(false);
+    }
+  }, [
+    currentUser, syncState, handleSyncFailure, dismissToast, showProminentToast,
+  ]);
+
+  useEffect(() => syncDebounced("customers", "Customers", db.syncCustomers, customers), [customers, syncDebounced]);
+  useEffect(() => syncDebounced("inventory", "Inventory", db.syncProducts, products), [products, syncDebounced]);
+  useEffect(() => syncDebounced("invoices", "Invoices", db.syncInvoices, invoices), [invoices, syncDebounced]);
+  useEffect(() => syncDebounced("expenses", "Expenses", db.syncExpenses, expenses), [expenses, syncDebounced]);
+  useEffect(() => syncDebounced("deliveries", "Deliveries", db.syncDeliveries, deliveries), [deliveries, syncDebounced]);
+  useEffect(() => syncDebounced("calendar", "Calendar", db.syncEvents, events), [events, syncDebounced]);
+  useEffect(() => syncDebounced("inventory", "Stock activity", db.syncStockActivity, stockLog), [stockLog, syncDebounced]);
+  useEffect(() => syncDebounced("koifish", "Koi fish", db.syncKoiFish, koiFishList), [koiFishList, syncDebounced]);
+  useEffect(() => syncDebounced("customerkoi", "Customer koi", db.syncCustomerKoi, customerKoiList), [customerKoiList, syncDebounced]);
+  useEffect(() => syncDebounced("ponds", "Pond data", db.syncPondData, pondData), [pondData, syncDebounced]);
+  useEffect(() => syncDebounced("deliveries", "WhatsApp groups", db.syncWhatsappGroups, whatsappGroups), [whatsappGroups, syncDebounced]);
 
   const [chatMessages, setChatMessages] = useState(loadChatHistory);
 
   useEffect(() => {
-    sessionStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatMessages.slice(-CHAT_HISTORY_MAX)));
+    sessionStorage.setItem(
+      CHAT_STORAGE_KEY,
+      JSON.stringify(chatMessages.slice(-CHAT_HISTORY_MAX).map(slimChatMessageForStorage)),
+    );
   }, [chatMessages]);
 
   const handleKoiSold = useCallback((koi, customer, soldPrice, soldDate, options = {}) => {
@@ -3857,13 +4823,66 @@ export default function App() {
     });
   }, [addNotification, customerKoiList]);
 
+  const handleKoiRefund = useCallback((koi, { reason = "" } = {}) => {
+    if (!canRefundSales(currentUser)) {
+      notifyPermissionDenied(addNotification, "refund");
+      return;
+    }
+    if (!koi || koi.status !== KOI_STATUS.SOLD) return;
+    setCustomerKoiList((prev) => prev.filter((r) => String(r.koiId) !== String(koi.id)));
+    setKoiFishList((prev) => prev.map((k) => (k.id === koi.id ? buildKoiRefundUpdate(k, reason) : k)));
+    const linked = findLinkedKoiInvoices(invoices, koi.id).filter(
+      (inv) => !["cancelled", "paid"].includes(getInvoiceStatus(inv)),
+    );
+    addNotification({
+      type: "success",
+      title: "Refund Complete",
+      message: `${koi.name || koi.variety} (${koi.id}) returned to stock.`,
+    });
+    if (linked.length) {
+      addNotification({
+        type: "warning",
+        title: "Check Linked Invoices",
+        message: `Cancel or adjust: ${linked.map((inv) => inv.id).join(", ")}`,
+      });
+    }
+  }, [invoices, addNotification, currentUser]);
+
+  const clearInvoiceOpenDraft = useCallback(() => setInvoiceOpenDraft(null), []);
+
+  const handleCreateInvoiceFromKoiSale = useCallback((draft) => {
+    if (!currentUser || !hasPermission(currentUser, "invoices")) {
+      addNotification({
+        type: "warning",
+        title: "Invoice Access Required",
+        message: "Sale saved. You do not have permission to open Invoices.",
+      });
+      return;
+    }
+    setInvoiceOpenDraft(draft);
+    setActiveTab("invoices");
+    setInvoiceDraftSignal((n) => n + 1);
+    addNotification({
+      type: "info",
+      title: "Create Invoice",
+      message: "Sale confirmed — review and save the invoice.",
+    });
+  }, [currentUser, addNotification]);
+
   const unreadCount = notifications.filter(n => !n.read).length;
 
   useEffect(() => {
     const lowStock = products.filter((p) => p.minStock > 0 && p.stock <= p.minStock);
     if (lowStock.length > 0 && currentUser && !lowStockNotified.current) {
       lowStockNotified.current = true;
-      addNotification({ type: "warning", title: "Low Stock Alert", message: `${lowStock.length} product(s) need restocking: ${lowStock.map(p => p.name).join(", ")}` });
+      addNotification({
+        type: "warning",
+        title: "Low Stock Alert",
+        message: `${lowStock.length} product(s) need restocking: ${lowStock.map(p => p.name).join(", ")}`,
+        actor: "System",
+        actorRole: "system",
+        team: true,
+      });
     }
     if (lowStock.length === 0) lowStockNotified.current = false;
   }, [products, currentUser, addNotification]);
@@ -3899,6 +4918,9 @@ export default function App() {
     await auth.logout();
     setCurrentUser(null);
     setNotifOpen(false);
+    setToasts([]);
+    toastTimers.current.forEach((t) => clearTimeout(t));
+    toastTimers.current.clear();
     sessionStorage.removeItem(CHAT_STORAGE_KEY);
     setChatMessages(INITIAL_CHAT_MESSAGES);
   };
@@ -3964,8 +4986,13 @@ export default function App() {
 
   const aiContext = {
     customers, invoices, expenses, products, deliveries, events, stockLog, currentUser, addNotification,
+    koiFishList, customerKoiList, pondData,
     setCustomers, setInvoices, setExpenses, setProducts, setDeliveries, setEvents, setStockLog,
+    setKoiFishList, setCustomerKoiList, setPondData,
     onNavigate: goToTab,
+    onKoiSold: handleKoiSold,
+    onKoiRefund: handleKoiRefund,
+    onCreateInvoiceFromSale: handleCreateInvoiceFromKoiSale,
   };
 
   const renderModule = () => {
@@ -3973,11 +5000,11 @@ export default function App() {
     switch (effectiveTab) {
       case "dashboard": return guard("dashboard", "Dashboard", <Dashboard {...props} />);
       case "inventory": return guard("inventory", "Inventory", <InventoryModule products={products} setProducts={setProducts} stockLog={stockLog} setStockLog={setStockLog} addNotification={addNotification} currentUser={currentUser} />);
-      case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} onKoiSold={handleKoiSold} addNotification={addNotification} />);
-      case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} addNotification={addNotification} />);
-      case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondData} addNotification={addNotification} currentUser={currentUser} />);
-      case "invoices": return guard("invoices", "Invoices", <InvoiceModule invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} addNotification={addNotification} currentUser={currentUser} />);
-      case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} addNotification={addNotification} />);
+      case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
+      case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} addNotification={addNotification} canEdit={canEditRecords(currentUser)} />);
+      case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondData} addNotification={addNotification} currentUser={currentUser} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} />);
+      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} />);
+      case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} addNotification={addNotification} currentUser={currentUser} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpenses} addNotification={addNotification} currentUser={currentUser} />);
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} />);
       case "calendar": return guard("calendar", "Calendar", <CalendarModule events={events} setEvents={setEvents} addNotification={addNotification} currentUser={currentUser} />);
@@ -4064,11 +5091,11 @@ export default function App() {
 
           <div className="min-w-0 flex-1 lg:flex-none">
             <p className="text-white text-sm font-bold truncate lg:hidden">{activeNav?.label || "Marugen"}</p>
-            {cloudSync && (
-              <Badge className="bg-emerald-500/20 text-emerald-300 text-[10px] sm:text-xs hidden lg:inline">☁️ Supabase</Badge>
+            {cloudSync && !cloudError && (
+              <Badge className="bg-emerald-500/20 text-emerald-300 text-[10px] sm:text-xs">☁️ Supabase</Badge>
             )}
             {cloudError && (
-              <Badge className="bg-amber-500/20 text-amber-300 text-[10px] sm:text-xs hidden lg:inline" title={cloudError}>⚠️ Local mode</Badge>
+              <Badge className="bg-amber-500/25 text-amber-200 text-[10px] sm:text-xs animate-pulse" title={cloudError}>⚠️ Local mode</Badge>
             )}
           </div>
 
@@ -4077,7 +5104,7 @@ export default function App() {
           <div className="relative">
             <button onClick={() => setNotifOpen(o => !o)}
               className={`relative p-2.5 rounded-xl transition-all touch-manipulation ${notifOpen ? "bg-slate-700 text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"}`}
-              aria-label="Notifications">
+              aria-label="Team alerts">
               <Bell size={18} />
               {unreadCount > 0 && (
                 <span className="absolute top-0.5 right-0.5 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center text-[10px] font-black text-white">{unreadCount > 9 ? "9+" : unreadCount}</span>
@@ -4089,7 +5116,7 @@ export default function App() {
                 <button type="button" className="fixed inset-0 z-40" aria-label="Close notifications" onClick={() => setNotifOpen(false)} />
                 <div className="fixed sm:absolute inset-x-3 sm:inset-x-auto sm:right-0 top-[calc(3.5rem+env(safe-area-inset-top))] sm:top-12 w-auto sm:w-80 max-w-none bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl p-4 z-50 max-h-[70dvh] overflow-y-auto">
                   <div className="flex items-center justify-between mb-3">
-                    <h4 className="font-bold text-white flex items-center gap-2"><Bell size={14} className="text-cyan-400" />Notifications</h4>
+                    <h4 className="font-bold text-white flex items-center gap-2"><Bell size={14} className="text-cyan-400" />Team Alerts</h4>
                     <button onClick={() => setNotifOpen(false)} className="text-slate-400 hover:text-white p-2 touch-manipulation"><X size={14} /></button>
                   </div>
                   <NotificationPanel
@@ -4104,6 +5131,14 @@ export default function App() {
           </div>
         </header>
 
+        {isSupabaseConfigured && currentUser && cloudError && (
+          <CloudOfflineBanner
+            error={cloudError}
+            onRetry={retryCloudSync}
+            retrying={cloudRetrying}
+          />
+        )}
+
         <main className={`flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6 ${isMobile ? "pb-[calc(4.5rem+env(safe-area-inset-bottom))]" : ""}`}>
           {renderModule()}
         </main>
@@ -4115,9 +5150,10 @@ export default function App() {
         currentUser={currentUser}
         users={users}
         setUsers={setUsers}
-        cloudMode={isSupabaseConfigured && cloudSync}
         addNotification={addNotification}
       />
+
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
 
       {isMobile && (
         <nav className="fixed bottom-0 left-0 right-0 z-30 bg-slate-900/95 backdrop-blur border-t border-slate-800 safe-bottom-nav lg:hidden">

@@ -1,10 +1,15 @@
 import {
   calcCustomerTier, customerDeliveryFields, EXPENSE_CATEGORIES, formatSGD, genId, genInvoiceId,
-  getInvoiceStatus, today,
+  getInvoiceStatus, today, KOI_STATUS, formatKoiSize,
 } from '../data/constants'
 import { calcInvoiceAmounts } from './invoiceDesign'
 import { formatCustomerAddress, resolveInvoiceCustomer } from './invoiceWhatsApp'
-import { deductStockForInvoice, serializeInvoiceItem } from './inventoryStock'
+import { deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem } from './inventoryStock'
+import { formatKoiInvoiceLineName, restoreInvoiceKoiSales } from './koiInvoice'
+import { actionConfirmKey, describeRiskyAction, isRiskyAiAction } from './aiRisk'
+import {
+  findProductCandidates, findProductInList, formatProductCatalogEntry, productMatchHint,
+} from './productMatch'
 
 const EXPENSE_ALIASES = {
   feed: 'Feed', food: 'Feed', pellets: 'Feed', fishfood: 'Feed',
@@ -23,7 +28,21 @@ const STATUS_ALIASES = {
 }
 
 function canDo(user, perm) {
-  return user?.permissions?.includes(perm)
+  if (!user) return false
+  if (user.role === 'owner') return true
+  return user.permissions?.includes(perm) ?? false
+}
+
+function canEdit(user) {
+  return canDo(user, 'edit')
+}
+
+function canDelete(user) {
+  return canDo(user, 'delete')
+}
+
+function canRefund(user) {
+  return canDo(user, 'refund')
 }
 
 function normalizeText(s) {
@@ -69,26 +88,10 @@ function findCustomer(ctx, name) {
 }
 
 function findProduct(ctx, name) {
-  const direct = findByName(ctx.products, name, 'name')
-  if (direct) return direct
-  const q = normalizeText(name)
-  const aliases = [
-    { words: ['pellet', 'pellets', 'koi food', 'koifood'], match: 'koi pellet' },
-    { words: ['arowana stick', 'sticks'], match: 'arowana' },
-    { words: ['conditioner', 'water treatment'], match: 'conditioner' },
-    { words: ['salt', 'pond salt'], match: 'salt' },
-    { words: ['pump', 'air pump'], match: 'pump' },
-    { words: ['net'], match: 'net' },
-    { words: ['parasite', 'medicine'], match: 'parasite' },
-    { words: ['filter'], match: 'filter' },
-  ]
-  for (const { words, match } of aliases) {
-    if (words.some((w) => q.includes(w))) {
-      const hit = ctx.products.find((p) => normalizeText(p.name).includes(match))
-      if (hit) return hit
-    }
-  }
-  return null
+  return findProductInList(ctx.products, name)
+    || findByName(ctx.products, name, 'name')
+    || findByName(ctx.products, name, 'description')
+    || findByName(ctx.products, name, 'sku')
 }
 
 function findInvoice(ctx, { invoiceId, customerName }) {
@@ -110,6 +113,40 @@ function findInvoice(ctx, { invoiceId, customerName }) {
     return unpaid[0] || null
   }
   return null
+}
+
+function findKoi(ctx, { koiId, name, variety }) {
+  const list = ctx.koiFishList || []
+  if (koiId) {
+    const id = normalizeText(koiId)
+    return list.find((k) => normalizeText(k.id) === id || normalizeText(k.id).includes(id)) || null
+  }
+  const q = name || variety
+  return findByName(list, q, 'name') || findByName(list, q, 'variety') || null
+}
+
+function findSoldKoi(ctx, query) {
+  const sold = (ctx.koiFishList || []).filter((k) => k.status === KOI_STATUS.SOLD)
+  return findKoi({ koiFishList: sold }, { koiId: query.koiId, name: query.name || query.koi })
+}
+
+function findCalendarEvent(ctx, { title, date, eventId }) {
+  if (eventId != null) {
+    return ctx.events.find((e) => String(e.id) === String(eventId)) || null
+  }
+  const t = normalizeText(title)
+  const d = date || ''
+  return ctx.events.find((e) => normalizeText(e.title) === t && (!d || e.date === d))
+    || ctx.events.find((e) => normalizeText(e.title).includes(t) && (!d || e.date === d))
+    || null
+}
+
+function findCancellableInvoice(ctx, { invoiceId, customerName }) {
+  const inv = findInvoice(ctx, { invoiceId, customerName })
+  if (!inv) return null
+  const st = getInvoiceStatus(inv)
+  if (!['pending', 'overdue'].includes(st)) return null
+  return inv
 }
 
 function findDelivery(ctx, { deliveryId, customerName }) {
@@ -166,7 +203,12 @@ function resolveInvoiceItems(items, ctx) {
     const finalName = product?.name || name
     if ((!price || price <= 0) && product) price = product.price
     if (!price || price <= 0) {
-      errors.push(`No price for "${name}" — not in inventory, please specify price`)
+      const near = findProductCandidates(ctx.products, name, 3)
+      if (near.length) {
+        errors.push(`Could not price "${name}" — closest inventory: ${near.map((p) => p.name).join('; ')}. Specify qty/price or use exact catalog name.`)
+      } else {
+        errors.push(`No price for "${name}" — not in inventory, please specify price`)
+      }
       continue
     }
     const item = { name: finalName, qty, price }
@@ -185,6 +227,12 @@ function normalizeArgs(name, args, ctx) {
   }
   if (name === 'create_invoice') {
     a.customerName = a.customerName || a.customer || a.name || a.client
+    if (Array.isArray(a.items)) {
+      a.items = a.items.map((it) => ({
+        ...it,
+        name: it.name || it.product || it.item || it.productName || it.description || it.label,
+      }))
+    }
     if (!a.discountType && (a.discountPercent || a.percentOff)) {
       a.discountType = 'percent'
       a.discountValue = a.discountPercent ?? a.percentOff
@@ -194,19 +242,57 @@ function normalizeArgs(name, args, ctx) {
     }
   }
   if (name === 'restock_product') {
-    a.productName = a.productName || a.product || a.item || a.name
+    a.productName = a.productName || a.product || a.item || a.name || a.description
     a.quantity = parseQuantity(a.quantity ?? a.qty ?? a.amount)
   }
-  if (name === 'schedule_delivery') {
+  if (name === 'schedule_delivery' || name === 'update_delivery') {
     a.customerName = a.customerName || a.customer || a.name
+    a.deliveryId = a.deliveryId || a.id || a.delivery
     if (!a.address && a.customerName) {
       const c = findCustomer(ctx, a.customerName)
       if (c) {
-        a.area = a.area || c.area
-        a.address = a.address || `TBC — ${c.name}, ${c.area} (contact customer)`
+        a.postalCode = a.postalCode || c.postalCode
+        a.address = a.address || c.address || `TBC — ${c.name} (contact customer)`
       }
     }
-    a.address = a.address || 'TBC — contact customer for address'
+  }
+  if (name === 'cancel_invoice') {
+    a.invoiceId = a.invoiceId || a.invoice || a.id
+    a.customerName = a.customerName || a.customer || a.name
+  }
+  if (name === 'sell_koi') {
+    a.koiId = a.koiId || a.koi || a.id
+    a.customerName = a.customerName || a.customer || a.name
+    a.disposition = a.disposition || a.keepAtFarm ? 'keep' : 'taken'
+    if (a.createInvoice == null) a.createInvoice = true
+  }
+  if (name === 'refund_koi_sale') {
+    a.koiId = a.koiId || a.koi || a.id
+    a.name = a.name || a.fish || a.koiName
+  }
+  if (name === 'delete_customer') {
+    a.name = a.name || a.customerName || a.customer
+  }
+  if (name === 'delete_product') {
+    a.productName = a.productName || a.product || a.name || a.description
+  }
+  if (name === 'delete_delivery') {
+    a.deliveryId = a.deliveryId || a.id
+    a.customerName = a.customerName || a.customer || a.name
+  }
+  if (name === 'update_customer') {
+    a.name = a.name || a.customerName || a.customer
+  }
+  if (name === 'delete_calendar_event') {
+    a.title = a.title || a.event
+    a.eventId = a.eventId ?? a.id
+  }
+  if (name === 'update_calendar_event') {
+    a.title = a.title || a.event
+    a.newTitle = a.newTitle || a.titleNew
+    a.newDate = a.newDate || a.dateNew
+    a.newTime = a.newTime || a.timeNew
+    a.newType = a.newType || a.typeNew
   }
   if (name === 'update_delivery_status') {
     a.customerName = a.customerName || a.customer || a.name
@@ -230,51 +316,87 @@ function normalizeArgs(name, args, ctx) {
 }
 
 export function buildBusinessContext(ctx) {
-  const { customers, invoices, expenses, products, deliveries, events, currentUser } = ctx
-  const paid = invoices.filter((i) => i.status === 'paid')
+  const {
+    customers, invoices, expenses, products, deliveries, events, currentUser,
+    koiFishList = [], customerKoiList = [], pondData = [],
+  } = ctx
+  const paid = invoices.filter((i) => getInvoiceStatus(i) === 'paid')
   const pending = invoices.filter((i) => getInvoiceStatus(i) === 'pending')
   const overdue = invoices.filter((i) => getInvoiceStatus(i) === 'overdue')
   const lowStock = products.filter((p) => p.stock <= p.minStock)
   const now = today()
+  const koiAvailable = koiFishList.filter((k) => k.status !== KOI_STATUS.SOLD)
+  const koiSold = koiFishList.filter((k) => k.status === KOI_STATUS.SOLD)
+  const role = currentUser?.role || 'staff'
+  const isOwner = role === 'owner'
+  const perms = currentUser?.permissions || []
 
-  return `You are the AI assistant for Marugen Koi & Arowana Farm in Singapore. Always respond in English.
+  return `You are Marugen Farm Manager AI — act as the owner's capable assistant inside the full web app.
+Speak English or Burmese (Myanmar) to match the user. Use SGD ($). Be concise and action-oriented.
 
-NATURAL LANGUAGE — CRITICAL:
-Users speak casually in everyday language, NOT exact commands. Understand INTENT and tone from the full conversation.
-- Infer who/what they mean from live data below (first names ok: "Sarah" → Sarah Lim).
-- Fill gaps with sensible defaults: qty=1, prices from inventory, due date = 7 days from today (${now}), expense date = today.
-- Convert relative time yourself: "tomorrow", "next Friday", "this afternoon" → concrete YYYY-MM-DD and HH:MM before calling tools.
-- Map casual phrases to actions:
-  • payment received / they paid / settled → mark_invoice_paid
-  • bill / charge / sold / invoice → create_invoice
-  • stock arrived / add more / received shipment → restock_product
-  • spent / paid for / cost → add_expense
-  • deliver / send to / drop off → schedule_delivery
-  • delivered / on the way / cancel delivery → update_delivery_status
-  • remind / schedule / book → create_calendar_event
-  • show me / open / go to → navigate_to
-  • how much / what's low / who owes → get_business_data then explain
-- Act when intent is clear. Only ask ONE short question if truly ambiguous (e.g. two matching customers).
-- NEVER claim an action succeeded without calling the tool first.
+PHOTOS & VISION:
+Users may attach one or more photos. You CAN see them — describe what you notice before acting.
+Use images to:
+  • Identify koi variety, grade, size estimate, visible health issues (spots, fin damage, parasites)
+  • Read expense receipts / supplier invoices (amount, date, vendor) and offer to record expenses
+  • Read pond water-test readings, medicine labels, equipment nameplates
+  • Match a fish photo to farm stock when an ID tag or unique markings are visible
+If a photo is unclear, say what you can and cannot see. Do not invent details.
 
-Current user: ${currentUser.displayName} (${currentUser.role})
-Permissions: ${currentUser.permissions.join(', ')}
+CONFIRMATION FLOW:
+When you propose a plan and the user confirms (yes / ok / correct / ဟုတ်တယ် / လုပ်ပါ / မှန်တယ်), call the matching tools immediately in the same turn — do not ask again.
+For invoices + deliveries together, call create_invoice then schedule_delivery (or both in one round).
+When the user clarifies a product ("same product", "L size", "that's the floating one"), re-match against the inventory catalog below — short names and long descriptions refer to the same SKU when brand + type + size + weight align.
+
+PRODUCT MATCHING (critical for fish food & supplies):
+Staff often say LONG phrases; inventory may use SHORT names (or vice versa). Examples that can be the SAME item:
+  • "20kg Shori Sinking L/M" = "Shori sinking pellets large" = "JPD Shori Sinking 20kg"
+  • "15kg Shori Growth M" = "Shori Growth floating M size 15kg" ONLY if catalog item is Growth/Floating — sinking ≠ floating.
+Rules: match brand (Shori/JPD/Akafuji) + type (sinking/floating/growth) + weight (15kg/20kg) + size (L/M/S). "L/M" in catalog = one SKU for L or M.
+If two lines sound similar, call get_business_data query=products before billing. Use the catalog name in invoices once matched.
+
+NATURAL LANGUAGE:
+Users speak casually. Infer names from live data (first names ok). Defaults: qty=1, prices from catalog, invoice due = today+7.
+Convert "tomorrow", "next Friday" → YYYY-MM-DD / HH:MM before tools.
+Phrase mapping:
+  • paid / settled → mark_invoice_paid
+  • bill / invoice / charge → create_invoice
+  • cancel / void invoice → cancel_invoice (needs user confirmation)
+  • sell koi / mark sold → sell_koi (confirmation)
+  • refund koi → refund_koi_sale (confirmation)
+  • stock in → restock_product
+  • deliver → schedule_delivery (postal + address, no area field)
+  • delete / remove → matching delete_* tool (confirmation)
+  • edit / update → matching update_* tool (confirmation)
+  • open / show → navigate_to
+  • how much / low stock / ponds → get_business_data
+
+APP MODULES: dashboard, inventory, koifish (farm stock), customerkoi (kept for customers), ponds, invoices, customers, expenses, deliveries, calendar, chat.
+
+RISKY ACTIONS: cancel_invoice, delete_*, refund_koi_sale, sell_koi, update_* — the app asks the USER to confirm before running. Explain what will happen; do not say it is done until confirmed.
+
+USER: ${currentUser?.displayName || currentUser?.name || 'User'} (${role})
+${isOwner ? 'Owner — full access.' : `Staff permissions: ${perms.join(', ') || 'view only'}. Edit/delete/refund need Team & Permissions grants.`}
 Today: ${now}
 
-Customers: ${customers.map((c) => `${c.name} (${c.area}, ${c.tier})`).join('; ') || 'none'}
-
-Products (use these prices when billing): ${products.map((p) => `${p.name} S$${p.price}/${p.unit}, stock ${p.stock}`).join('; ')}
-
-Invoices — pending: ${pending.map((i) => `${i.id} ${i.customerName} ${formatSGD(i.total)}`).join('; ') || 'none'}
-Invoices — overdue: ${overdue.map((i) => `${i.id} ${i.customerName}`).join('; ') || 'none'}
-Revenue (paid): ${formatSGD(paid.reduce((s, i) => s + i.total, 0))} | Expense receipts: ${expenses.length}
-
+Snapshot: ${customers.length} customers · ${products.length} products · ${koiAvailable.length} koi in stock · ${koiSold.length} sold · ${customerKoiList.length} customer koi · ${pondData?.ponds?.length || 0} ponds
+Pending invoices: ${pending.length} · Overdue: ${overdue.length}
+Revenue (paid): ${formatSGD(paid.reduce((s, i) => s + (i.total || i.amount || 0), 0))} · Expense receipts: ${expenses.length}
 Low stock: ${lowStock.length ? lowStock.map((p) => p.name).join(', ') : 'none'}
-Active deliveries: ${deliveries.filter((d) => d.status === 'scheduled' || d.status === 'transit').map((d) => `${d.id} ${d.customerName} ${d.schedule}`).join('; ') || 'none'}
-Today's events: ${events.filter((e) => e.date === now).map((e) => `${e.time || ''} ${e.title}`.trim()).join('; ') || 'none'}
-Upcoming events: ${events.filter((e) => e.date > now).slice(0, 6).map((e) => `${e.title} (${e.date})`).join('; ') || 'none'}
 
-Fish expertise: Koi care, Arowana care, Singapore areas, pond management.`
+KOI STOCK: ${koiAvailable.slice(0, 15).map((k) => `${k.id} ${k.name || k.variety} ${formatKoiSize(k.size)} ${k.status} ${k.price ? formatSGD(k.price) : ''}`).join('; ') || 'none'}
+
+Customers: ${customers.slice(0, 20).map((c) => `${c.name} (${c.whatsapp || c.phone || '—'}, ${calcCustomerTier(c.totalSpent)})`).join('; ') || 'none'}
+
+Products (${products.length}): ${products.slice(0, 50).map(formatProductCatalogEntry).join(' || ') || 'none'}
+
+Pending: ${pending.slice(0, 10).map((i) => `${i.id} ${i.customerName} ${formatSGD(i.total)}`).join('; ') || 'none'}
+
+Deliveries active: ${deliveries.filter((d) => ['scheduled', 'transit'].includes(d.status)).slice(0, 8).map((d) => `${d.id} ${d.customerName}`).join('; ') || 'none'}
+
+Upcoming events: ${events.filter((e) => (e.date || '') >= now).slice(0, 8).map((e) => `${e.date} ${e.time || ''} ${e.title}`).join('; ') || 'none'}
+
+NEVER claim success without calling a tool first.`
 }
 
 export function executeAiAction(name, args, ctx) {
@@ -322,15 +444,51 @@ export function executeAiAction(name, args, ctx) {
             .map((x) => ({ title: x.title, time: x.time, type: x.type, note: x.note }))
         }
         if (q === 'summary' || q === 'customers') {
-          data.customers = ctx.customers.map((c) => ({ name: c.name, tier: c.tier, area: c.area }))
+          data.customers = ctx.customers.map((c) => ({
+            name: c.name, tier: calcCustomerTier(c.totalSpent), postalCode: c.postalCode, whatsapp: c.whatsapp || c.phone,
+          }))
         }
         if (q === 'summary' || q === 'products') {
-          data.products = ctx.products.map((p) => ({ name: p.name, stock: p.stock, price: p.price, unit: p.unit }))
+          data.products = ctx.products.map((p) => ({
+            name: p.name,
+            description: p.description || '',
+            sku: p.sku || '',
+            category: p.category || '',
+            stock: p.stock,
+            price: p.price,
+            unit: p.unit,
+          }))
+        }
+        if (q === 'koi_stock') {
+          data.koiStock = (ctx.koiFishList || []).filter((k) => k.status !== KOI_STATUS.SOLD).map((k) => ({
+            id: k.id, name: k.name, variety: k.variety, size: formatKoiSize(k.size), status: k.status, price: k.price, pond: k.pondName,
+          }))
+        }
+        if (q === 'sold_koi') {
+          data.soldKoi = (ctx.koiFishList || []).filter((k) => k.status === KOI_STATUS.SOLD).map((k) => {
+            const cust = ctx.customers.find((c) => String(c.id) === String(k.soldTo))
+            return {
+              id: k.id, name: k.name || k.variety, customer: cust?.name, soldPrice: k.soldPrice, soldDate: k.soldDate,
+              disposition: k.sellDisposition,
+            }
+          })
+        }
+        if (q === 'customer_koi') {
+          data.customerKoi = (ctx.customerKoiList || []).map((r) => ({
+            id: r.id, customer: r.customerName, koiId: r.koiId, fish: r.fishName || r.variety, pond: r.pondName, status: r.status,
+          }))
+        }
+        if (q === 'ponds') {
+          data.ponds = (ctx.pondData?.ponds || []).map((p) => ({
+            name: p.name || p.id, type: p.type, volume: p.volume,
+            lastpH: p.lastpH, lastAmmonia: p.lastAmmonia, lastNitrite: p.lastNitrite, lastSalt: p.lastSalt,
+          }))
         }
         if (q === 'summary') {
           data.totals = {
             customers: ctx.customers.length,
-            revenue: ctx.invoices.filter((i) => i.status === 'paid').reduce((s, i) => s + i.total, 0),
+            koiStock: (ctx.koiFishList || []).filter((k) => k.status !== KOI_STATUS.SOLD).length,
+            revenue: ctx.invoices.filter((i) => getInvoiceStatus(i) === 'paid').reduce((s, i) => s + (i.total || 0), 0),
             expenseReceipts: ctx.expenses.length,
           }
         }
@@ -340,8 +498,12 @@ export function executeAiAction(name, args, ctx) {
         if (data.overdueInvoices?.length) summaryParts.push(`${data.overdueInvoices.length} overdue invoice(s)`)
         if (data.todayDeliveries?.length) summaryParts.push(`${data.todayDeliveries.length} delivery(ies) today`)
         if (data.todayEvents?.length) summaryParts.push(`${data.todayEvents.length} event(s) today`)
+        if (data.koiStock?.length) summaryParts.push(`${data.koiStock.length} koi in stock`)
+        if (data.soldKoi?.length) summaryParts.push(`${data.soldKoi.length} sold koi`)
+        if (data.customerKoi?.length) summaryParts.push(`${data.customerKoi.length} customer koi at farm`)
+        if (data.ponds?.length) summaryParts.push(`${data.ponds.length} pond(s)`)
         if (data.totals) {
-          summaryParts.push(`${data.totals.customers} customers, ${formatSGD(data.totals.revenue)} paid revenue`)
+          summaryParts.push(`${data.totals.customers} customers, ${data.totals.koiStock ?? 0} koi, ${formatSGD(data.totals.revenue)} revenue`)
         }
         return {
           success: true,
@@ -425,9 +587,11 @@ export function executeAiAction(name, args, ctx) {
         const c = {
           id: Date.now(),
           name,
-          phone: a.phone || '',
-          whatsapp: a.phone || '',
-          area: a.area || 'Tampines',
+          phone: a.phone || a.whatsapp || '',
+          whatsapp: a.whatsapp || a.phone || '',
+          area: '',
+          postalCode: a.postalCode?.trim() || '',
+          address: a.address?.trim() || '',
           fishTypes: a.fishTypes || [],
           tier: 'Bronze',
           notes: a.notes || '',
@@ -442,7 +606,15 @@ export function executeAiAction(name, args, ctx) {
       case 'restock_product': {
         if (!canDo(currentUser, 'inventory')) return { success: false, error: 'No permission for inventory' }
         const product = findProduct(ctx, a.productName)
-        if (!product) return { success: false, error: `Could not find product matching "${a.productName}"` }
+        if (!product) {
+          const near = findProductCandidates(ctx.products, a.productName, 3)
+          return {
+            success: false,
+            error: near.length
+              ? `Could not find "${a.productName}". Did you mean: ${near.map((p) => p.name).join(', ')}?`
+              : `Could not find product matching "${a.productName}"`,
+          }
+        }
         const qty = parseQuantity(a.quantity)
         if (!qty || qty <= 0) return { success: false, error: 'How much stock to add?' }
 
@@ -459,7 +631,11 @@ export function executeAiAction(name, args, ctx) {
         }, ...prev])
         addNotification?.({ type: 'info', title: 'Restocked (AI)', message: `${product.name} +${qty} ${product.unit}` })
         onNavigate?.('inventory')
-        return { success: true, message: `Restocked ${product.name} by ${qty} ${product.unit}. New stock: ${product.stock + qty}` }
+        const matched = productMatchHint(a.productName, product)
+        return {
+          success: true,
+          message: `Restocked ${product.name} by ${qty} ${product.unit}. New stock: ${product.stock + qty}${matched && matched !== product.name ? ` (matched from "${a.productName}")` : ''}`,
+        }
       }
 
       case 'add_expense': {
@@ -491,7 +667,6 @@ export function executeAiAction(name, args, ctx) {
           id: genId('DEL'),
           customerId: fromCustomer.customerId || null,
           customerName: displayName,
-          area: a.area || fromCustomer.area || 'Tampines',
           postalCode: a.postalCode || fromCustomer.postalCode || '',
           address,
           schedule: a.schedule,
@@ -542,6 +717,194 @@ export function executeAiAction(name, args, ctx) {
         return { success: true, message: `Added "${title}" on ${a.date}` }
       }
 
+      case 'cancel_invoice': {
+        if (!canDo(currentUser, 'invoices')) return { success: false, error: 'No permission for invoices' }
+        if (!canDelete(currentUser)) return { success: false, error: 'No delete permission — ask the owner to grant Delete records' }
+        const inv = findCancellableInvoice(ctx, a)
+        if (!inv) return { success: false, error: 'No cancellable invoice found (must be pending or overdue)' }
+        restoreStockForInvoice(ctx.setProducts, ctx.setStockLog, ctx.products, inv.items || [], {
+          invoiceId: inv.id,
+          by: currentUser?.name || 'Staff',
+        })
+        restoreInvoiceKoiSales(inv.items || [], ctx.setKoiFishList, ctx.setCustomerKoiList)
+        ctx.setInvoices((prev) => prev.map((i) => (i.id === inv.id ? { ...i, status: 'cancelled' } : i)))
+        addNotification?.({ type: 'info', title: 'Invoice Cancelled (AI)', message: `${inv.id} cancelled. Stock restored.` })
+        onNavigate?.('invoices')
+        return { success: true, message: `Cancelled ${inv.id} for ${inv.customerName}` }
+      }
+
+      case 'update_customer': {
+        if (!canDo(currentUser, 'customers')) return { success: false, error: 'No permission for customers' }
+        if (!canEdit(currentUser)) return { success: false, error: 'No edit permission' }
+        const customer = findCustomer(ctx, a.name)
+        if (!customer) return { success: false, error: `Customer not found: ${a.name}` }
+        const updated = {
+          ...customer,
+          whatsapp: a.whatsapp ?? customer.whatsapp,
+          phone: a.phone ?? customer.phone,
+          postalCode: a.postalCode ?? customer.postalCode,
+          address: a.address ?? customer.address,
+          fishTypes: a.fishTypes ?? customer.fishTypes,
+          notes: a.notes ?? customer.notes,
+        }
+        ctx.setCustomers((prev) => prev.map((c) => (c.id === customer.id ? updated : c)))
+        addNotification?.({ type: 'success', title: 'Customer Updated (AI)', message: customer.name })
+        onNavigate?.('customers')
+        return { success: true, message: `Updated ${customer.name}` }
+      }
+
+      case 'delete_customer': {
+        if (!canDo(currentUser, 'customers')) return { success: false, error: 'No permission for customers' }
+        if (!canDelete(currentUser)) return { success: false, error: 'No delete permission' }
+        const customer = findCustomer(ctx, a.name)
+        if (!customer) return { success: false, error: `Customer not found: ${a.name}` }
+        ctx.setCustomers((prev) => prev.filter((c) => c.id !== customer.id))
+        addNotification?.({ type: 'info', title: 'Customer Deleted (AI)', message: customer.name })
+        onNavigate?.('customers')
+        return { success: true, message: `Deleted customer ${customer.name}` }
+      }
+
+      case 'delete_product': {
+        if (!canDo(currentUser, 'inventory')) return { success: false, error: 'No permission for inventory' }
+        if (!canDelete(currentUser)) return { success: false, error: 'No delete permission' }
+        const product = findProduct(ctx, a.productName)
+        if (!product) return { success: false, error: `Product not found: ${a.productName}` }
+        ctx.setProducts((prev) => prev.filter((p) => p.id !== product.id))
+        addNotification?.({ type: 'info', title: 'Product Deleted (AI)', message: product.name })
+        onNavigate?.('inventory')
+        return { success: true, message: `Removed ${product.name} from inventory` }
+      }
+
+      case 'sell_koi': {
+        if (!canDo(currentUser, 'koifish')) return { success: false, error: 'No permission for Koi Fish' }
+        const customer = findCustomer(ctx, a.customerName)
+        if (!customer) return { success: false, error: `Customer not found: ${a.customerName}` }
+        const koi = findKoi(ctx, a)
+        if (!koi) return { success: false, error: 'Koi not found in stock' }
+        if (koi.status === KOI_STATUS.SOLD) return { success: false, error: `${koi.id} is already sold` }
+        if (![KOI_STATUS.AVAILABLE, KOI_STATUS.SICK].includes(koi.status)) {
+          return { success: false, error: `${koi.id} cannot be sold (status: ${koi.status})` }
+        }
+        const disposition = a.disposition === 'keep' ? 'keep' : 'taken'
+        const keepPondName = a.keepPondName?.trim() || koi.pondName || ''
+        if (disposition === 'keep' && !keepPondName) {
+          return { success: false, error: 'Pond name required when fish is kept at farm' }
+        }
+        const soldPrice = parseQuantity(a.soldPrice) || koi.price || 0
+        const soldDate = a.soldDate || today()
+        ctx.setKoiFishList((prev) => prev.map((k) => (k.id === koi.id ? {
+          ...k,
+          status: KOI_STATUS.SOLD,
+          soldTo: customer.id,
+          soldPrice,
+          soldDate,
+          sellDisposition: disposition,
+          keepPondName: disposition === 'keep' ? keepPondName : null,
+        } : k)))
+        ctx.onKoiSold?.(koi, customer, soldPrice, soldDate, { disposition, keepPondName })
+        const dispositionNote = disposition === 'keep' ? `kept at ${keepPondName}` : 'taken away'
+        addNotification?.({
+          type: 'success',
+          title: 'Koi Sold (AI)',
+          message: `${koi.id} → ${customer.name} ${formatSGD(soldPrice)} (${dispositionNote})`,
+        })
+        if (a.createInvoice !== false && ctx.onCreateInvoiceFromSale) {
+          ctx.onCreateInvoiceFromSale({
+            customerId: String(customer.id),
+            customerName: customer.name,
+            manualCustomer: false,
+            items: [{
+              name: formatKoiInvoiceLineName(koi),
+              qty: 1,
+              price: soldPrice,
+              productId: '',
+              manual: false,
+              koiId: koi.id,
+              koiDisposition: disposition,
+              keepPondName: disposition === 'keep' ? keepPondName : '',
+              koiAlreadySold: true,
+            }],
+            notes: `Koi sale — ${koi.name || koi.variety} (${koi.id})`,
+            due: soldDate,
+            discountType: 'none',
+            discountValue: '',
+          })
+        } else {
+          onNavigate?.('koifish')
+        }
+        return { success: true, message: `Sold ${koi.id} to ${customer.name} for ${formatSGD(soldPrice)} (${dispositionNote})` }
+      }
+
+      case 'refund_koi_sale': {
+        if (!canDo(currentUser, 'koifish')) return { success: false, error: 'No permission for Koi Fish' }
+        if (!canRefund(currentUser)) return { success: false, error: 'No refund permission' }
+        const koi = findSoldKoi(ctx, a)
+        if (!koi) return { success: false, error: 'Sold koi not found' }
+        ctx.onKoiRefund?.(koi, { reason: a.reason || 'AI refund' })
+        onNavigate?.('koifish')
+        return { success: true, message: `Refunded ${koi.id} (${koi.name || koi.variety}) — back in stock` }
+      }
+
+      case 'update_delivery': {
+        if (!canDo(currentUser, 'deliveries')) return { success: false, error: 'No permission for deliveries' }
+        if (!canEdit(currentUser)) return { success: false, error: 'No edit permission' }
+        const del = findDelivery(ctx, a)
+        if (!del) return { success: false, error: 'Delivery not found' }
+        const patch = {
+          address: a.address ?? del.address,
+          postalCode: a.postalCode ?? del.postalCode,
+          schedule: a.schedule ?? del.schedule,
+          items: a.items ?? del.items,
+          driver: a.driver ?? del.driver,
+          notes: a.notes ?? del.notes,
+        }
+        ctx.setDeliveries((prev) => prev.map((d) => (String(d.id) === String(del.id) ? { ...d, ...patch } : d)))
+        addNotification?.({ type: 'success', title: 'Delivery Updated (AI)', message: del.id })
+        onNavigate?.('deliveries')
+        return { success: true, message: `Updated delivery ${del.id}` }
+      }
+
+      case 'delete_delivery': {
+        if (!canDo(currentUser, 'deliveries')) return { success: false, error: 'No permission for deliveries' }
+        if (!canDelete(currentUser)) return { success: false, error: 'No delete permission' }
+        const del = findDelivery(ctx, a)
+        if (!del) return { success: false, error: 'Delivery not found' }
+        ctx.setDeliveries((prev) => prev.filter((d) => String(d.id) !== String(del.id)))
+        addNotification?.({ type: 'info', title: 'Delivery Deleted (AI)', message: del.id })
+        onNavigate?.('deliveries')
+        return { success: true, message: `Deleted delivery ${del.id} (${del.customerName})` }
+      }
+
+      case 'update_calendar_event': {
+        if (!canDo(currentUser, 'calendar')) return { success: false, error: 'No permission for calendar' }
+        if (!canEdit(currentUser)) return { success: false, error: 'No edit permission' }
+        const ev = findCalendarEvent(ctx, a)
+        if (!ev) return { success: false, error: 'Event not found' }
+        const updated = {
+          ...ev,
+          title: a.newTitle ?? ev.title,
+          date: a.newDate ?? ev.date,
+          time: a.newTime ?? ev.time,
+          type: a.newType ?? ev.type,
+          note: a.note ?? ev.note,
+        }
+        ctx.setEvents((prev) => prev.map((e) => (e.id === ev.id ? updated : e)))
+        addNotification?.({ type: 'success', title: 'Event Updated (AI)', message: updated.title })
+        onNavigate?.('calendar')
+        return { success: true, message: `Updated event "${updated.title}"` }
+      }
+
+      case 'delete_calendar_event': {
+        if (!canDo(currentUser, 'calendar')) return { success: false, error: 'No permission for calendar' }
+        if (!canDelete(currentUser)) return { success: false, error: 'No delete permission' }
+        const ev = findCalendarEvent(ctx, a)
+        if (!ev) return { success: false, error: 'Event not found' }
+        ctx.setEvents((prev) => prev.filter((e) => e.id !== ev.id))
+        addNotification?.({ type: 'info', title: 'Event Deleted (AI)', message: ev.title })
+        onNavigate?.('calendar')
+        return { success: true, message: `Deleted event "${ev.title}" on ${ev.date}` }
+      }
+
       default:
         return { success: false, error: `Unknown action: ${name}` }
     }
@@ -550,9 +913,35 @@ export function executeAiAction(name, args, ctx) {
   }
 }
 
-export function executeAiActions(calls, ctx) {
+export function executeAiActions(calls, ctx, options = {}) {
+  const { skipRiskCheck = false } = options
   return calls.map((call) => {
+    if (!skipRiskCheck && isRiskyAiAction(call.name)) {
+      return {
+        name: call.name,
+        response: {
+          success: false,
+          requiresConfirm: true,
+          confirmKey: actionConfirmKey(call.name, call.args),
+          summary: describeRiskyAction(call.name, call.args, ctx),
+          action: { name: call.name, args: call.args || {} },
+        },
+      }
+    }
     const result = executeAiAction(call.name, call.args || {}, ctx)
     return { name: call.name, response: result }
+  })
+}
+
+/** Run deferred risky actions after the user confirms in AI Chat. */
+export function resolvePendingAiActions(partialResults, ctx) {
+  const riskyCalls = partialResults
+    .filter((r) => r.response?.requiresConfirm)
+    .map((r) => ({ name: r.name, args: r.response.action?.args || {} }))
+  if (!riskyCalls.length) return partialResults
+  const executed = executeAiActions(riskyCalls, ctx, { skipRiskCheck: true })
+  return partialResults.map((r) => {
+    if (!r.response?.requiresConfirm) return r
+    return executed.find((e) => e.name === r.name) || r
   })
 }

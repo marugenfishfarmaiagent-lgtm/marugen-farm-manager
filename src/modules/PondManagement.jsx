@@ -1,12 +1,14 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
-  Droplets, Plus, AlertTriangle, Beaker, Bell, BookOpen, Trash2, Check, Edit2,
+  Droplets, AlertTriangle, Beaker, Bell, BookOpen, Trash2, Check, Edit2, Calculator,
 } from 'lucide-react'
+import PondCalculator from './PondCalculator'
 import {
   POND_TYPES, MAINTENANCE_TYPES, DEFAULT_TREATMENT_GUIDES, genId, today,
 } from '../data/constants'
 import { Badge, Btn, Card, Input, Modal, PondNameInput, Select, Textarea } from '../components/ui'
 import Fab from '../components/Fab'
+import { filterPondLogsForApp } from '../lib/retention'
 
 const POND_TYPE_COLOR = { koi: 'bg-cyan-500/20 text-cyan-300', arowana: 'bg-amber-500/20 text-amber-300', quarantine: 'bg-red-500/20 text-red-300', display: 'bg-purple-500/20 text-purple-300' }
 
@@ -26,9 +28,11 @@ function paramColor(kind, value) {
   return 'text-white'
 }
 
-export default function PondManagement({ pondData, setPondData, addNotification, currentUser }) {
+export default function PondManagement({ pondData, setPondData, addNotification, currentUser, canEdit = false, canDelete = false }) {
   const { ponds, maintenanceLogs, treatmentLogs, reminders, treatmentGuides } = pondData
-  const isOwner = currentUser?.role === 'owner'
+  const visiblePond = useMemo(() => filterPondLogsForApp(pondData), [pondData])
+  const denyEdit = () => addNotification({ type: 'error', title: 'Permission Denied', message: 'You need the "Edit records" permission. Contact the farm owner.' })
+  const denyDelete = () => addNotification({ type: 'error', title: 'Permission Denied', message: 'You need the "Delete records" permission. Contact the farm owner.' })
 
   const [tab, setTab] = useState('ponds')
   const [showAddPond, setShowAddPond] = useState(false)
@@ -48,8 +52,8 @@ export default function PondManagement({ pondData, setPondData, addNotification,
 
   const todayStr = today()
   const activeTreatments = treatmentLogs.filter((t) => t.startDate <= todayStr && (!t.endDate || t.endDate >= todayStr))
-  const overdueReminders = reminders.filter((r) => r.status === 'pending' && r.dueDate < todayStr)
-  const pendingReminders = reminders.filter((r) => r.status === 'pending' && r.dueDate >= todayStr)
+  const overdueReminders = visiblePond.reminders.filter((r) => r.status === 'pending' && r.dueDate < todayStr)
+  const pendingReminders = visiblePond.reminders.filter((r) => r.status === 'pending' && r.dueDate >= todayStr)
 
   const update = (patch) => setPondData((prev) => ({ ...prev, ...patch }))
   const hasPonds = ponds.length > 0
@@ -158,12 +162,14 @@ export default function PondManagement({ pondData, setPondData, addNotification,
   }
 
   const openAddGuide = () => {
+    if (!canEdit) { denyEdit(); return }
     setEditingGuideId(null)
     setGuideForm({ title: '', category: '', steps: '', warning: '' })
     setGuideModal(true)
   }
 
   const openEditGuide = (guide) => {
+    if (!canEdit) { denyEdit(); return }
     setEditingGuideId(guide.id)
     setGuideForm({
       title: guide.title || '',
@@ -175,6 +181,7 @@ export default function PondManagement({ pondData, setPondData, addNotification,
   }
 
   const saveGuide = () => {
+    if (!canEdit) { denyEdit(); return }
     if (!guideForm.title?.trim()) {
       addNotification({ type: 'error', title: 'Title Required', message: 'Enter a guide title.' })
       return
@@ -201,12 +208,13 @@ export default function PondManagement({ pondData, setPondData, addNotification,
   }
 
   const deleteGuide = (guideId) => {
+    if (!canDelete) { denyDelete(); return }
     const guides = ensureGuidesMutable().filter((g) => g.id !== guideId)
     update({ treatmentGuides: guides })
     addNotification({ type: 'info', title: 'Guide Removed', message: 'Treatment guide deleted.' })
   }
 
-  const filteredLogs = maintenanceLogs.filter((l) => pondFilter === 'all' || l.pondId === pondFilter)
+  const filteredLogs = visiblePond.maintenanceLogs.filter((l) => pondFilter === 'all' || l.pondId === pondFilter)
 
   const openNewMaint = () => {
     setMaintForm({ pondId: ponds[0]?.id || '', type: 'water_test', date: today(), notes: '', showParams: true, pH: '', ammonia: '', nitrite: '', saltLevel: '' })
@@ -225,6 +233,7 @@ export default function PondManagement({ pondData, setPondData, addNotification,
 
   const saveEditPond = () => {
     if (!editPond) return
+    if (!canEdit) { denyEdit(); return }
     const name = editPond.name?.trim()
     if (!name) {
       addNotification({ type: 'error', title: 'Pond Name Required', message: 'Enter a pond name.' })
@@ -251,14 +260,14 @@ export default function PondManagement({ pondData, setPondData, addNotification,
     setEditPond(null)
   }
 
-  const tabs = ['ponds', 'maintenance', 'treatments', 'reminders', 'guide']
+  const tabs = ['ponds', 'calculator', 'maintenance', 'treatments', 'reminders', 'guide']
 
   const fabByTab = {
     ponds: { onClick: () => setShowAddPond(true), label: 'Add Pond' },
     maintenance: { onClick: openNewMaint, label: 'Log Maintenance', disabled: !hasPonds },
     treatments: { onClick: openNewTreatment, label: 'Log Treatment', disabled: !hasPonds },
     reminders: { onClick: openNewReminder, label: 'Add Reminder', disabled: !hasPonds, icon: Bell },
-    guide: isOwner ? { onClick: openAddGuide, label: 'Add Guide' } : null,
+    guide: canEdit ? { onClick: openAddGuide, label: 'Add Guide' } : null,
   }
   const fabAction = fabByTab[tab]
   const pondModalOpen = showAddPond || !!editPond || !!maintModal || !!treatModal || !!remindModal || !!guideModal
@@ -267,14 +276,17 @@ export default function PondManagement({ pondData, setPondData, addNotification,
     <div className="space-y-4 pb-20 lg:pb-12">
       <div>
         <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2"><Droplets className="text-cyan-400" />Pond Management</h2>
-        <p className="text-slate-400 text-sm">Maintenance · treatments · reminders</p>
+        <p className="text-slate-400 text-sm">Volume & salt calculator · maintenance · treatments</p>
       </div>
       {fabAction && <Fab {...fabAction} hidden={pondModalOpen} />}
 
       <div className="flex gap-2 overflow-x-auto pb-1">
         {tabs.map((t) => (
           <button key={t} type="button" onClick={() => setTab(t)}
-            className={`px-3 py-2 rounded-lg text-xs font-bold capitalize shrink-0 ${tab === t ? 'bg-cyan-500 text-slate-900' : 'bg-slate-700 text-slate-300'}`}>{t === 'guide' ? 'Treatment Guide' : t}</button>
+            className={`px-3 py-2 rounded-lg text-xs font-bold capitalize shrink-0 flex items-center gap-1.5 ${tab === t ? 'bg-cyan-500 text-slate-900' : 'bg-slate-700 text-slate-300'}`}>
+            {t === 'calculator' && <Calculator size={12} />}
+            {t === 'guide' ? 'Treatment Guide' : t === 'calculator' ? 'Calculator' : t}
+          </button>
         ))}
       </div>
 
@@ -315,13 +327,15 @@ export default function PondManagement({ pondData, setPondData, addNotification,
                   <Btn variant="secondary" size="sm" onClick={() => { setMaintModal(p.id); setMaintForm((f) => ({ ...f, pondId: p.id, date: today() })) }}>Maintenance</Btn>
                   <Btn variant="secondary" size="sm" onClick={() => { setTreatModal(p.id); setTreatForm((f) => ({ ...f, pondId: p.id })) }}>Treatment</Btn>
                   <Btn variant="ghost" size="sm" onClick={() => { setRemindModal(p.id); setRemindForm((f) => ({ ...f, pondId: p.id })) }}><Bell size={12} /></Btn>
-                  <Btn variant="ghost" size="sm" onClick={() => setEditPond({ ...p })}>Edit</Btn>
+                  {canEdit && <Btn variant="ghost" size="sm" onClick={() => setEditPond({ ...p })}>Edit</Btn>}
                 </div>
               </Card>
             )
           })}
         </div>
       )}
+
+      {tab === 'calculator' && <PondCalculator ponds={ponds} />}
 
       {tab === 'maintenance' && (
         <>
@@ -331,7 +345,7 @@ export default function PondManagement({ pondData, setPondData, addNotification,
             <div className="divide-y divide-slate-700/50">
               {filteredLogs.length === 0 ? (
                 <p className="p-6 text-slate-500 text-sm text-center">
-                  {maintenanceLogs.length === 0 ? 'No maintenance logs yet.' : 'No logs for the selected pond.'}
+                  {visiblePond.maintenanceLogs.length === 0 ? 'No maintenance logs yet.' : 'No logs for the selected pond.'}
                 </p>
               ) : filteredLogs.map((l) => (
                 <div key={l.id} className="p-3 text-sm flex flex-wrap gap-2 items-center">
@@ -362,9 +376,9 @@ export default function PondManagement({ pondData, setPondData, addNotification,
             <table className="w-full text-sm">
               <thead><tr className="bg-slate-700/30 text-slate-400 text-xs"><th className="p-2 text-left">Pond</th><th className="p-2 text-left">Medicine</th><th className="p-2 text-left">Period</th><th className="p-2 text-left">By</th></tr></thead>
               <tbody className="divide-y divide-slate-700/30">
-                {treatmentLogs.length === 0 ? (
+                {visiblePond.treatmentLogs.length === 0 ? (
                   <tr><td colSpan={4} className="p-6 text-center text-slate-500 text-sm">No treatment logs yet.</td></tr>
-                ) : treatmentLogs.map((t) => (
+                ) : visiblePond.treatmentLogs.map((t) => (
                   <tr key={t.id} className="text-slate-300"><td className="p-2">{t.pondName}</td><td className="p-2">{t.medicine}</td><td className="p-2">{t.startDate} → {t.endDate || 'ongoing'}</td><td className="p-2 text-xs">{t.performedBy}</td></tr>
                 ))}
               </tbody>
@@ -394,7 +408,12 @@ export default function PondManagement({ pondData, setPondData, addNotification,
               <span className="text-white">{r.pondName} · {r.dueDate} {r.dueTime}</span>
               <div className="flex gap-2">
                 <Btn variant="success" size="sm" onClick={() => update({ reminders: reminders.map((x) => (x.id === r.id ? { ...x, status: 'done' } : x)) })}>Done</Btn>
-                <Btn variant="ghost" size="sm" onClick={() => update({ reminders: reminders.filter((x) => x.id !== r.id) })}><Trash2 size={12} /></Btn>
+                {canDelete && (
+                  <Btn variant="ghost" size="sm" onClick={() => {
+                    if (!canDelete) { denyDelete(); return }
+                    update({ reminders: reminders.filter((x) => x.id !== r.id) })
+                  }}><Trash2 size={12} /></Btn>
+                )}
               </div>
             </Card>
           ))}
@@ -413,10 +432,10 @@ export default function PondManagement({ pondData, setPondData, addNotification,
                   <p className="text-slate-300 text-sm mt-2 whitespace-pre-wrap">{g.steps}</p>
                   {g.warning && <p className="text-amber-400 text-xs mt-2">⚠ {g.warning}</p>}
                 </div>
-                {isOwner && (
+                {(canEdit || canDelete) && (
                   <div className="flex flex-col gap-1 shrink-0">
-                    <Btn variant="ghost" size="sm" onClick={() => openEditGuide(g)}><Edit2 size={12} /></Btn>
-                    <Btn variant="danger" size="sm" onClick={() => deleteGuide(g.id)}><Trash2 size={12} /></Btn>
+                    {canEdit && <Btn variant="ghost" size="sm" onClick={() => openEditGuide(g)}><Edit2 size={12} /></Btn>}
+                    {canDelete && <Btn variant="danger" size="sm" onClick={() => deleteGuide(g.id)}><Trash2 size={12} /></Btn>}
                   </div>
                 )}
               </div>

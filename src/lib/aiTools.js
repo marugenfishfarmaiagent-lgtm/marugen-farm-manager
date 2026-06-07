@@ -1,14 +1,14 @@
 export const AI_TOOL_DEFINITIONS = [
   {
     name: 'navigate_to',
-    description: 'Open an app section when the user wants to see, check, or go somewhere. Examples: "show me stock", "open invoices", "take me to customers", "where are deliveries".',
+    description: 'Open an app section. Examples: "show me stock", "open invoices", "koi fish", "pond management", "customer koi".',
     parameters: {
       type: 'object',
       properties: {
         section: {
           type: 'string',
           enum: ['dashboard', 'inventory', 'koifish', 'customerkoi', 'ponds', 'invoices', 'customers', 'expenses', 'deliveries', 'calendar', 'chat'],
-          description: 'dashboard=home; inventory=stock; koifish/customerkoi=fish; ponds=pond mgmt; invoices/customers/expenses/deliveries/calendar; chat=this assistant',
+          description: 'koifish=farm stock; customerkoi=fish kept for customers; ponds=pond mgmt',
         },
       },
       required: ['section'],
@@ -16,14 +16,17 @@ export const AI_TOOL_DEFINITIONS = [
   },
   {
     name: 'get_business_data',
-    description: 'Look up live data before answering questions. Examples: "what\'s running low", "who hasn\'t paid", "any deliveries today", "how are we doing".',
+    description: 'Look up live data. Use query=products to compare short vs long product names before invoicing. Use before stock/sales/pond questions.',
     parameters: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
-          enum: ['summary', 'low_stock', 'pending_invoices', 'overdue_invoices', 'today_deliveries', 'today_events', 'customers', 'products'],
-          description: 'low_stock=items below minimum; pending_invoices=unpaid bills; overdue_invoices=late payments; today_events=calendar for today',
+          enum: [
+            'summary', 'low_stock', 'pending_invoices', 'overdue_invoices', 'today_deliveries', 'today_events',
+            'customers', 'products', 'koi_stock', 'sold_koi', 'customer_koi', 'ponds',
+          ],
+          description: 'koi_stock=available/sick fish; sold_koi=recent sales; customer_koi=fish at farm for customers; ponds=pond list & water params',
         },
       },
       required: ['query'],
@@ -31,95 +34,175 @@ export const AI_TOOL_DEFINITIONS = [
   },
   {
     name: 'create_invoice',
-    description: 'Bill a customer. Use when user mentions charging, billing, invoicing, selling, or recording a sale. Infer items and prices from inventory when possible. Examples: "bill Sarah for a golden arowana", "Ahmad bought 3 koi and 2 bags of pellets", "walk-in customer John — koi food $28".',
+    description: 'Bill a customer. Match items to inventory by short OR long product names/descriptions (brand, sinking/floating, size L/M, weight kg). Infer prices from catalog.',
     parameters: {
       type: 'object',
       properties: {
-        customerName: { type: 'string', description: 'Full or partial customer name; walk-in name ok' },
+        customerName: { type: 'string' },
         items: {
           type: 'array',
-          description: 'Line items. Price optional if product exists in inventory — will use catalog price.',
           items: {
             type: 'object',
             properties: {
-              name: { type: 'string', description: 'Product or fish name' },
-              qty: { type: 'number', description: 'Defaults to 1 if omitted' },
-              price: { type: 'number', description: 'Unit price in SGD; omit to use inventory price' },
+              name: { type: 'string', description: 'Product line — short catalog name or full spoken description' },
+              qty: { type: 'number' },
+              price: { type: 'number' },
             },
             required: ['name'],
           },
         },
         notes: { type: 'string' },
-        due: { type: 'string', description: 'Due date YYYY-MM-DD; default today+7 if user says "next week"' },
-        discountType: { type: 'string', enum: ['none', 'fixed', 'percent'], description: 'Discount type; use when user mentions discount, rebate, or % off' },
-        discountValue: { type: 'number', description: 'Discount amount in SGD (fixed) or percentage 1-100 (percent)' },
+        due: { type: 'string', description: 'YYYY-MM-DD' },
+        discountType: { type: 'string', enum: ['none', 'fixed', 'percent'] },
+        discountValue: { type: 'number' },
       },
       required: ['customerName', 'items'],
     },
   },
   {
-    name: 'mark_invoice_paid',
-    description: 'Record payment received. Examples: "Sarah paid", "got money from Ahmad", "mark that invoice paid", "payment came in for INV-002", "they settled the bill".',
+    name: 'cancel_invoice',
+    description: 'Cancel a pending/overdue invoice. DESTRUCTIVE — user must confirm. Examples: "cancel INV-001", "void Sarah\'s invoice".',
     parameters: {
       type: 'object',
       properties: {
-        invoiceId: { type: 'string', description: 'Invoice ID if known' },
-        customerName: { type: 'string', description: 'Customer first or full name — marks their latest unpaid invoice' },
+        invoiceId: { type: 'string' },
+        customerName: { type: 'string', description: 'If ID unknown — cancels latest cancellable invoice for customer' },
+      },
+    },
+  },
+  {
+    name: 'mark_invoice_paid',
+    description: 'Record payment received. Examples: "Sarah paid", "mark INV-002 paid".',
+    parameters: {
+      type: 'object',
+      properties: {
+        invoiceId: { type: 'string' },
+        customerName: { type: 'string' },
       },
     },
   },
   {
     name: 'create_customer',
-    description: 'Register a new customer. Examples: "add new client Mike", "someone called David from Bedok wants koi", "register customer".',
+    description: 'Register a new customer. WhatsApp number preferred.',
     parameters: {
       type: 'object',
       properties: {
         name: { type: 'string' },
+        whatsapp: { type: 'string' },
         phone: { type: 'string' },
-        area: { type: 'string', description: 'Singapore area if mentioned' },
-        fishTypes: { type: 'array', items: { type: 'string' }, description: 'Koi, Arowana, etc.' },
+        postalCode: { type: 'string' },
+        address: { type: 'string' },
+        fishTypes: { type: 'array', items: { type: 'string' } },
         notes: { type: 'string' },
       },
       required: ['name'],
     },
   },
   {
-    name: 'restock_product',
-    description: 'Add inventory stock. Examples: "pellets came in — 20kg", "we got more conditioner", "add 10 to koi food", "restock the air pumps, 3 units".',
+    name: 'update_customer',
+    description: 'Edit an existing customer. Requires edit permission. Examples: "update Sarah\'s address", "change Mike WhatsApp".',
     parameters: {
       type: 'object',
       properties: {
-        productName: { type: 'string', description: 'Partial product name ok: "pellets" → Koi Pellets' },
-        quantity: { type: 'number', description: 'Amount to add' },
+        name: { type: 'string', description: 'Current or partial name to find customer' },
+        whatsapp: { type: 'string' },
+        postalCode: { type: 'string' },
+        address: { type: 'string' },
+        fishTypes: { type: 'array', items: { type: 'string' } },
+        notes: { type: 'string' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'delete_customer',
+    description: 'Remove a customer from CRM. DESTRUCTIVE — requires confirmation.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        customerName: { type: 'string' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'restock_product',
+    description: 'Add inventory stock. productName can be short inventory name or long description (e.g. "15kg JPD Shori Floating L").',
+    parameters: {
+      type: 'object',
+      properties: {
+        productName: { type: 'string', description: 'Catalog name or spoken description — fuzzy matched' },
+        quantity: { type: 'number' },
       },
       required: ['productName', 'quantity'],
     },
   },
   {
-    name: 'add_expense',
-    description: 'Log a business cost. Examples: "spent $50 on diesel", "paid electricity 320", "feed cost 680 today", "bought medicine".',
+    name: 'delete_product',
+    description: 'Remove a product from inventory. DESTRUCTIVE — requires confirmation.',
     parameters: {
       type: 'object',
       properties: {
-        category: { type: 'string', description: 'Feed, Transport, Utilities, Rent, Equipment, Labor, Medicine, Packaging, Marketing, Other — infer from context' },
+        productName: { type: 'string' },
+        name: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'sell_koi',
+    description: 'Mark a koi from farm stock as sold. Requires customer. disposition=taken (customer takes fish) or keep (stays at farm → Customer Koi).',
+    parameters: {
+      type: 'object',
+      properties: {
+        koiId: { type: 'string', description: 'KOI id e.g. KOI-123' },
+        name: { type: 'string', description: 'Fish name or variety if ID unknown' },
+        customerName: { type: 'string' },
+        soldPrice: { type: 'number' },
+        disposition: { type: 'string', enum: ['taken', 'keep'], description: 'keep=fish stays at farm' },
+        keepPondName: { type: 'string', description: 'Required if disposition=keep' },
+        createInvoice: { type: 'boolean', description: 'Open invoice draft after sale' },
+      },
+      required: ['customerName'],
+    },
+  },
+  {
+    name: 'refund_koi_sale',
+    description: 'Reverse a koi sale — fish returns to stock. DESTRUCTIVE — requires confirmation.',
+    parameters: {
+      type: 'object',
+      properties: {
+        koiId: { type: 'string' },
+        name: { type: 'string' },
+        reason: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'add_expense',
+    description: 'Log expense — directs user to upload receipt photo in Expenses module.',
+    parameters: {
+      type: 'object',
+      properties: {
+        category: { type: 'string' },
         amount: { type: 'number' },
-        note: { type: 'string', description: 'What the expense was for' },
-        date: { type: 'string', description: 'YYYY-MM-DD; default today' },
+        note: { type: 'string' },
+        date: { type: 'string' },
       },
       required: ['category', 'amount'],
     },
   },
   {
     name: 'schedule_delivery',
-    description: 'Arrange fish/product delivery. Examples: "deliver to Tan tomorrow morning", "schedule Sarah pickup Saturday 3pm", "send koi to Jurong next week". Use customer CRM data for area if address not given.',
+    description: 'Arrange delivery. Uses customer postal/address from CRM when possible.',
     parameters: {
       type: 'object',
       properties: {
         customerName: { type: 'string' },
-        address: { type: 'string', description: 'Full address; if unknown use "TBC — contact customer"' },
-        schedule: { type: 'string', description: 'YYYY-MM-DD HH:MM — convert "tomorrow 10am" etc.' },
-        items: { type: 'string', description: 'What is being delivered' },
-        area: { type: 'string' },
+        address: { type: 'string' },
+        postalCode: { type: 'string' },
+        schedule: { type: 'string', description: 'YYYY-MM-DDTHH:MM or YYYY-MM-DD HH:MM' },
+        items: { type: 'string' },
         driver: { type: 'string' },
         notes: { type: 'string' },
       },
@@ -127,31 +210,88 @@ export const AI_TOOL_DEFINITIONS = [
     },
   },
   {
-    name: 'update_delivery_status',
-    description: 'Change delivery progress. Examples: "Ali delivered Tan\'s order", "delivery is on the way", "cancel Ahmad\'s delivery", "mark DEL-001 done".',
+    name: 'update_delivery',
+    description: 'Edit delivery address, schedule, items, or driver. Requires edit permission.',
     parameters: {
       type: 'object',
       properties: {
         deliveryId: { type: 'string' },
-        customerName: { type: 'string', description: 'Use if ID unknown — updates their active delivery' },
-        status: { type: 'string', enum: ['scheduled', 'transit', 'delivered', 'cancelled'], description: 'delivered=done/completed; transit=on the way/out for delivery' },
+        customerName: { type: 'string' },
+        address: { type: 'string' },
+        postalCode: { type: 'string' },
+        schedule: { type: 'string' },
+        items: { type: 'string' },
+        driver: { type: 'string' },
+        notes: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'delete_delivery',
+    description: 'Delete a scheduled delivery. DESTRUCTIVE — requires confirmation.',
+    parameters: {
+      type: 'object',
+      properties: {
+        deliveryId: { type: 'string' },
+        customerName: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'update_delivery_status',
+    description: 'Change delivery progress: scheduled, transit, delivered, cancelled.',
+    parameters: {
+      type: 'object',
+      properties: {
+        deliveryId: { type: 'string' },
+        customerName: { type: 'string' },
+        status: { type: 'string', enum: ['scheduled', 'transit', 'delivered', 'cancelled'] },
       },
       required: ['status'],
     },
   },
   {
     name: 'create_calendar_event',
-    description: 'Add a reminder or task. Examples: "remind me to check water tomorrow", "feeding at 9am", "Sarah visiting Friday", "order more pellets next Monday".',
+    description: 'Add calendar reminder or task.',
     parameters: {
       type: 'object',
       properties: {
         title: { type: 'string' },
-        date: { type: 'string', description: 'YYYY-MM-DD' },
-        time: { type: 'string', description: 'HH:MM, default 09:00' },
+        date: { type: 'string' },
+        time: { type: 'string' },
         type: { type: 'string', enum: ['maintenance', 'feeding', 'purchase', 'customer', 'other'] },
         note: { type: 'string' },
       },
       required: ['title', 'date'],
+    },
+  },
+  {
+    name: 'update_calendar_event',
+    description: 'Edit an existing calendar event. Requires edit permission.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Current title to find event' },
+        date: { type: 'string', description: 'Current date to find event' },
+        newTitle: { type: 'string' },
+        newDate: { type: 'string' },
+        newTime: { type: 'string' },
+        newType: { type: 'string' },
+        note: { type: 'string' },
+      },
+      required: ['title', 'date'],
+    },
+  },
+  {
+    name: 'delete_calendar_event',
+    description: 'Delete a calendar event. DESTRUCTIVE — requires confirmation.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        date: { type: 'string' },
+        eventId: { type: 'number' },
+      },
     },
   },
 ]

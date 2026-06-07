@@ -9,6 +9,14 @@ export function serializeInvoiceItem(it) {
   if (it.productId != null && it.productId !== '') {
     item.productId = it.productId
   }
+  if (it.koiId != null && it.koiId !== '') {
+    item.koiId = it.koiId
+    item.koiDisposition = it.koiDisposition || 'taken'
+    if (it.koiDisposition === 'keep' && it.keepPondName) {
+      item.keepPondName = it.keepPondName
+    }
+    if (it.koiAlreadySold) item.koiAlreadySold = true
+  }
   return item
 }
 
