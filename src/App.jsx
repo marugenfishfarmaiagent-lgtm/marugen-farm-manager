@@ -1558,7 +1558,7 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
 // ─────────────────────────────────────────────
 function CustomerModule({ customers, setCustomers, addNotification }) {
   const emptyForm = () => ({
-    name: "", whatsapp: "", area: "Tampines", postalCode: "", address: "", fishTypes: [], notes: "",
+    name: "", whatsapp: "", postalCode: "", address: "", fishTypes: [], notes: "",
   });
 
   const [showAdd, setShowAdd] = useState(false);
@@ -1633,7 +1633,7 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
       name,
       phone: whatsapp,
       whatsapp,
-      area: form.area || "Tampines",
+      area: "",
       postalCode: form.postalCode?.trim() || "",
       address: form.address?.trim() || "",
       fishTypes: form.fishTypes || [],
@@ -1734,7 +1734,7 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
             <div className="flex items-start justify-between mb-3">
               <div>
                 <p className="text-white font-bold">{c.name}</p>
-                <p className="text-slate-500 text-xs flex items-center gap-1"><MapPin size={10} />{c.area}{c.postalCode ? ` · ${c.postalCode}` : ""}</p>
+                <p className="text-slate-500 text-xs flex items-center gap-1"><MapPin size={10} />{c.postalCode || c.area || "—"}</p>
                 {c.address && <p className="text-slate-600 text-xs mt-0.5 truncate">{c.address}</p>}
               </div>
               <span className={`font-black text-sm ${tierColor[c.tier] || tierColor.Bronze}`}>{c.tier || "Bronze"}</span>
@@ -1761,8 +1761,7 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input label="Full Name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required className="sm:col-span-2" />
           <Input label="WhatsApp" value={form.whatsapp} onChange={e => setForm(f => ({ ...f, whatsapp: e.target.value }))} placeholder="+65 9XXX XXXX" required className="sm:col-span-2" />
-          <Select label="Area" value={form.area} onChange={e => setForm(f => ({ ...f, area: e.target.value }))} options={SG_AREAS} />
-          <Input label="Postal Code" value={form.postalCode} onChange={e => onAddPostalChange(e.target.value)} placeholder="e.g. 521123" inputMode="numeric" />
+          <Input label="Postal Code" value={form.postalCode} onChange={e => onAddPostalChange(e.target.value)} placeholder="e.g. 521123" inputMode="numeric" className="sm:col-span-2" />
           <Input label="Address Details" value={form.address} onChange={e => { addAddressManual.current = true; setForm(f => ({ ...f, address: e.target.value })); }} placeholder="Blk / Unit / Street — auto-fills from postal code" className="sm:col-span-2" />
           {postalLookupAdd && <p className="text-cyan-400/80 text-xs sm:col-span-2">Looking up address…</p>}
         </div>
