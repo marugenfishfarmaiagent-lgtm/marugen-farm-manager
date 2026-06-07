@@ -2507,7 +2507,27 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
                 <div className="p-2.5">
                   <p className="text-cyan-300/90 text-[10px] font-semibold">{e.date ? formatInvoiceDate(e.date) : "—"}</p>
                   <p className="text-white text-xs font-medium truncate mt-0.5">{e.imageName || e.category || "Receipt"}</p>
-                  <p className="text-slate-500 text-[10px]">{e.addedBy}{e.note ? ` · ${e.note}` : ""}</p>
+                  <p className="text-slate-500 text-[10px] truncate">{e.addedBy}{e.note ? ` · ${e.note}` : ""}</p>
+                  <div className="flex gap-1.5 mt-2 justify-end">
+                    <Btn
+                      variant="ghost"
+                      size="sm"
+                      onClick={(ev) => { ev.stopPropagation(); setViewEditDate(e.date || ""); setViewExpenseId(e.id); }}
+                      title="View receipt"
+                    >
+                      <Eye size={12} />
+                    </Btn>
+                    {canMarkAccounting(currentUser) && (
+                      <Btn
+                        variant="ghost"
+                        size="sm"
+                        onClick={(ev) => { ev.stopPropagation(); requestExpenseBookedChange(e.id); }}
+                        title={e.booked ? "Change accounts mark" : "Mark entered in accounts"}
+                      >
+                        <BookCheck size={12} className={e.booked ? "text-emerald-400" : "text-slate-500"} />
+                      </Btn>
+                    )}
+                  </div>
                 </div>
               </Card>
             );
