@@ -1666,6 +1666,7 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
       name,
       phone: whatsapp,
       whatsapp,
+      area: "",
       postalCode: editCustomer.postalCode?.trim() || "",
       address: editCustomer.address?.trim() || "",
       notes: editCustomer.notes?.trim() || "",
@@ -1787,8 +1788,7 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
               <div className="sm:col-span-2"><p className="text-slate-500 text-xs">WhatsApp</p><p className="text-white flex items-center gap-1"><Phone size={12} />{view.whatsapp || view.phone || "—"}</p></div>
-              <div><p className="text-slate-500 text-xs">Area</p><p className="text-white">{view.area}</p></div>
-              <div><p className="text-slate-500 text-xs">Postal Code</p><p className="text-white">{view.postalCode || "—"}</p></div>
+              <div className="sm:col-span-2"><p className="text-slate-500 text-xs">Postal Code</p><p className="text-white">{view.postalCode || "—"}</p></div>
               <div className="sm:col-span-2"><p className="text-slate-500 text-xs">Address</p><p className="text-white">{view.address || "—"}</p></div>
               <div><p className="text-slate-500 text-xs">Tier</p><p className={`font-black ${tierColor[view.tier] || tierColor.Bronze}`}><Star size={12} className="inline mr-1" />{view.tier || calcCustomerTier(view.totalSpent)}</p></div>
               <div><p className="text-slate-500 text-xs">Total Spent</p><p className="text-emerald-400 font-black text-lg">{formatSGD(view.totalSpent || 0)}</p></div>
@@ -1815,8 +1815,7 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="Full Name" value={editCustomer.name} onChange={(e) => setEditCustomer((c) => ({ ...c, name: e.target.value }))} required className="sm:col-span-2" />
               <Input label="WhatsApp" value={editCustomer.whatsapp || editCustomer.phone || ""} onChange={(e) => setEditCustomer((c) => ({ ...c, whatsapp: e.target.value }))} placeholder="+65 9XXX XXXX" required className="sm:col-span-2" />
-              <Select label="Area" value={editCustomer.area} onChange={(e) => setEditCustomer((c) => ({ ...c, area: e.target.value }))} options={SG_AREAS} />
-              <Input label="Postal Code" value={editCustomer.postalCode || ""} onChange={(e) => onEditPostalChange(e.target.value)} inputMode="numeric" placeholder="e.g. 521123" />
+              <Input label="Postal Code" value={editCustomer.postalCode || ""} onChange={(e) => onEditPostalChange(e.target.value)} inputMode="numeric" placeholder="e.g. 521123" className="sm:col-span-2" />
               <Input label="Address Details" value={editCustomer.address || ""} onChange={(e) => { editAddressManual.current = true; setEditCustomer((c) => ({ ...c, address: e.target.value })); }} placeholder="Blk / Unit / Street — auto-fills from postal code" className="sm:col-span-2" />
               {postalLookupEdit && <p className="text-cyan-400/80 text-xs sm:col-span-2">Looking up address…</p>}
             </div>
