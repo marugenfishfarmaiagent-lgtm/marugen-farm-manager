@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
 import {
-  Fish, Plus, Search, MapPin, Edit2, Eye, ShoppingBag, ImagePlus, Truck, HeartPulse, RotateCcw,
+  Fish, Plus, Search, MapPin, Edit2, Eye, Skull, ShoppingBag, ImagePlus, Truck, HeartPulse, RotateCcw,
 } from 'lucide-react'
 import {
-  KOI_VARIETIES, KOI_STATUS, FARM_POND_NAMES, mergePondNames,
+  KOI_VARIETIES, KOI_STATUS, KOI_DEATH_CAUSES, FARM_POND_NAMES, mergePondNames,
   formatSGD, formatKoiSize, normalizeKoiSizeCm, genId, today,
 } from '../data/constants'
 import { Badge, Btn, Card, Input, Modal, PondNameInput, Select, Textarea } from '../components/ui'
@@ -14,6 +14,7 @@ const STATUS_STYLE = {
   available: { badge: 'bg-emerald-500/20 text-emerald-300', border: 'border-slate-700/50' },
   sold: { badge: 'bg-blue-500/20 text-blue-300', border: 'border-slate-700/50 opacity-60' },
   sick: { badge: 'bg-red-500/20 text-red-300', border: 'border-amber-500/40' },
+  deceased: { badge: 'bg-slate-500/20 text-slate-400', border: 'border-red-500/40' },
 }
 
 const KOI_STATUS_OPTIONS = [
@@ -85,6 +86,10 @@ export default function KoiFish({
   const [sellForm, setSellForm] = useState({
     customerId: '', soldPrice: '', soldDate: today(), disposition: 'taken', keepPondName: '',
   })
+  const [deathKoi, setDeathKoi] = useState(null)
+  const [deathForm, setDeathForm] = useState({
+    deathDate: today(), deathCause: KOI_DEATH_CAUSES[0], deathPhoto: null, notes: '',
+  })
 
   const pondNames = useMemo(
     () => mergePondNames(FARM_POND_NAMES, koiList.map((k) => k.pondName)),
@@ -104,6 +109,7 @@ export default function KoiFish({
     available: koiList.filter((k) => k.status === KOI_STATUS.AVAILABLE).length,
     sold: koiList.filter((k) => k.status === KOI_STATUS.SOLD).length,
     sick: koiList.filter((k) => k.status === KOI_STATUS.SICK).length,
+    deceased: koiList.filter((k) => k.status === KOI_STATUS.DECEASED).length,
   }), [koiList])
 
   const soldFish = koiList.filter((k) => k.status === KOI_STATUS.SOLD)
@@ -256,8 +262,23 @@ export default function KoiFish({
     setSellKoi(null)
   }
 
+  const confirmDeath = () => {
+    if (!deathKoi) return
+    setKoiList((prev) => prev.map((k) => (k.id === deathKoi.id ? {
+      ...k,
+      status: KOI_STATUS.DECEASED,
+      deathDate: deathForm.deathDate,
+      deathCause: deathForm.deathCause,
+      deathPhoto: deathForm.deathPhoto,
+      notes: deathForm.notes || k.notes,
+    } : k)))
+    addNotification({ type: 'warning', title: 'Death Recorded', message: `${deathKoi.name || deathKoi.variety} recorded as deceased` })
+    setDeathKoi(null)
+    setDeathForm({ deathDate: today(), deathCause: KOI_DEATH_CAUSES[0], deathPhoto: null, notes: '' })
+  }
+
   const customerName = (id) => customers.find((c) => String(c.id) === String(id))?.name || '—'
-  const fabHidden = showAdd || !!editKoi || !!viewKoi || !!sellKoi || !!shipKoi
+  const fabHidden = showAdd || !!editKoi || !!viewKoi || !!sellKoi || !!shipKoi || !!deathKoi
 
   return (
     <div className="space-y-4 pb-20 lg:pb-12">
@@ -275,6 +296,7 @@ export default function KoiFish({
           ['available', counts.available, 'text-emerald-400'],
           ['sold', counts.sold, 'text-blue-400'],
           ['sick', counts.sick, 'text-red-400'],
+          ['deceased', counts.deceased, 'text-slate-400'],
         ].map(([label, n, color]) => (
           <button
             key={label}
@@ -300,7 +322,7 @@ export default function KoiFish({
           options={[{ value: 'all', label: 'All ponds' }, ...pondNames.map((p) => ({ value: p, label: p }))]} />
       </div>
       <div className="flex gap-2 overflow-x-auto pb-1">
-        {['all', 'available', 'sold', 'sick'].map((s) => (
+        {['all', 'available', 'sold', 'sick', 'deceased'].map((s) => (
           <button key={s} type="button" onClick={() => setStatusFilter(s)}
             className={`px-3 py-2 rounded-lg text-xs font-bold capitalize shrink-0 ${statusFilter === s ? 'bg-cyan-500 text-slate-900' : 'bg-slate-700 text-slate-300'}`}>{s}</button>
         ))}
@@ -317,7 +339,7 @@ export default function KoiFish({
             <Card key={k.id} className={`overflow-hidden ${st.border}`}>
               <div className="relative aspect-square bg-slate-900">
                 {k.photo ? (
-                  <img src={k.photo} alt={k.name || k.variety} className="w-full h-full object-contain" />
+                  <img src={k.photo} alt={k.name || k.variety} className={`w-full h-full object-contain ${k.status === KOI_STATUS.DECEASED ? 'grayscale' : ''}`} />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-slate-600"><Fish size={48} /></div>
                 )}
@@ -360,6 +382,16 @@ export default function KoiFish({
                           <RotateCcw size={12} />Recover
                         </Btn>
                       )}
+                      <Btn
+                        variant="danger"
+                        size="sm"
+                        onClick={() => {
+                          setDeathKoi(k)
+                          setDeathForm({ deathDate: today(), deathCause: KOI_DEATH_CAUSES[0], deathPhoto: null, notes: '' })
+                        }}
+                      >
+                        <Skull size={12} />Death
+                      </Btn>
                     </>
                   )}
                 </div>
@@ -520,6 +552,23 @@ export default function KoiFish({
         )}
       </Modal>
 
+      <Modal open={!!deathKoi} onClose={() => setDeathKoi(null)} title="Record Fish Death" size="md">
+        {deathKoi && (
+          <div className="border border-red-500/30 rounded-xl p-4 space-y-3">
+            <p className="text-red-300 text-sm">Record death for {deathKoi.name || deathKoi.variety} · {deathKoi.pondName}</p>
+            <Input label="Date of death" type="date" value={deathForm.deathDate} onChange={(e) => setDeathForm((f) => ({ ...f, deathDate: e.target.value }))} required />
+            <Select label="Cause" value={deathForm.deathCause} onChange={(e) => setDeathForm((f) => ({ ...f, deathCause: e.target.value }))}
+              options={KOI_DEATH_CAUSES.map((c) => ({ value: c, label: c }))} />
+            <PhotoPicker photo={deathForm.deathPhoto} onPick={(p) => setDeathForm((f) => ({ ...f, deathPhoto: p }))} label="Death photo (optional)" />
+            <Textarea label="Notes" value={deathForm.notes} onChange={(e) => setDeathForm((f) => ({ ...f, notes: e.target.value }))} />
+            <div className="flex justify-end gap-2">
+              <Btn variant="secondary" onClick={() => setDeathKoi(null)}>Cancel</Btn>
+              <Btn variant="danger" onClick={confirmDeath}><Skull size={14} />Record Death</Btn>
+            </div>
+          </div>
+        )}
+      </Modal>
+
       <Modal open={!!viewKoi} onClose={() => setViewKoi(null)} title={viewKoi?.id} size="lg">
         {viewKoi && (
           <div className="space-y-4">
@@ -541,6 +590,13 @@ export default function KoiFish({
                       ? 'Taken away by customer'
                       : '—'}
                 </p>
+              </Card>
+            )}
+            {viewKoi.status === KOI_STATUS.DECEASED && (
+              <Card className="p-3 border-red-500/40">
+                <p className="text-red-300 text-xs font-bold mb-2">Death record</p>
+                <p className="text-sm text-white">{viewKoi.deathDate} — {viewKoi.deathCause}</p>
+                {viewKoi.deathPhoto && <img src={viewKoi.deathPhoto} alt="" className="mt-2 rounded-lg max-h-40 border border-red-500/50 object-contain bg-slate-900" />}
               </Card>
             )}
             {viewKoi.notes && <p className="text-slate-400 text-sm">{viewKoi.notes}</p>}
