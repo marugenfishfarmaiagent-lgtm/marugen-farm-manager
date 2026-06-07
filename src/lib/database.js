@@ -64,6 +64,10 @@ function mapInvoice(row) {
   }
 }
 
+function expenseStoragePath(id) {
+  return `receipts/${String(id)}.jpg`
+}
+
 function mapExpense(row) {
   const imageUrl = row.image_url ?? row.imageUrl ?? ''
   return {
@@ -309,11 +313,22 @@ export async function uploadExpenseReceipt(expenseId, imageData, imageName = '')
 
 export async function syncExpenses(expenses) {
   if (!isSupabaseConfigured) return
-  const payload = expenses.map((e) => ({
-    ...e,
-    imageData: e.imageUrl ? '' : (e.imageData || ''),
-  }))
+  const payload = expenses.map((e) => {
+    const hasHttpUrl = e.imageUrl?.startsWith('http')
+    return {
+      ...e,
+      imageUrl: hasHttpUrl
+        ? expenseStoragePath(e.id)
+        : (e.imageUrl || (e.imageData ? expenseStoragePath(e.id) : '')),
+      imageData: hasHttpUrl ? '' : (e.imageData || ''),
+    }
+  })
   await apiCall({ action: 'sync', entity: 'expenses', data: payload })
+}
+
+export async function refreshExpenseReceiptUrl(expenseId) {
+  if (!isSupabaseConfigured) return null
+  return apiCall({ action: 'refresh_expense_receipt', expenseId })
 }
 
 export async function syncDeliveries(deliveries) {

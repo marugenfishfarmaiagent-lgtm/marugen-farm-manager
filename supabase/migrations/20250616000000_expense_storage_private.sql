@@ -1,4 +1,8 @@
--- Expense receipt images in Supabase Storage (replaces large base64 in expenses.image_data)
+-- Private expense receipt bucket (signed URLs via farm-api; no public object access)
+
+UPDATE storage.buckets
+SET public = false
+WHERE id = 'expense-receipts';
 
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES (

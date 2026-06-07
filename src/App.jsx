@@ -2243,6 +2243,27 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
     ? expenses.find((e) => String(e.id) === String(viewExpenseId))
     : null;
 
+  const refreshReceiptUrl = useCallback(async (expenseId) => {
+    if (!isSupabaseConfigured) return;
+    try {
+      const { imageUrl } = await db.refreshExpenseReceiptUrl(expenseId);
+      if (imageUrl) {
+        setExpenses((prev) => prev.map((e) => (
+          String(e.id) === String(expenseId) ? { ...e, imageUrl } : e
+        )));
+      }
+    } catch {
+      /* signed URL refresh failed — imageData fallback may still work */
+    }
+  }, [setExpenses]);
+
+  useEffect(() => {
+    if (!viewExpense?.id || viewExpense.imageData || !isSupabaseConfigured) return;
+    if (viewExpense.imageUrl?.startsWith("http")) {
+      refreshReceiptUrl(viewExpense.id);
+    }
+  }, [viewExpenseId, viewExpense?.id, viewExpense?.imageUrl, viewExpense?.imageData, refreshReceiptUrl]);
+
   if (!hasPermission(currentUser, "expenses")) return <AccessDenied moduleName="Expenses" />;
 
   const canDelete = canDeleteRecords(currentUser);
@@ -2654,7 +2675,12 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
             )}
             {expenseImageSrc(viewExpense) ? (
               <div className="rounded-xl overflow-hidden border border-slate-600 bg-[#d4d4d4] p-2">
-                <img src={expenseImageSrc(viewExpense)} alt={viewExpense.imageName || "Receipt"} className="w-full max-h-[70vh] object-contain mx-auto" />
+                <img
+                  src={expenseImageSrc(viewExpense)}
+                  alt={viewExpense.imageName || "Receipt"}
+                  className="w-full max-h-[70vh] object-contain mx-auto"
+                  onError={() => refreshReceiptUrl(viewExpense.id)}
+                />
               </div>
             ) : (
               <Card className="p-6 text-center text-slate-400 text-sm">No image on this legacy expense record.</Card>

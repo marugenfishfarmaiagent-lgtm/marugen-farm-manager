@@ -108,37 +108,34 @@ Other GitHub users pushing to a private repo on the Hobby plan will block Vercel
 
 ---
 
-## Monitoring
+## Monitoring (Phase 2)
 
-### Health check (UptimeRobot — Phase 2)
+Code is ready in the repo (`public/health.json`, `@vercel/analytics`, `src/lib/monitoring.js`). Finish setup in your dashboards:
 
-Static endpoint for uptime monitors:
+### 1. UptimeRobot — `/health.json`
 
-```
-GET https://your-domain/health.json
-```
+| Field | Value |
+|-------|-------|
+| Monitor type | HTTP(s) |
+| URL | `https://marugen-farm-manager.vercel.app/health.json` |
+| Interval | 5 minutes |
+| Keyword (optional) | `ok` |
 
-Expected: HTTP `200` and JSON `"status":"ok"`.
+Expected response: HTTP `200`, body `{"status":"ok","service":"marugen-farm-manager"}`.
 
-**UptimeRobot setup**
+### 2. Vercel Analytics
 
-1. Sign up at [uptimerobot.com](https://uptimerobot.com).
-2. Add monitor → **HTTP(s)**.
-3. URL: `https://marugen-farm-manager.vercel.app/health.json` (or your custom domain).
-4. Optional keyword: `ok`.
+1. [Vercel → marugen-farm-manager → Analytics](https://vercel.com/marugenfishfarmaiagent-4899s-projects/marugen-farm-manager/analytics)
+2. Click **Enable** (no env vars; `@vercel/analytics` is already in `src/main.jsx`).
 
-### Vercel Analytics (Phase 2)
+### 3. Sentry error tracking
 
-Code includes `@vercel/analytics`. Enable in **Vercel → Project → Analytics** (dashboard toggle). No extra env vars.
-
-### Sentry (Phase 2)
-
-1. Create a project at [sentry.io](https://sentry.io).
+1. Create a **React** project at [sentry.io](https://sentry.io).
 2. Copy the **DSN**.
-3. Add `VITE_SENTRY_DSN` in Vercel environment variables.
+3. Vercel → **Settings → Environment Variables** → add `VITE_SENTRY_DSN` for **Production** (and Preview if desired).
 4. Redeploy.
 
-If `VITE_SENTRY_DSN` is unset, Sentry does not initialize (no errors, no overhead).
+Sentry only runs in production builds when `VITE_SENTRY_DSN` is set; otherwise it stays disabled with zero overhead.
 
 ---
 
@@ -158,18 +155,22 @@ After deploy, verify:
 
 ## Expense receipt storage (Phase 3)
 
-Receipt photos are stored in Supabase Storage bucket `expense-receipts` (not as base64 in Postgres).
+Receipt photos live in Supabase Storage bucket `expense-receipts` (private — not world-readable).
 
 **One-time setup**
 
-1. Run `supabase/migrations/20250615000000_expense_storage.sql` in Supabase SQL Editor (creates the bucket).
-2. Redeploy the edge function: `supabase functions deploy farm-api`.
+1. Run migrations in order (SQL Editor or CLI), including:
+   - `supabase/migrations/20250615000000_expense_storage.sql`
+   - `supabase/migrations/20250616000000_expense_storage_private.sql`
+2. Redeploy: `supabase functions deploy farm-api`
 
 **Behaviour**
 
-- New uploads go to Storage; `expenses.image_url` holds the public URL; `image_data` stays empty.
-- Legacy rows with base64 `image_data` migrate automatically on the next expense sync.
-- Deleted or expired expenses remove their storage files.
+- Postgres stores the object path (`receipts/{id}.jpg`) in `expenses.image_url`.
+- `farm-api` returns **signed URLs** (4-hour TTL) to logged-in users with the Expenses permission.
+- Opening a receipt view refreshes the signed URL; expired links auto-retry via `refresh_expense_receipt`.
+- Legacy public URLs and base64 `image_data` still migrate on the next expense sync.
+- Deleted or retention-purged expenses remove their storage files.
 
 ---
 
@@ -178,8 +179,8 @@ Receipt photos are stored in Supabase Storage bucket `expense-receipts` (not as 
 | Phase | Status |
 |-------|--------|
 | Phase 1 — README, Analytics, Sentry scaffold, `/health.json` | Done in repo |
-| Phase 2 — UptimeRobot monitor, Sentry DSN, enable Vercel Analytics | Manual (your accounts) |
-| Phase 3 — Expense receipts → Supabase Storage (replace base64 in DB) | Done in repo — run migration + redeploy `farm-api` |
+| Phase 2 — UptimeRobot monitor, Sentry DSN, enable Vercel Analytics | Code ready — enable in UptimeRobot / Vercel / Sentry dashboards (see above) |
+| Phase 3 — Expense receipts → private Storage + signed URLs | Done in repo — run migrations + redeploy `farm-api` |
 
 ---
 

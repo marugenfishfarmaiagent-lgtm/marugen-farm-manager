@@ -2,6 +2,8 @@ import { fetchTodayUsageByUser, fetchWeekUsageByUser } from "../_shared/aiUsage.
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import {
   deleteExpenseReceiptImages,
+  normalizeImageUrlForStorage,
+  signExpenseReceiptUrl,
   uploadExpenseReceiptImage,
 } from "../_shared/expenseStorage.ts";
 import { hashPin, verifyPin } from "../_shared/pin.ts";
@@ -153,9 +155,12 @@ Deno.serve(async (req) => {
         customers: customers.data || [],
         products: products.data || [],
         invoices: invoices.data || [],
-        expenses: (expenses.data || []).map((e: Record<string, unknown>) => (
-          e.image_url ? { ...e, image_data: null } : e
-        )),
+        expenses: await Promise.all((expenses.data || []).map(async (e: Record<string, unknown>) => {
+          const base = e.image_url ? { ...e, image_data: null } : e;
+          if (!base.image_url) return base;
+          const signed = await signExpenseReceiptUrl(db, String(base.image_url), e.id);
+          return { ...base, image_url: signed };
+        })),
         deliveries: deliveries.data || [],
         events: events.data || [],
         stockActivity: stockActivity.data || [],
@@ -175,8 +180,26 @@ Deno.serve(async (req) => {
       if (!imageData || typeof imageData !== "string" || !imageData.startsWith("data:image/")) {
         return jsonResponse({ error: "Valid image data required" }, 400);
       }
-      const imageUrl = await uploadExpenseReceiptImage(db, expenseId, imageData);
-      return jsonResponse({ imageUrl, imageName: imageName || "" });
+      const path = await uploadExpenseReceiptImage(db, expenseId, imageData);
+      const imageUrl = await signExpenseReceiptUrl(db, path, expenseId);
+      return jsonResponse({ imageUrl, imagePath: path, imageName: imageName || "" });
+    }
+
+    if (body.action === "refresh_expense_receipt") {
+      if (!hasPermission(user, "expenses")) {
+        return jsonResponse({ error: "Permission denied (expenses)" }, 403);
+      }
+      const { expenseId } = body;
+      if (expenseId == null) return jsonResponse({ error: "expenseId required" }, 400);
+      const { data: row, error: fetchErr } = await db.from("expenses")
+        .select("image_url")
+        .eq("id", expenseId)
+        .maybeSingle();
+      if (fetchErr || !row?.image_url) {
+        return jsonResponse({ error: "Receipt image not found" }, 404);
+      }
+      const imageUrl = await signExpenseReceiptUrl(db, String(row.image_url), expenseId);
+      return jsonResponse({ imageUrl });
     }
 
     if (body.action === "sync") {
@@ -248,17 +271,17 @@ Deno.serve(async (req) => {
         if (removedIds.length) await deleteExpenseReceiptImages(db, removedIds);
 
         const rows = await Promise.all(incoming.map(async (e) => {
-          let imageUrl = String(e.imageUrl ?? "");
+          let imagePath = normalizeImageUrlForStorage(String(e.imageUrl ?? ""), e.id);
           let imageData = e.imageData ?? null;
-          if (!imageUrl && imageData && typeof imageData === "string" && imageData.startsWith("data:image/")) {
-            imageUrl = await uploadExpenseReceiptImage(db, e.id, imageData);
+          if (!imagePath && imageData && typeof imageData === "string" && imageData.startsWith("data:image/")) {
+            imagePath = await uploadExpenseReceiptImage(db, e.id, imageData);
             imageData = null;
-          } else if (imageUrl) {
+          } else if (imagePath) {
             imageData = null;
           }
           return {
             id: e.id, category: e.category ?? null, amount: e.amount ?? null, date: e.date, note: e.note,
-            image_data: imageData, image_name: e.imageName ?? "", image_url: imageUrl,
+            image_data: imageData, image_name: e.imageName ?? "", image_url: imagePath,
             added_by: e.addedBy,
             booked: Boolean(e.booked), booked_at: e.bookedAt ?? null, booked_by: e.bookedBy ?? "",
           };

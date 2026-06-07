@@ -144,7 +144,7 @@ INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_typ
 VALUES (
   'expense-receipts',
   'expense-receipts',
-  true,
+  false,
   5242880,
   ARRAY['image/jpeg', 'image/png', 'image/webp']
 )
