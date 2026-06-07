@@ -46,6 +46,8 @@ function filterPondDataForCloud(data: Record<string, unknown>) {
   return { ...data, maintenanceLogs, treatmentLogs, reminders }
 }
 
+import { deleteExpenseReceiptImages } from "./expenseStorage.ts"
+
 /** Purge expired rows from Supabase (called on fetch). */
 export async function purgeExpiredCloudData(db: ReturnType<typeof import("./supabase.ts").adminClient>) {
   const invCut = cutoffDate(CLOUD_RETENTION_DAYS.invoice)
@@ -57,6 +59,11 @@ export async function purgeExpiredCloudData(db: ReturnType<typeof import("./supa
   const koiSoldCut = cutoffDate(CLOUD_RETENTION_DAYS.koiSold)
   const ckDeceasedCut = cutoffDate(CLOUD_RETENTION_DAYS.customerKoiDeceased)
   const photoCut = cutoffDate(CLOUD_RETENTION_DAYS.deathPhoto)
+
+  const { data: expiringExpenses } = await db.from("expenses").select("id").lt("date", expCut)
+  if (expiringExpenses?.length) {
+    await deleteExpenseReceiptImages(db, expiringExpenses.map((r) => r.id))
+  }
 
   await Promise.all([
     db.from("invoices").delete().lt("date", invCut),

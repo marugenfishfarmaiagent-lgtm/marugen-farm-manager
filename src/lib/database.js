@@ -65,15 +65,16 @@ function mapInvoice(row) {
 }
 
 function mapExpense(row) {
+  const imageUrl = row.image_url ?? row.imageUrl ?? ''
   return {
     id: row.id,
     category: row.category || '',
     amount: Number(row.amount) || 0,
     date: row.date,
     note: row.note || '',
-    imageData: row.image_data ?? row.imageData ?? '',
+    imageData: imageUrl ? '' : (row.image_data ?? row.imageData ?? ''),
     imageName: row.image_name ?? row.imageName ?? '',
-    imageUrl: row.image_url ?? row.imageUrl ?? '',
+    imageUrl,
     addedBy: row.added_by ?? row.addedBy ?? '',
     booked: Boolean(row.booked),
     bookedAt: row.booked_at ?? row.bookedAt ?? null,
@@ -301,9 +302,18 @@ export async function syncInvoices(invoices) {
   await apiCall({ action: 'sync', entity: 'invoices', data: invoices })
 }
 
+export async function uploadExpenseReceipt(expenseId, imageData, imageName = '') {
+  if (!isSupabaseConfigured) throw new Error('Cloud storage is not configured')
+  return apiCall({ action: 'upload_expense_receipt', expenseId, imageData, imageName })
+}
+
 export async function syncExpenses(expenses) {
   if (!isSupabaseConfigured) return
-  await apiCall({ action: 'sync', entity: 'expenses', data: expenses })
+  const payload = expenses.map((e) => ({
+    ...e,
+    imageData: e.imageUrl ? '' : (e.imageData || ''),
+  }))
+  await apiCall({ action: 'sync', entity: 'expenses', data: payload })
 }
 
 export async function syncDeliveries(deliveries) {

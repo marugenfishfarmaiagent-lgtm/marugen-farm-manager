@@ -1,5 +1,9 @@
 import { fetchTodayUsageByUser, fetchWeekUsageByUser } from "../_shared/aiUsage.ts";
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
+import {
+  deleteExpenseReceiptImages,
+  uploadExpenseReceiptImage,
+} from "../_shared/expenseStorage.ts";
 import { hashPin, verifyPin } from "../_shared/pin.ts";
 import { purgeExpiredCloudData } from "../_shared/retention.ts";
 import {
@@ -149,7 +153,9 @@ Deno.serve(async (req) => {
         customers: customers.data || [],
         products: products.data || [],
         invoices: invoices.data || [],
-        expenses: expenses.data || [],
+        expenses: (expenses.data || []).map((e: Record<string, unknown>) => (
+          e.image_url ? { ...e, image_data: null } : e
+        )),
         deliveries: deliveries.data || [],
         events: events.data || [],
         stockActivity: stockActivity.data || [],
@@ -158,6 +164,19 @@ Deno.serve(async (req) => {
         pondData: pondRow.data?.data || {},
         whatsappGroups: whatsappGroups.data || [],
       });
+    }
+
+    if (body.action === "upload_expense_receipt") {
+      if (!hasPermission(user, "expenses")) {
+        return jsonResponse({ error: "Permission denied (expenses)" }, 403);
+      }
+      const { expenseId, imageData, imageName } = body;
+      if (expenseId == null) return jsonResponse({ error: "expenseId required" }, 400);
+      if (!imageData || typeof imageData !== "string" || !imageData.startsWith("data:image/")) {
+        return jsonResponse({ error: "Valid image data required" }, 400);
+      }
+      const imageUrl = await uploadExpenseReceiptImage(db, expenseId, imageData);
+      return jsonResponse({ imageUrl, imageName: imageName || "" });
     }
 
     if (body.action === "sync") {
@@ -219,12 +238,32 @@ Deno.serve(async (req) => {
           booked: Boolean(i.booked), booked_at: i.bookedAt ?? null, booked_by: i.bookedBy ?? "",
         })), "id");
       } else if (entity === "expenses") {
-        await upsertSync("expenses", (data || []).map((e: Record<string, unknown>) => ({
-          id: e.id, category: e.category ?? null, amount: e.amount ?? null, date: e.date, note: e.note,
-          image_data: e.imageData ?? null, image_name: e.imageName ?? "", image_url: e.imageUrl ?? "",
-          added_by: e.addedBy,
-          booked: Boolean(e.booked), booked_at: e.bookedAt ?? null, booked_by: e.bookedBy ?? "",
-        })), "id");
+        const incoming = (data || []) as Record<string, unknown>[];
+        const incomingIds = new Set(incoming.map((e) => normId(e.id)));
+
+        const { data: existingExpenses } = await db.from("expenses").select("id");
+        const removedIds = (existingExpenses || [])
+          .map((r) => r.id)
+          .filter((id) => id != null && !incomingIds.has(normId(id)));
+        if (removedIds.length) await deleteExpenseReceiptImages(db, removedIds);
+
+        const rows = await Promise.all(incoming.map(async (e) => {
+          let imageUrl = String(e.imageUrl ?? "");
+          let imageData = e.imageData ?? null;
+          if (!imageUrl && imageData && typeof imageData === "string" && imageData.startsWith("data:image/")) {
+            imageUrl = await uploadExpenseReceiptImage(db, e.id, imageData);
+            imageData = null;
+          } else if (imageUrl) {
+            imageData = null;
+          }
+          return {
+            id: e.id, category: e.category ?? null, amount: e.amount ?? null, date: e.date, note: e.note,
+            image_data: imageData, image_name: e.imageName ?? "", image_url: imageUrl,
+            added_by: e.addedBy,
+            booked: Boolean(e.booked), booked_at: e.bookedAt ?? null, booked_by: e.bookedBy ?? "",
+          };
+        }));
+        await upsertSync("expenses", rows, "id");
       } else if (entity === "deliveries") {
         await upsertSync("deliveries", (data || []).map((d: Record<string, unknown>) => ({
           id: d.id, invoice_id: d.invoiceId ?? "",

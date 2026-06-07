@@ -2345,7 +2345,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
     addNotification({ type: "success", title: "Date Updated", message: "Receipt date saved." });
   };
 
-  const saveReceipt = () => {
+  const saveReceipt = async () => {
     if (!uploadPreview) {
       addNotification({ type: "error", title: "Image Required", message: "Upload an expense invoice or receipt photo." });
       return;
@@ -2355,24 +2355,43 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
       addNotification({ type: "error", title: "Date Required", message: "Choose the receipt date before saving." });
       return;
     }
-    const e = {
-      id: Date.now(),
-      category: null,
-      amount: null,
-      date: uploadDate,
-      note: uploadNote?.trim() || "",
-      imageData: uploadPreview,
-      imageName: uploadName,
-      imageUrl: "",
-      addedBy: currentUser?.name || "Staff",
-      booked: false,
-      bookedAt: null,
-      bookedBy: "",
-    };
-    setExpenses((prev) => [...prev, e]);
-    addNotification({ type: "success", title: "Receipt Saved", message: "Expense invoice photo recorded." });
-    setShowAdd(false);
-    resetUpload();
+    const id = Date.now();
+    let imageUrl = "";
+    let imageData = uploadPreview;
+    try {
+      setUploading(true);
+      if (isSupabaseConfigured) {
+        const uploaded = await db.uploadExpenseReceipt(id, uploadPreview, uploadName);
+        imageUrl = uploaded.imageUrl || "";
+        imageData = "";
+      }
+      const e = {
+        id,
+        category: null,
+        amount: null,
+        date: uploadDate,
+        note: uploadNote?.trim() || "",
+        imageData,
+        imageName: uploadName,
+        imageUrl,
+        addedBy: currentUser?.name || "Staff",
+        booked: false,
+        bookedAt: null,
+        bookedBy: "",
+      };
+      setExpenses((prev) => [...prev, e]);
+      addNotification({
+        type: "success",
+        title: "Receipt Saved",
+        message: isSupabaseConfigured ? "Receipt photo saved to cloud storage." : "Expense invoice photo recorded.",
+      });
+      setShowAdd(false);
+      resetUpload();
+    } catch (err) {
+      addNotification({ type: "error", title: "Save Failed", message: err?.message || "Could not save receipt photo." });
+    } finally {
+      setUploading(false);
+    }
   };
 
   return (
@@ -2569,7 +2588,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
         </div>
         <div className="modal-actions">
           <Btn variant="secondary" onClick={() => { setShowAdd(false); resetUpload(); }}>Cancel</Btn>
-          <Btn onClick={saveReceipt} disabled={!uploadPreview || uploading}><Plus size={14} />Save Receipt</Btn>
+          <Btn onClick={saveReceipt} disabled={!uploadPreview || uploading}><Plus size={14} />{uploading ? "Saving…" : "Save Receipt"}</Btn>
         </div>
       </Modal>
 

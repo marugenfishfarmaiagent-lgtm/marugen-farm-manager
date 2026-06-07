@@ -154,13 +154,30 @@ After deploy, verify:
 
 ---
 
+## Expense receipt storage (Phase 3)
+
+Receipt photos are stored in Supabase Storage bucket `expense-receipts` (not as base64 in Postgres).
+
+**One-time setup**
+
+1. Run `supabase/migrations/20250615000000_expense_storage.sql` in Supabase SQL Editor (creates the bucket).
+2. Redeploy the edge function: `supabase functions deploy farm-api`.
+
+**Behaviour**
+
+- New uploads go to Storage; `expenses.image_url` holds the public URL; `image_data` stays empty.
+- Legacy rows with base64 `image_data` migrate automatically on the next expense sync.
+- Deleted or expired expenses remove their storage files.
+
+---
+
 ## Roadmap
 
 | Phase | Status |
 |-------|--------|
 | Phase 1 — README, Analytics, Sentry scaffold, `/health.json` | Done in repo |
 | Phase 2 — UptimeRobot monitor, Sentry DSN, enable Vercel Analytics | Manual (your accounts) |
-| Phase 3 — Expense receipts → Supabase Storage (replace base64 in DB) | Planned |
+| Phase 3 — Expense receipts → Supabase Storage (replace base64 in DB) | Done in repo — run migration + redeploy `farm-api` |
 
 ---
 
