@@ -2507,15 +2507,16 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
                 <div className="p-2.5">
                   <p className="text-cyan-300/90 text-[10px] font-semibold">{e.date ? formatInvoiceDate(e.date) : "—"}</p>
                   <p className="text-white text-xs font-medium truncate mt-0.5">{e.imageName || e.category || "Receipt"}</p>
-                  <p className="text-slate-500 text-[10px] truncate">{e.addedBy}{e.note ? ` · ${e.note}` : ""}</p>
-                  <div className="flex gap-1.5 mt-2 justify-end">
+                  <p className="text-slate-500 text-[10px]">{e.addedBy}{e.note ? ` · ${e.note}` : ""}</p>
+                  <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-slate-700/50">
                     <Btn
                       variant="ghost"
                       size="sm"
                       onClick={(ev) => { ev.stopPropagation(); setViewEditDate(e.date || ""); setViewExpenseId(e.id); }}
                       title="View receipt"
+                      className="flex-1 justify-center min-h-8"
                     >
-                      <Eye size={12} />
+                      <Eye size={12} />View
                     </Btn>
                     {canMarkAccounting(currentUser) && (
                       <Btn
@@ -2523,8 +2524,10 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
                         size="sm"
                         onClick={(ev) => { ev.stopPropagation(); requestExpenseBookedChange(e.id); }}
                         title={e.booked ? "Change accounts mark" : "Mark entered in accounts"}
+                        className="flex-1 justify-center min-h-8"
                       >
                         <BookCheck size={12} className={e.booked ? "text-emerald-400" : "text-slate-500"} />
+                        <span className="truncate text-[10px]">{e.booked ? "Change mark" : "Mark accounts"}</span>
                       </Btn>
                     )}
                   </div>
