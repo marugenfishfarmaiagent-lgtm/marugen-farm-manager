@@ -47,6 +47,12 @@ function filterPondDataForCloud(data: Record<string, unknown>) {
 }
 
 import { deleteExpenseReceiptImages } from "./expenseStorage.ts"
+import { deleteInvoicePdfs } from "./invoiceStorage.ts"
+import {
+  deleteCustomerKoiImages,
+  deleteKoiDeathPhotosFromRows,
+  deleteKoiFishImages,
+} from "./koiImageStorage.ts"
 
 /** Purge expired rows from Supabase (called on fetch). */
 export async function purgeExpiredCloudData(db: ReturnType<typeof import("./supabase.ts").adminClient>) {
@@ -65,6 +71,31 @@ export async function purgeExpiredCloudData(db: ReturnType<typeof import("./supa
     await deleteExpenseReceiptImages(db, expiringExpenses.map((r) => r.id))
   }
 
+  const { data: expiringInvoices } = await db.from("invoices").select("id").lt("date", invCut)
+  if (expiringInvoices?.length) {
+    await deleteInvoicePdfs(db, expiringInvoices.map((r) => r.id))
+  }
+
+  const { data: expiredDeceasedKoi } = await db.from("koi_fish").select("id")
+    .eq("status", "deceased").lt("death_date", koiDeceasedCut)
+  if (expiredDeceasedKoi?.length) {
+    await deleteKoiFishImages(db, expiredDeceasedKoi.map((r) => r.id))
+  }
+
+  const { data: expiredDeceasedCustomerKoi } = await db.from("customer_koi").select("id")
+    .eq("status", "deceased").lt("death_date", ckDeceasedCut)
+  if (expiredDeceasedCustomerKoi?.length) {
+    await deleteCustomerKoiImages(db, expiredDeceasedCustomerKoi.map((r) => r.id))
+  }
+
+  const { data: koiDeathStrip } = await db.from("koi_fish").select("death_photo")
+    .eq("status", "deceased").lt("death_date", photoCut).not("death_photo", "is", null)
+  if (koiDeathStrip?.length) await deleteKoiDeathPhotosFromRows(db, koiDeathStrip)
+
+  const { data: ckDeathStrip } = await db.from("customer_koi").select("death_photo")
+    .eq("status", "deceased").lt("death_date", photoCut).not("death_photo", "is", null)
+  if (ckDeathStrip?.length) await deleteKoiDeathPhotosFromRows(db, ckDeathStrip)
+
   await Promise.all([
     db.from("invoices").delete().lt("date", invCut),
     db.from("expenses").delete().lt("date", expCut),
@@ -82,6 +113,7 @@ export async function purgeExpiredCloudData(db: ReturnType<typeof import("./supa
     .filter((row) => !isWithinDays((row.sold_date || row.date_added) as string, CLOUD_RETENTION_DAYS.koiSold))
     .map((row) => row.id)
   if (soldIds.length) {
+    await deleteKoiFishImages(db, soldIds)
     await db.from("koi_fish").delete().in("id", soldIds)
   }
 

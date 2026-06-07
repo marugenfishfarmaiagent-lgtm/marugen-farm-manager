@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import {
   Fish, Plus, Search, MapPin, Edit2, Eye, Skull, ShoppingBag, ImagePlus, Truck, HeartPulse, RotateCcw, Undo2,
 } from 'lucide-react'
@@ -8,6 +8,9 @@ import {
 } from '../data/constants'
 import { Badge, Btn, Card, Input, Modal, PondNameInput, Select, Textarea } from '../components/ui'
 import Fab from '../components/Fab'
+import StoredImage from '../components/StoredImage'
+import * as db from '../lib/database'
+import { isSupabaseConfigured } from '../lib/supabase'
 import { readKoiImageFile } from '../lib/koiImage'
 import { formatKoiInvoiceLineName, findLinkedKoiInvoices } from '../lib/koiInvoice'
 import { isAppVisibleKoiFarm } from '../lib/retention'
@@ -62,11 +65,19 @@ function PhotoPicker({ photo, onPick, label = 'Photo' }) {
   )
 }
 
-function KoiPhoto({ src, alt, className = '' }) {
+function KoiPhoto({ src, alt, className = '', recordId, field = 'photo', onRefresh }) {
   if (!src) return null
   return (
     <div className={`bg-slate-900 flex items-center justify-center overflow-hidden ${className}`}>
-      <img src={src} alt={alt} className="w-full h-full object-contain" />
+      <StoredImage
+        src={src}
+        alt={alt}
+        className="w-full h-full object-contain"
+        entity="koi_fish"
+        recordId={recordId}
+        field={field}
+        onRefresh={onRefresh}
+      />
     </div>
   )
 }
@@ -75,6 +86,20 @@ export default function KoiFish({
   koiList, setKoiList, customers, invoices = [], onKoiSold, onKoiRefund, onCreateInvoiceFromSale, addNotification,
   canEdit = false, canRefund = false,
 }) {
+  const refreshKoiImage = useCallback(async ({ entity, id, field }) => {
+    if (!isSupabaseConfigured) return
+    try {
+      const { url } = await db.refreshSignedImage({ entity, id, field })
+      if (!url) return
+      setKoiList((prev) => prev.map((k) => {
+        if (k.id !== id) return k
+        if (field === 'death_photo') return { ...k, deathPhoto: url }
+        return { ...k, photo: url }
+      }))
+    } catch {
+      /* signed URL refresh failed */
+    }
+  }, [setKoiList])
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('stock')
   const [varietyFilter, setVarietyFilter] = useState('all')
@@ -410,7 +435,15 @@ export default function KoiFish({
             <Card key={k.id} className={`overflow-hidden ${st.border}`}>
               <div className="relative aspect-square bg-slate-900">
                 {k.photo ? (
-                  <img src={k.photo} alt={k.name || k.variety} className={`w-full h-full object-contain ${k.status === KOI_STATUS.DECEASED ? 'grayscale' : ''}`} />
+                  <StoredImage
+                    src={k.photo}
+                    alt={k.name || k.variety}
+                    className={`w-full h-full object-contain ${k.status === KOI_STATUS.DECEASED ? 'grayscale' : ''}`}
+                    entity="koi_fish"
+                    recordId={k.id}
+                    field="photo"
+                    onRefresh={refreshKoiImage}
+                  />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-slate-600"><Fish size={48} /></div>
                 )}
@@ -521,7 +554,7 @@ export default function KoiFish({
           <>
             <div className="flex gap-3 mb-4">
               {shipKoi.photo ? (
-                <img src={shipKoi.photo} alt="" className="w-16 h-16 rounded-lg object-contain bg-slate-900" />
+                <StoredImage src={shipKoi.photo} alt="" className="w-16 h-16 rounded-lg object-contain bg-slate-900" entity="koi_fish" recordId={shipKoi.id} field="photo" onRefresh={refreshKoiImage} />
               ) : (
                 <div className="w-16 h-16 rounded-lg bg-slate-800 flex items-center justify-center"><Fish size={20} /></div>
               )}
@@ -549,7 +582,7 @@ export default function KoiFish({
         {sellKoi && (
           <>
             <div className="flex gap-3 mb-4">
-              {sellKoi.photo ? <img src={sellKoi.photo} alt="" className="w-20 h-20 rounded-lg object-contain bg-slate-900" /> : <div className="w-20 h-20 rounded-lg bg-slate-800 flex items-center justify-center"><Fish size={24} /></div>}
+              {sellKoi.photo ? <StoredImage src={sellKoi.photo} alt="" className="w-20 h-20 rounded-lg object-contain bg-slate-900" entity="koi_fish" recordId={sellKoi.id} field="photo" onRefresh={refreshKoiImage} /> : <div className="w-20 h-20 rounded-lg bg-slate-800 flex items-center justify-center"><Fish size={24} /></div>}
               <div><p className="text-white font-bold">{sellKoi.name || sellKoi.variety}</p><p className="text-slate-400 text-sm">{formatKoiSize(sellKoi.size)} · {sellKoi.pondName}</p></div>
             </div>
             {customers.length === 0 ? (
@@ -638,7 +671,7 @@ export default function KoiFish({
           <div className="space-y-4">
             <div className="flex gap-3">
               {refundKoi.photo ? (
-                <img src={refundKoi.photo} alt="" className="w-16 h-16 rounded-lg object-contain bg-slate-900" />
+                <StoredImage src={refundKoi.photo} alt="" className="w-16 h-16 rounded-lg object-contain bg-slate-900" entity="koi_fish" recordId={refundKoi.id} field="photo" onRefresh={refreshKoiImage} />
               ) : (
                 <div className="w-16 h-16 rounded-lg bg-slate-800 flex items-center justify-center"><Fish size={20} /></div>
               )}
@@ -677,7 +710,7 @@ export default function KoiFish({
       <Modal open={!!viewKoi} onClose={() => setViewKoi(null)} title={viewKoi?.id} size="lg">
         {viewKoi && (
           <div className="space-y-4">
-            <KoiPhoto src={viewKoi.photo} alt={viewKoi.name || viewKoi.variety} className="w-full aspect-square max-h-80 rounded-xl" />
+            <KoiPhoto src={viewKoi.photo} alt={viewKoi.name || viewKoi.variety} className="w-full aspect-square max-h-80 rounded-xl" recordId={viewKoi.id} onRefresh={refreshKoiImage} />
             <div className="grid grid-cols-2 gap-3 text-sm">
               {[['Variety', viewKoi.variety], ['Size', formatKoiSize(viewKoi.size)], ['Pond', viewKoi.pondName], ['Price', formatSGD(viewKoi.price)], ['Status', viewKoi.status]].map(([k, v]) => (
                 <div key={k}><p className="text-slate-500 text-xs">{k}</p><p className="text-white">{v}</p></div>
@@ -708,7 +741,17 @@ export default function KoiFish({
               <Card className="p-3 border-red-500/40">
                 <p className="text-red-300 text-xs font-bold mb-2">Death record</p>
                 <p className="text-sm text-white">{viewKoi.deathDate} — {viewKoi.deathCause}</p>
-                {viewKoi.deathPhoto && <img src={viewKoi.deathPhoto} alt="" className="mt-2 rounded-lg max-h-40 border border-red-500/50 object-contain bg-slate-900" />}
+                {viewKoi.deathPhoto && (
+                  <StoredImage
+                    src={viewKoi.deathPhoto}
+                    alt=""
+                    className="mt-2 rounded-lg max-h-40 border border-red-500/50 object-contain bg-slate-900"
+                    entity="koi_fish"
+                    recordId={viewKoi.id}
+                    field="death_photo"
+                    onRefresh={refreshKoiImage}
+                  />
+                )}
               </Card>
             )}
             {viewKoi.notes && <p className="text-slate-400 text-sm">{viewKoi.notes}</p>}

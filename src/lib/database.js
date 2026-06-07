@@ -2,6 +2,7 @@ import { clearSession, getSessionToken } from './auth'
 import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
 import { normalizeCustomerKoiRecord } from '../data/constants'
 import { emptyPondData } from './cloudData'
+import { normalizeImageFieldForSync, storagePaths } from './farmImage'
 
 function mapUser(row) {
   return {
@@ -65,7 +66,7 @@ function mapInvoice(row) {
 }
 
 function expenseStoragePath(id) {
-  return `receipts/${String(id)}.jpg`
+  return storagePaths.expenseReceipt(id)
 }
 
 function mapExpense(row) {
@@ -326,9 +327,13 @@ export async function syncExpenses(expenses) {
   await apiCall({ action: 'sync', entity: 'expenses', data: payload })
 }
 
-export async function refreshExpenseReceiptUrl(expenseId) {
+export async function refreshSignedImage({ entity, id, field }) {
   if (!isSupabaseConfigured) return null
-  return apiCall({ action: 'refresh_expense_receipt', expenseId })
+  return apiCall({ action: 'refresh_signed_image', entity, id, field })
+}
+
+export async function refreshExpenseReceiptUrl(expenseId) {
+  return refreshSignedImage({ entity: 'expense', id: expenseId, field: 'image' })
 }
 
 export async function syncDeliveries(deliveries) {
@@ -348,12 +353,22 @@ export async function syncStockActivity(logs) {
 
 export async function syncKoiFish(list) {
   if (!isSupabaseConfigured) return
-  await apiCall({ action: 'sync', entity: 'koi_fish', data: list })
+  const payload = (list || []).map((k) => ({
+    ...k,
+    photo: normalizeImageFieldForSync(k.photo, storagePaths.koiFishPhoto(k.id)),
+    deathPhoto: normalizeImageFieldForSync(k.deathPhoto, storagePaths.koiFishDeathPhoto(k.id)),
+  }))
+  await apiCall({ action: 'sync', entity: 'koi_fish', data: payload })
 }
 
 export async function syncCustomerKoi(list) {
   if (!isSupabaseConfigured) return
-  await apiCall({ action: 'sync', entity: 'customer_koi', data: list })
+  const payload = (list || []).map((r) => ({
+    ...r,
+    photo: normalizeImageFieldForSync(r.photo, storagePaths.customerKoiPhoto(r.id)),
+    deathPhoto: normalizeImageFieldForSync(r.deathPhoto, storagePaths.customerKoiDeathPhoto(r.id)),
+  }))
+  await apiCall({ action: 'sync', entity: 'customer_koi', data: payload })
 }
 
 export async function syncPondData(pondData) {

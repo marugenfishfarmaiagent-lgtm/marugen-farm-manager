@@ -42,6 +42,7 @@ ALTER TABLE invoices ADD COLUMN IF NOT EXISTS discount_value NUMERIC DEFAULT 0;
 ALTER TABLE invoices ADD COLUMN IF NOT EXISTS booked BOOLEAN DEFAULT false;
 ALTER TABLE invoices ADD COLUMN IF NOT EXISTS booked_at TIMESTAMPTZ;
 ALTER TABLE invoices ADD COLUMN IF NOT EXISTS booked_by TEXT DEFAULT '';
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS pdf_url TEXT DEFAULT '';
 
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS booked BOOLEAN DEFAULT false;
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS booked_at TIMESTAMPTZ;
@@ -144,6 +145,34 @@ INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_typ
 VALUES (
   'expense-receipts',
   'expense-receipts',
+  false,
+  5242880,
+  ARRAY['image/jpeg', 'image/png', 'image/webp']
+)
+ON CONFLICT (id) DO UPDATE SET
+  public = EXCLUDED.public,
+  file_size_limit = EXCLUDED.file_size_limit,
+  allowed_mime_types = EXCLUDED.allowed_mime_types;
+
+-- ── Invoice PDF archive (private bucket) ──
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'invoice-documents',
+  'invoice-documents',
+  false,
+  10485760,
+  ARRAY['application/pdf']
+)
+ON CONFLICT (id) DO UPDATE SET
+  public = EXCLUDED.public,
+  file_size_limit = EXCLUDED.file_size_limit,
+  allowed_mime_types = EXCLUDED.allowed_mime_types;
+
+-- ── Koi / customer koi photo storage (private bucket) ──
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'koi-photos',
+  'koi-photos',
   false,
   5242880,
   ARRAY['image/jpeg', 'image/png', 'image/webp']

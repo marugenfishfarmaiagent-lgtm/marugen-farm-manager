@@ -2,10 +2,29 @@ import { fetchTodayUsageByUser, fetchWeekUsageByUser } from "../_shared/aiUsage.
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import {
   deleteExpenseReceiptImages,
+  expenseReceiptPath,
   normalizeImageUrlForStorage,
   signExpenseReceiptUrl,
   uploadExpenseReceiptImage,
 } from "../_shared/expenseStorage.ts";
+import {
+  customerKoiDeathPhotoPath,
+  customerKoiPhotoPath,
+  deleteCustomerKoiImages,
+  deleteKoiDeathPhotosFromRows,
+  deleteKoiFishImages,
+  koiFishDeathPhotoPath,
+  koiFishPhotoPath,
+  KOI_PHOTOS_BUCKET,
+  resolveCustomerKoiDeathPhoto,
+  resolveCustomerKoiPhoto,
+  resolveKoiFishDeathPhoto,
+  resolveKoiFishPhoto,
+  signCustomerKoiRowPhotos,
+  signKoiFishRowPhotos,
+} from "../_shared/koiImageStorage.ts";
+import { signFarmImageUrl } from "../_shared/farmImageStorage.ts";
+import { deleteInvoicePdfs } from "../_shared/invoiceStorage.ts";
 import { hashPin, verifyPin } from "../_shared/pin.ts";
 import { purgeExpiredCloudData } from "../_shared/retention.ts";
 import {
@@ -164,8 +183,8 @@ Deno.serve(async (req) => {
         deliveries: deliveries.data || [],
         events: events.data || [],
         stockActivity: stockActivity.data || [],
-        koiFish: koiFish.data || [],
-        customerKoi: customerKoi.data || [],
+        koiFish: await Promise.all((koiFish.data || []).map((k) => signKoiFishRowPhotos(db, k))),
+        customerKoi: await Promise.all((customerKoi.data || []).map((k) => signCustomerKoiRowPhotos(db, k))),
         pondData: pondRow.data?.data || {},
         whatsappGroups: whatsappGroups.data || [],
       });
@@ -185,21 +204,92 @@ Deno.serve(async (req) => {
       return jsonResponse({ imageUrl, imagePath: path, imageName: imageName || "" });
     }
 
-    if (body.action === "refresh_expense_receipt") {
-      if (!hasPermission(user, "expenses")) {
-        return jsonResponse({ error: "Permission denied (expenses)" }, 403);
+    if (body.action === "refresh_expense_receipt" || body.action === "refresh_signed_image") {
+      const entity = body.action === "refresh_expense_receipt"
+        ? "expense"
+        : body.entity;
+      const recordId = body.expenseId ?? body.id;
+      const field = body.action === "refresh_expense_receipt" ? "image" : body.field;
+
+      if (!entity || recordId == null || !field) {
+        return jsonResponse({ error: "entity, id, and field required" }, 400);
       }
-      const { expenseId } = body;
-      if (expenseId == null) return jsonResponse({ error: "expenseId required" }, 400);
-      const { data: row, error: fetchErr } = await db.from("expenses")
-        .select("image_url")
-        .eq("id", expenseId)
+
+      type ImageTarget = {
+        perm: string;
+        table: string;
+        column: string;
+        bucket: string;
+        pathFor: (id: unknown) => string;
+        sign: (db: ReturnType<typeof adminClient>, path: string, id: unknown) => Promise<string>;
+      };
+
+      const targets: Record<string, Record<string, ImageTarget>> = {
+        expense: {
+          image: {
+            perm: "expenses",
+            table: "expenses",
+            column: "image_url",
+            bucket: "expense-receipts",
+            pathFor: expenseReceiptPath,
+            sign: signExpenseReceiptUrl,
+          },
+        },
+        koi_fish: {
+          photo: {
+            perm: "koifish",
+            table: "koi_fish",
+            column: "photo",
+            bucket: KOI_PHOTOS_BUCKET,
+            pathFor: koiFishPhotoPath,
+            sign: (d, path, id) => signFarmImageUrl(d, KOI_PHOTOS_BUCKET, path, koiFishPhotoPath(id)),
+          },
+          death_photo: {
+            perm: "koifish",
+            table: "koi_fish",
+            column: "death_photo",
+            bucket: KOI_PHOTOS_BUCKET,
+            pathFor: koiFishDeathPhotoPath,
+            sign: (d, path, id) => signFarmImageUrl(d, KOI_PHOTOS_BUCKET, path, koiFishDeathPhotoPath(id)),
+          },
+        },
+        customer_koi: {
+          photo: {
+            perm: "customerkoi",
+            table: "customer_koi",
+            column: "photo",
+            bucket: KOI_PHOTOS_BUCKET,
+            pathFor: customerKoiPhotoPath,
+            sign: (d, path, id) => signFarmImageUrl(d, KOI_PHOTOS_BUCKET, path, customerKoiPhotoPath(id)),
+          },
+          death_photo: {
+            perm: "customerkoi",
+            table: "customer_koi",
+            column: "death_photo",
+            bucket: KOI_PHOTOS_BUCKET,
+            pathFor: customerKoiDeathPhotoPath,
+            sign: (d, path, id) => signFarmImageUrl(d, KOI_PHOTOS_BUCKET, path, customerKoiDeathPhotoPath(id)),
+          },
+        },
+      };
+
+      const target = targets[entity]?.[field];
+      if (!target) return jsonResponse({ error: "Unknown image target" }, 400);
+      if (!hasPermission(user, target.perm)) {
+        return jsonResponse({ error: `Permission denied (${entity})` }, 403);
+      }
+
+      const { data: row, error: fetchErr } = await db.from(target.table)
+        .select(target.column)
+        .eq("id", recordId)
         .maybeSingle();
-      if (fetchErr || !row?.image_url) {
-        return jsonResponse({ error: "Receipt image not found" }, 404);
+      const stored = row?.[target.column as keyof typeof row];
+      if (fetchErr || !stored) {
+        return jsonResponse({ error: "Image not found" }, 404);
       }
-      const imageUrl = await signExpenseReceiptUrl(db, String(row.image_url), expenseId);
-      return jsonResponse({ imageUrl });
+
+      const url = await target.sign(db, String(stored), recordId);
+      return jsonResponse({ url, imageUrl: url });
     }
 
     if (body.action === "sync") {
@@ -254,11 +344,29 @@ Deno.serve(async (req) => {
           cost: p.cost ?? 0, unit: p.unit, stock: p.stock, min_stock: p.minStock, description: p.description,
         })), "id");
       } else if (entity === "invoices") {
-        await upsertSync("invoices", (data || []).map((i: Record<string, unknown>) => ({
-          id: i.id, customer_id: i.customerId, customer_name: i.customerName, items: i.items,
-          total: i.total, status: i.status, date: i.date, due_date: i.due, notes: i.notes,
-          discount_type: i.discountType ?? "none", discount_value: i.discountValue ?? 0,
-          booked: Boolean(i.booked), booked_at: i.bookedAt ?? null, booked_by: i.bookedBy ?? "",
+        const incoming = (data || []) as Record<string, unknown>[];
+        const incomingIds = new Set(incoming.map((i) => normId(i.id)));
+        const { data: existingInvoices } = await db.from("invoices").select("id");
+        const removedIds = (existingInvoices || [])
+          .map((r) => r.id)
+          .filter((id) => id != null && !incomingIds.has(normId(id)));
+        if (removedIds.length) await deleteInvoicePdfs(db, removedIds);
+
+        await upsertSync("invoices", incoming.map((i) => ({
+          id: i.id,
+          customer_id: i.customerId,
+          customer_name: i.customerName,
+          items: i.items,
+          total: i.total,
+          status: i.status,
+          date: i.date,
+          due_date: i.due,
+          notes: i.notes,
+          discount_type: i.discountType ?? "none",
+          discount_value: i.discountValue ?? 0,
+          booked: Boolean(i.booked),
+          booked_at: i.bookedAt ?? null,
+          booked_by: i.bookedBy ?? "",
         })), "id");
       } else if (entity === "expenses") {
         const incoming = (data || []) as Record<string, unknown>[];
@@ -306,24 +414,66 @@ Deno.serve(async (req) => {
           qty: l.qty, value: l.value ?? l.total ?? null, note: l.note || "", date: l.date, added_by: l.by || "",
         })), "id");
       } else if (entity === "koi_fish") {
-        await upsertSync("koi_fish", (data || []).map((k: Record<string, unknown>) => ({
-          id: k.id, photo: k.photo ?? null, name: k.name ?? "", variety: k.variety ?? "",
-          size: k.size ?? null, grade: k.grade ?? "", pond_name: k.pondName ?? "", price: k.price ?? 0,
-          notes: k.notes ?? "", status: k.status ?? "available", date_added: k.dateAdded ?? null,
-          sold_to: k.soldTo ?? null, sold_date: k.soldDate ?? null, sold_price: k.soldPrice ?? null,
-          sell_disposition: k.sellDisposition ?? null, keep_pond_name: k.keepPondName ?? null,
-          death_date: k.deathDate ?? null, death_cause: k.deathCause ?? null, death_photo: k.deathPhoto ?? null,
-        })), "id");
+        const incoming = (data || []) as Record<string, unknown>[];
+        const incomingIds = new Set(incoming.map((k) => normId(k.id)));
+        const { data: existingKoi } = await db.from("koi_fish").select("id");
+        const removedIds = (existingKoi || [])
+          .map((r) => r.id)
+          .filter((id) => id != null && !incomingIds.has(normId(id)));
+        if (removedIds.length) await deleteKoiFishImages(db, removedIds);
+
+        const rows = await Promise.all(incoming.map(async (k) => ({
+          id: k.id,
+          photo: await resolveKoiFishPhoto(db, k.id, k.photo),
+          name: k.name ?? "",
+          variety: k.variety ?? "",
+          size: k.size ?? null,
+          grade: k.grade ?? "",
+          pond_name: k.pondName ?? "",
+          price: k.price ?? 0,
+          notes: k.notes ?? "",
+          status: k.status ?? "available",
+          date_added: k.dateAdded ?? null,
+          sold_to: k.soldTo ?? null,
+          sold_date: k.soldDate ?? null,
+          sold_price: k.soldPrice ?? null,
+          sell_disposition: k.sellDisposition ?? null,
+          keep_pond_name: k.keepPondName ?? null,
+          death_date: k.deathDate ?? null,
+          death_cause: k.deathCause ?? null,
+          death_photo: await resolveKoiFishDeathPhoto(db, k.id, k.deathPhoto ?? k.death_photo),
+        })));
+        await upsertSync("koi_fish", rows, "id");
       } else if (entity === "customer_koi") {
-        await upsertSync("customer_koi", (data || []).map((r: Record<string, unknown>) => ({
-          id: r.id, customer_id: r.customerId ?? null, customer_name: r.customerName ?? "",
-          koi_id: r.koiId ?? "", photo: r.photo ?? null, fish_name: r.fishName ?? "",
-          variety: r.variety ?? "", size: r.size ?? null, pond_name: r.pondName ?? "",
-          purchase_date: r.purchaseDate ?? null, purchase_price: r.purchasePrice ?? 0,
-          notes: r.notes ?? "", status: r.status ?? "in_pond", collected_date: r.collectedDate ?? null,
-          death_date: r.deathDate ?? null, death_cause: r.deathCause ?? null,
-          death_photo: r.deathPhoto ?? null, death_notes: r.deathNotes ?? "",
-        })), "id");
+        const incoming = (data || []) as Record<string, unknown>[];
+        const incomingIds = new Set(incoming.map((r) => normId(r.id)));
+        const { data: existingRows } = await db.from("customer_koi").select("id");
+        const removedIds = (existingRows || [])
+          .map((r) => r.id)
+          .filter((id) => id != null && !incomingIds.has(normId(id)));
+        if (removedIds.length) await deleteCustomerKoiImages(db, removedIds);
+
+        const rows = await Promise.all(incoming.map(async (r) => ({
+          id: r.id,
+          customer_id: r.customerId ?? null,
+          customer_name: r.customerName ?? "",
+          koi_id: r.koiId ?? "",
+          photo: await resolveCustomerKoiPhoto(db, r.id, r.photo),
+          fish_name: r.fishName ?? "",
+          variety: r.variety ?? "",
+          size: r.size ?? null,
+          pond_name: r.pondName ?? "",
+          purchase_date: r.purchaseDate ?? null,
+          purchase_price: r.purchasePrice ?? 0,
+          notes: r.notes ?? "",
+          status: r.status ?? "in_pond",
+          collected_date: r.collectedDate ?? null,
+          death_date: r.deathDate ?? null,
+          death_cause: r.deathCause ?? null,
+          death_photo: await resolveCustomerKoiDeathPhoto(db, r.id, r.deathPhoto ?? r.death_photo),
+          death_notes: r.deathNotes ?? "",
+        })));
+        await upsertSync("customer_koi", rows, "id");
       } else if (entity === "farm_pond_data") {
         const payload = data && typeof data === "object" ? data : {};
         const { error } = await db.from("farm_pond_data").upsert(

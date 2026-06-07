@@ -62,7 +62,8 @@ CREATE TABLE IF NOT EXISTS invoices (
   discount_value NUMERIC DEFAULT 0,
   booked BOOLEAN DEFAULT false,
   booked_at TIMESTAMPTZ,
-  booked_by TEXT DEFAULT ''
+  booked_by TEXT DEFAULT '',
+  pdf_url TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS expenses (

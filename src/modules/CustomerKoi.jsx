@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Fish, Search, Home, Edit2, Eye, Skull, MessageSquare, PackageCheck, X } from 'lucide-react'
 import {
   KOI_VARIETIES, CUSTOMER_KOI_DEATH_CAUSES, CUSTOMER_KOI_STATUS, CUSTOMER_KOI_STATUS_OPTIONS,
@@ -9,6 +9,9 @@ import Fab from '../components/Fab'
 import { readKoiImageFile } from '../lib/koiImage'
 import { openWhatsAppChat } from '../lib/invoiceWhatsApp'
 import { isAppVisibleCustomerKoi } from '../lib/retention'
+import StoredImage from '../components/StoredImage'
+import * as db from '../lib/database'
+import { isSupabaseConfigured } from '../lib/supabase'
 
 const tierColor = { Bronze: 'text-orange-400', Silver: 'text-slate-300', Gold: 'text-yellow-400', Platinum: 'text-cyan-400' }
 
@@ -143,6 +146,20 @@ function statusDetail(rec) {
 }
 
 export default function CustomerKoi({ records, setRecords, customers, farmKoiList, addNotification, canEdit = false }) {
+  const refreshCustomerKoiImage = useCallback(async ({ entity, id, field }) => {
+    if (!isSupabaseConfigured) return
+    try {
+      const { url } = await db.refreshSignedImage({ entity, id, field })
+      if (!url) return
+      setRecords((prev) => prev.map((r) => {
+        if (r.id !== id) return r
+        if (field === 'death_photo') return { ...r, deathPhoto: url }
+        return { ...r, photo: url }
+      }))
+    } catch {
+      /* signed URL refresh failed */
+    }
+  }, [setRecords])
   const denyEdit = () => addNotification({
     type: 'error',
     title: 'Permission Denied',
@@ -464,7 +481,17 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
             ) : filteredRecords.map((r) => (
               <Card key={r.id} className={`overflow-hidden ${STATUS_STYLE[r.status]?.border || ''}`}>
                 <div className="aspect-video bg-slate-900 relative">
-                  {r.photo ? <img src={r.photo} alt="" className={`w-full h-full object-cover ${r.status === CUSTOMER_KOI_STATUS.DECEASED ? 'grayscale' : ''}`} /> : <div className="w-full h-full flex items-center justify-center"><Fish size={40} className="text-slate-600" /></div>}
+                  {r.photo ? (
+                    <StoredImage
+                      src={r.photo}
+                      alt=""
+                      className={`w-full h-full object-cover ${r.status === CUSTOMER_KOI_STATUS.DECEASED ? 'grayscale' : ''}`}
+                      entity="customer_koi"
+                      recordId={r.id}
+                      field="photo"
+                      onRefresh={refreshCustomerKoiImage}
+                    />
+                  ) : <div className="w-full h-full flex items-center justify-center"><Fish size={40} className="text-slate-600" /></div>}
                   {statusBadge(r)}
                 </div>
                 <div className="p-4">
@@ -605,7 +632,17 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       <Modal open={!!viewRec} onClose={() => setViewRec(null)} title={viewRec ? displayFishName(viewRec) : ''} size="lg">
         {viewRec && (
           <div className="space-y-4">
-            {viewRec.photo && <img src={viewRec.photo} alt="" className="w-full max-h-56 object-cover rounded-xl" />}
+            {viewRec.photo && (
+              <StoredImage
+                src={viewRec.photo}
+                alt=""
+                className="w-full max-h-56 object-cover rounded-xl"
+                entity="customer_koi"
+                recordId={viewRec.id}
+                field="photo"
+                onRefresh={refreshCustomerKoiImage}
+              />
+            )}
             <Badge className={STATUS_STYLE[viewRec.status]?.badge}>{formatCustomerKoiStatus(viewRec.status)}</Badge>
             <div className="grid grid-cols-2 gap-2 text-sm">
               {[
@@ -627,7 +664,17 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
                 <p className="text-red-300 font-bold text-xs mb-2">Death Record</p>
                 <p className="text-sm text-white">{viewRec.deathDate} — {viewRec.deathCause}</p>
                 {viewRec.deathNotes && <p className="text-slate-400 text-sm mt-1">{viewRec.deathNotes}</p>}
-                {viewRec.deathPhoto && <img src={viewRec.deathPhoto} alt="" className="mt-2 rounded-lg max-h-40 border border-red-500/50" />}
+                {viewRec.deathPhoto && (
+                  <StoredImage
+                    src={viewRec.deathPhoto}
+                    alt=""
+                    className="mt-2 rounded-lg max-h-40 border border-red-500/50"
+                    entity="customer_koi"
+                    recordId={viewRec.id}
+                    field="death_photo"
+                    onRefresh={refreshCustomerKoiImage}
+                  />
+                )}
               </Card>
             )}
           </div>

@@ -153,24 +153,30 @@ After deploy, verify:
 
 ---
 
-## Expense receipt storage (Phase 3)
+## Private image storage
 
-Receipt photos live in Supabase Storage bucket `expense-receipts` (private — not world-readable).
+Farm photos use **private Supabase Storage buckets** with **signed URLs** (4-hour TTL). Postgres stores object paths only — not base64 blobs.
+
+| Bucket | Used for | DB columns |
+|--------|----------|------------|
+| `expense-receipts` | Expense receipt photos | `expenses.image_url` |
+| `koi-photos` | Koi + customer koi photos | `koi_fish.photo`, `koi_fish.death_photo`, `customer_koi.photo`, `customer_koi.death_photo` |
+
+**Not stored in cloud** (by design): invoice PDFs (generated on demand in the browser), AI chat attachments (session only; sent to Gemini, not persisted).
 
 **One-time setup**
 
 1. Run migrations in order (SQL Editor or CLI), including:
    - `supabase/migrations/20250615000000_expense_storage.sql`
    - `supabase/migrations/20250616000000_expense_storage_private.sql`
+   - `supabase/migrations/20250617000000_koi_photos_storage.sql`
 2. Redeploy: `supabase functions deploy farm-api`
 
 **Behaviour**
 
-- Postgres stores the object path (`receipts/{id}.jpg`) in `expenses.image_url`.
-- `farm-api` returns **signed URLs** (4-hour TTL) to logged-in users with the Expenses permission.
-- Opening a receipt view refreshes the signed URL; expired links auto-retry via `refresh_expense_receipt`.
-- Legacy public URLs and base64 `image_data` still migrate on the next expense sync.
-- Deleted or retention-purged expenses remove their storage files.
+- Legacy base64 in Postgres migrates to Storage on the next sync.
+- `farm-api` signs URLs on fetch; the app refreshes via `refresh_signed_image` when a link expires.
+- Deleted, synced-out, or retention-purged records remove their storage files.
 
 ---
 
@@ -180,7 +186,7 @@ Receipt photos live in Supabase Storage bucket `expense-receipts` (private — n
 |-------|--------|
 | Phase 1 — README, Analytics, Sentry scaffold, `/health.json` | Done in repo |
 | Phase 2 — UptimeRobot monitor, Sentry DSN, enable Vercel Analytics | Code ready — enable in UptimeRobot / Vercel / Sentry dashboards (see above) |
-| Phase 3 — Expense receipts → private Storage + signed URLs | Done in repo — run migrations + redeploy `farm-api` |
+| Phase 3 — Private Storage + signed URLs (expenses, koi photos) | Done in repo — run migrations + redeploy `farm-api` |
 
 ---
 
