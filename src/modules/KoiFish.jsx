@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
 import {
-  Fish, Plus, Search, MapPin, Edit2, Eye, Skull, ShoppingBag, ImagePlus,
+  Fish, Plus, Search, MapPin, Edit2, Eye, ShoppingBag, ImagePlus, Truck, HeartPulse, RotateCcw,
 } from 'lucide-react'
 import {
-  KOI_VARIETIES, KOI_GRADES, KOI_STATUS, KOI_DEATH_CAUSES, FARM_POND_NAMES, mergePondNames,
+  KOI_VARIETIES, KOI_STATUS, FARM_POND_NAMES, mergePondNames,
   formatSGD, formatKoiSize, normalizeKoiSizeCm, genId, today,
 } from '../data/constants'
 import { Badge, Btn, Card, Input, Modal, PondNameInput, Select, Textarea } from '../components/ui'
@@ -13,13 +13,19 @@ import { readKoiImageFile } from '../lib/koiImage'
 const STATUS_STYLE = {
   available: { badge: 'bg-emerald-500/20 text-emerald-300', border: 'border-slate-700/50' },
   sold: { badge: 'bg-blue-500/20 text-blue-300', border: 'border-slate-700/50 opacity-60' },
-  reserved: { badge: 'bg-amber-500/20 text-amber-300', border: 'border-amber-500/30' },
   sick: { badge: 'bg-red-500/20 text-red-300', border: 'border-amber-500/40' },
-  deceased: { badge: 'bg-slate-500/20 text-slate-400', border: 'border-red-500/40' },
 }
 
+const KOI_STATUS_OPTIONS = [
+  { value: KOI_STATUS.AVAILABLE, label: 'Available' },
+  { value: KOI_STATUS.SICK, label: 'Sick' },
+  { value: KOI_STATUS.SOLD, label: 'Sold' },
+]
+
+const STOCK_STATUSES = [KOI_STATUS.AVAILABLE, KOI_STATUS.SICK]
+
 const emptyKoiForm = () => ({
-  photo: null, name: '', variety: KOI_VARIETIES[0], size: '', grade: KOI_GRADES[0],
+  photo: null, name: '', variety: KOI_VARIETIES[0], size: '',
   pondName: 'A1', price: '', notes: '',
 })
 
@@ -36,17 +42,28 @@ function PhotoPicker({ photo, onPick, label = 'Photo' }) {
   return (
     <div>
       <p className="text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wide">{label}</p>
-      <label className="block cursor-pointer rounded-xl border-2 border-dashed border-slate-600 hover:border-cyan-500/50 p-4 text-center transition-colors">
-        {photo ? (
-          <img src={photo} alt="Preview" className="w-48 h-48 mx-auto object-cover rounded-lg" />
-        ) : (
-          <div className="py-8 text-slate-500">
-            <ImagePlus size={32} className="mx-auto mb-2 text-cyan-400" />
-            <p className="text-sm">Click to upload (max 2MB)</p>
-          </div>
-        )}
+      <label className="block cursor-pointer rounded-xl border-2 border-dashed border-slate-600 hover:border-cyan-500/50 p-3 text-center transition-colors">
+        <div className="w-full max-w-xs mx-auto aspect-square bg-slate-900 rounded-lg flex items-center justify-center overflow-hidden">
+          {photo ? (
+            <img src={photo} alt="Preview" className="w-full h-full object-contain" />
+          ) : (
+            <div className="py-8 text-slate-500">
+              <ImagePlus size={32} className="mx-auto mb-2 text-cyan-400" />
+              <p className="text-sm">Click to upload (max 2MB)</p>
+            </div>
+          )}
+        </div>
         <input type="file" accept="image/*" className="hidden" onChange={(e) => pick(e.target.files?.[0])} />
       </label>
+    </div>
+  )
+}
+
+function KoiPhoto({ src, alt, className = '' }) {
+  if (!src) return null
+  return (
+    <div className={`bg-slate-900 flex items-center justify-center overflow-hidden ${className}`}>
+      <img src={src} alt={alt} className="w-full h-full object-contain" />
     </div>
   )
 }
@@ -63,11 +80,11 @@ export default function KoiFish({
   const [editKoi, setEditKoi] = useState(null)
   const [viewKoi, setViewKoi] = useState(null)
   const [sellKoi, setSellKoi] = useState(null)
-  const [deathKoi, setDeathKoi] = useState(null)
+  const [shipKoi, setShipKoi] = useState(null)
+  const [shipToPond, setShipToPond] = useState('')
   const [sellForm, setSellForm] = useState({
     customerId: '', soldPrice: '', soldDate: today(), disposition: 'taken', keepPondName: '',
   })
-  const [deathForm, setDeathForm] = useState({ deathDate: today(), deathCause: KOI_DEATH_CAUSES[0], deathPhoto: null, notes: '' })
 
   const pondNames = useMemo(
     () => mergePondNames(FARM_POND_NAMES, koiList.map((k) => k.pondName)),
@@ -86,21 +103,29 @@ export default function KoiFish({
   const counts = useMemo(() => ({
     available: koiList.filter((k) => k.status === KOI_STATUS.AVAILABLE).length,
     sold: koiList.filter((k) => k.status === KOI_STATUS.SOLD).length,
-    reserved: koiList.filter((k) => k.status === KOI_STATUS.RESERVED).length,
     sick: koiList.filter((k) => k.status === KOI_STATUS.SICK).length,
-    deceased: koiList.filter((k) => k.status === KOI_STATUS.DECEASED).length,
   }), [koiList])
 
   const soldFish = koiList.filter((k) => k.status === KOI_STATUS.SOLD)
   const recentSold = [...soldFish].sort((a, b) => (b.soldDate || '').localeCompare(a.soldDate || '')).slice(0, 5)
 
+  const parseOptionalSize = (value) => {
+    if (value == null || value === '') return null
+    const sizeCm = normalizeKoiSizeCm(value)
+    if (sizeCm == null) {
+      addNotification({ type: 'error', title: 'Invalid Size', message: 'Enter a valid size in cm, or leave blank.' })
+      return undefined
+    }
+    return sizeCm
+  }
+
   const addKoi = () => {
-    const sizeCm = normalizeKoiSizeCm(form.size)
-    if (!form.variety || form.price === '' || sizeCm == null) {
-      if (sizeCm == null) addNotification({ type: 'error', title: 'Size Required', message: 'Enter fish size in cm.' })
-      else addNotification({ type: 'error', title: 'Missing Fields', message: 'Enter variety, size, price, and pond.' })
+    if (!form.variety || form.price === '') {
+      addNotification({ type: 'error', title: 'Missing Fields', message: 'Enter variety, price, and pond.' })
       return
     }
+    const sizeCm = parseOptionalSize(form.size)
+    if (sizeCm === undefined) return
     if (!form.pondName?.trim()) {
       addNotification({ type: 'error', title: 'Pond Required', message: 'Select or enter a pond name.' })
       return
@@ -130,11 +155,8 @@ export default function KoiFish({
 
   const saveEdit = () => {
     if (!editKoi) return
-    const sizeCm = normalizeKoiSizeCm(editKoi.size)
-    if (sizeCm == null) {
-      addNotification({ type: 'error', title: 'Invalid Size', message: 'Enter fish size in cm.' })
-      return
-    }
+    const sizeCm = parseOptionalSize(editKoi.size)
+    if (sizeCm === undefined) return
     if (!editKoi.pondName?.trim()) {
       addNotification({ type: 'error', title: 'Pond Required', message: 'Select or enter a pond name.' })
       return
@@ -159,6 +181,38 @@ export default function KoiFish({
     setKoiList((prev) => prev.map((k) => (k.id === editKoi.id ? updated : k)))
     addNotification({ type: 'success', title: 'Updated', message: `${editKoi.id} saved` })
     setEditKoi(null)
+  }
+
+  const setKoiStatus = (koi, status) => {
+    setKoiList((prev) => prev.map((k) => (k.id === koi.id ? { ...k, status } : k)))
+    if (status === KOI_STATUS.SICK) {
+      addNotification({ type: 'warning', title: 'Marked Sick', message: `${koi.name || koi.variety} moved to sick list — use Ship to quarantine if needed.` })
+    } else if (status === KOI_STATUS.AVAILABLE) {
+      addNotification({ type: 'success', title: 'Recovered', message: `${koi.name || koi.variety} marked available again.` })
+    }
+  }
+
+  const openShip = (koi) => {
+    setShipKoi(koi)
+    setShipToPond(pondNames.find((p) => p !== koi.pondName) || '')
+  }
+
+  const confirmShip = () => {
+    if (!shipKoi) return
+    const to = shipToPond?.trim()
+    if (!to) {
+      addNotification({ type: 'error', title: 'Destination Required', message: 'Select the pond to move this fish to.' })
+      return
+    }
+    if (to === shipKoi.pondName) {
+      addNotification({ type: 'error', title: 'Same Pond', message: 'Choose a different pond from the current one.' })
+      return
+    }
+    const from = shipKoi.pondName
+    setKoiList((prev) => prev.map((k) => (k.id === shipKoi.id ? { ...k, pondName: to } : k)))
+    addNotification({ type: 'success', title: 'Pond Transfer', message: `${shipKoi.name || shipKoi.variety} moved ${from} → ${to}` })
+    setShipKoi(null)
+    setShipToPond('')
   }
 
   const confirmSell = () => {
@@ -202,22 +256,8 @@ export default function KoiFish({
     setSellKoi(null)
   }
 
-  const confirmDeath = () => {
-    if (!deathKoi) return
-    setKoiList((prev) => prev.map((k) => (k.id === deathKoi.id ? {
-      ...k,
-      status: KOI_STATUS.DECEASED,
-      deathDate: deathForm.deathDate,
-      deathCause: deathForm.deathCause,
-      deathPhoto: deathForm.deathPhoto,
-      notes: deathForm.notes || k.notes,
-    } : k)))
-    addNotification({ type: 'warning', title: 'Death Recorded', message: `${deathKoi.name || deathKoi.variety} recorded as deceased` })
-    setDeathKoi(null)
-    setDeathForm({ deathDate: today(), deathCause: KOI_DEATH_CAUSES[0], deathPhoto: null, notes: '' })
-  }
-
   const customerName = (id) => customers.find((c) => String(c.id) === String(id))?.name || '—'
+  const fabHidden = showAdd || !!editKoi || !!viewKoi || !!sellKoi || !!shipKoi
 
   return (
     <div className="space-y-4 pb-20 lg:pb-12">
@@ -226,17 +266,15 @@ export default function KoiFish({
           <Fish className="text-cyan-400" />Koi Fish Inventory
           <Badge className="bg-cyan-500/20 text-cyan-300">{koiList.length}</Badge>
         </h2>
-        <p className="text-slate-400 text-sm">Farm stock · sold · health records</p>
+        <p className="text-slate-400 text-sm">Farm stock · pond transfers · sales</p>
       </div>
-      <Fab onClick={() => { setForm(emptyKoiForm()); setShowAdd(true) }} label="Add Koi" hidden={showAdd || !!editKoi || !!viewKoi || !!sellKoi || !!deathKoi} />
+      <Fab onClick={() => { setForm(emptyKoiForm()); setShowAdd(true) }} label="Add Koi" hidden={fabHidden} />
 
       <div className="flex flex-wrap gap-2 text-xs">
         {[
           ['available', counts.available, 'text-emerald-400'],
           ['sold', counts.sold, 'text-blue-400'],
-          ['reserved', counts.reserved, 'text-amber-400'],
           ['sick', counts.sick, 'text-red-400'],
-          ['deceased', counts.deceased, 'text-slate-400'],
         ].map(([label, n, color]) => (
           <button
             key={label}
@@ -262,7 +300,7 @@ export default function KoiFish({
           options={[{ value: 'all', label: 'All ponds' }, ...pondNames.map((p) => ({ value: p, label: p }))]} />
       </div>
       <div className="flex gap-2 overflow-x-auto pb-1">
-        {['all', 'available', 'sold', 'reserved', 'sick', 'deceased'].map((s) => (
+        {['all', 'available', 'sold', 'sick'].map((s) => (
           <button key={s} type="button" onClick={() => setStatusFilter(s)}
             className={`px-3 py-2 rounded-lg text-xs font-bold capitalize shrink-0 ${statusFilter === s ? 'bg-cyan-500 text-slate-900' : 'bg-slate-700 text-slate-300'}`}>{s}</button>
         ))}
@@ -279,7 +317,7 @@ export default function KoiFish({
             <Card key={k.id} className={`overflow-hidden ${st.border}`}>
               <div className="relative aspect-square bg-slate-900">
                 {k.photo ? (
-                  <img src={k.photo} alt={k.name || k.variety} className={`w-full h-full object-cover ${k.status === 'deceased' ? 'grayscale' : ''}`} />
+                  <img src={k.photo} alt={k.name || k.variety} className="w-full h-full object-contain" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-slate-600"><Fish size={48} /></div>
                 )}
@@ -290,8 +328,9 @@ export default function KoiFish({
                 <p className="text-white font-bold">{k.name || k.variety}</p>
                 <div className="flex flex-wrap gap-1">
                   <Badge className="bg-slate-700 text-slate-300">{k.variety}</Badge>
-                  <Badge className="bg-slate-700 text-slate-300">{k.grade}</Badge>
-                  <Badge className="bg-slate-700 text-slate-300">{formatKoiSize(k.size)}</Badge>
+                  {k.size != null && k.size !== '' && (
+                    <Badge className="bg-slate-700 text-slate-300">{formatKoiSize(k.size)}</Badge>
+                  )}
                 </div>
                 <p className="text-slate-400 text-xs flex items-center gap-1"><MapPin size={12} />{k.pondName}</p>
                 <p className={`text-xl font-black ${k.status === 'sold' ? 'text-slate-500' : 'text-cyan-400'}`}>{formatSGD(k.status === 'sold' ? k.soldPrice : k.price)}</p>
@@ -299,20 +338,29 @@ export default function KoiFish({
                 <div className="flex flex-wrap gap-2 pt-2">
                   <Btn variant="ghost" size="sm" onClick={() => setViewKoi(k)}><Eye size={12} />View</Btn>
                   <Btn variant="ghost" size="sm" onClick={() => setEditKoi({ ...k })}><Edit2 size={12} />Edit</Btn>
-                  {['available', 'reserved'].includes(k.status) && (
-                    <Btn variant="success" size="sm" onClick={() => {
-                      setSellKoi(k)
-                      setSellForm({
-                        customerId: '',
-                        soldPrice: String(k.price),
-                        soldDate: today(),
-                        disposition: 'taken',
-                        keepPondName: k.pondName || 'A1',
-                      })
-                    }}><ShoppingBag size={12} />Sell</Btn>
-                  )}
-                  {k.status !== KOI_STATUS.DECEASED && k.status !== KOI_STATUS.SOLD && (
-                    <Btn variant="danger" size="sm" onClick={() => { setDeathKoi(k); setDeathForm({ deathDate: today(), deathCause: KOI_DEATH_CAUSES[0], deathPhoto: null, notes: '' }) }}><Skull size={12} /></Btn>
+                  {STOCK_STATUSES.includes(k.status) && (
+                    <>
+                      <Btn variant="secondary" size="sm" onClick={() => openShip(k)}><Truck size={12} />Ship</Btn>
+                      <Btn variant="success" size="sm" onClick={() => {
+                        setSellKoi(k)
+                        setSellForm({
+                          customerId: '',
+                          soldPrice: String(k.price),
+                          soldDate: today(),
+                          disposition: 'taken',
+                          keepPondName: k.pondName || 'A1',
+                        })
+                      }}><ShoppingBag size={12} />Sell</Btn>
+                      {k.status === KOI_STATUS.AVAILABLE ? (
+                        <Btn variant="ghost" size="sm" onClick={() => setKoiStatus(k, KOI_STATUS.SICK)} title="Mark as sick">
+                          <HeartPulse size={12} />Sick
+                        </Btn>
+                      ) : (
+                        <Btn variant="ghost" size="sm" onClick={() => setKoiStatus(k, KOI_STATUS.AVAILABLE)} title="Mark recovered">
+                          <RotateCcw size={12} />Recover
+                        </Btn>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -332,7 +380,7 @@ export default function KoiFish({
           <div className="space-y-2">
             {recentSold.map((k) => (
               <div key={k.id} className="flex items-center gap-3 text-sm border-t border-slate-700/50 pt-2">
-                {k.photo ? <img src={k.photo} alt="" className="w-10 h-10 rounded object-cover" /> : <div className="w-10 h-10 rounded bg-slate-800 flex items-center justify-center"><Fish size={16} /></div>}
+                {k.photo ? <img src={k.photo} alt="" className="w-10 h-10 rounded object-contain bg-slate-900" /> : <div className="w-10 h-10 rounded bg-slate-800 flex items-center justify-center"><Fish size={16} /></div>}
                 <div className="flex-1 min-w-0">
                   <p className="text-white truncate">{k.variety} · {customerName(k.soldTo)}</p>
                   <p className="text-slate-500 text-xs">
@@ -352,8 +400,7 @@ export default function KoiFish({
           <PhotoPicker photo={form.photo} onPick={(p) => setForm((f) => ({ ...f, photo: p }))} className="sm:col-span-2" />
           <Input label="Fish name (optional)" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
           <Select label="Variety" value={form.variety} onChange={(e) => setForm((f) => ({ ...f, variety: e.target.value }))} options={KOI_VARIETIES.map((v) => ({ value: v, label: v }))} />
-          <Input label="Size (cm)" type="number" value={form.size} onChange={(e) => setForm((f) => ({ ...f, size: e.target.value }))} min="1" step="0.1" placeholder="e.g. 28" required />
-          <Select label="Grade" value={form.grade} onChange={(e) => setForm((f) => ({ ...f, grade: e.target.value }))} options={KOI_GRADES.map((v) => ({ value: v, label: v }))} />
+          <Input label="Size (cm, optional)" type="number" value={form.size} onChange={(e) => setForm((f) => ({ ...f, size: e.target.value }))} min="1" step="0.1" placeholder="e.g. 28" />
           <PondNameInput value={form.pondName} onChange={(e) => setForm((f) => ({ ...f, pondName: e.target.value }))} required />
           <Input label="Selling price (S$)" type="number" value={form.price} onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))} step="0.01" required />
           <Textarea label="Notes" value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} className="sm:col-span-2" />
@@ -372,11 +419,9 @@ export default function KoiFish({
               <Input label="Name (optional)" value={editKoi.name} onChange={(e) => setEditKoi((k) => ({ ...k, name: e.target.value }))} />
               <Select label="Variety" value={editKoi.variety} onChange={(e) => setEditKoi((k) => ({ ...k, variety: e.target.value }))}
                 options={KOI_VARIETIES.map((v) => ({ value: v, label: v }))} />
-              <Input label="Size (cm)" type="number" value={editKoi.size ?? ''} onChange={(e) => setEditKoi((k) => ({ ...k, size: e.target.value }))} min="1" step="0.1" required />
-              <Select label="Grade" value={editKoi.grade} onChange={(e) => setEditKoi((k) => ({ ...k, grade: e.target.value }))}
-                options={KOI_GRADES.map((v) => ({ value: v, label: v }))} />
+              <Input label="Size (cm, optional)" type="number" value={editKoi.size ?? ''} onChange={(e) => setEditKoi((k) => ({ ...k, size: e.target.value }))} min="1" step="0.1" />
               <Select label="Status" value={editKoi.status} onChange={(e) => setEditKoi((k) => ({ ...k, status: e.target.value }))}
-                options={Object.values(KOI_STATUS).map((v) => ({ value: v, label: v }))} />
+                options={KOI_STATUS_OPTIONS} />
               <PondNameInput value={editKoi.pondName} onChange={(e) => setEditKoi((k) => ({ ...k, pondName: e.target.value }))} required />
               <Input label="Selling price" type="number" value={editKoi.price} onChange={(e) => setEditKoi((k) => ({ ...k, price: e.target.value }))} step="0.01" />
               <Textarea label="Notes" value={editKoi.notes} onChange={(e) => setEditKoi((k) => ({ ...k, notes: e.target.value }))} className="sm:col-span-2" />
@@ -389,12 +434,41 @@ export default function KoiFish({
         )}
       </Modal>
 
+      <Modal open={!!shipKoi} onClose={() => { setShipKoi(null); setShipToPond('') }} title="Ship to Pond" size="sm">
+        {shipKoi && (
+          <>
+            <div className="flex gap-3 mb-4">
+              {shipKoi.photo ? (
+                <img src={shipKoi.photo} alt="" className="w-16 h-16 rounded-lg object-contain bg-slate-900" />
+              ) : (
+                <div className="w-16 h-16 rounded-lg bg-slate-800 flex items-center justify-center"><Fish size={20} /></div>
+              )}
+              <div>
+                <p className="text-white font-bold">{shipKoi.name || shipKoi.variety}</p>
+                <p className="text-slate-400 text-sm">Currently in <span className="text-cyan-300 font-bold">{shipKoi.pondName}</span></p>
+              </div>
+            </div>
+            <PondNameInput
+              label="Move to pond"
+              value={shipToPond}
+              onChange={(e) => setShipToPond(e.target.value)}
+              required
+            />
+            <p className="text-slate-500 text-xs mt-2">Transfer fish between ponds — e.g. D1 → A1 or to quarantine.</p>
+            <div className="modal-actions mt-4 flex justify-end gap-2">
+              <Btn variant="secondary" onClick={() => { setShipKoi(null); setShipToPond('') }}>Cancel</Btn>
+              <Btn onClick={confirmShip}><Truck size={14} />Move Fish</Btn>
+            </div>
+          </>
+        )}
+      </Modal>
+
       <Modal open={!!sellKoi} onClose={() => setSellKoi(null)} title="Mark Koi Sold" size="md">
         {sellKoi && (
           <>
             <div className="flex gap-3 mb-4">
-              {sellKoi.photo ? <img src={sellKoi.photo} alt="" className="w-20 h-20 rounded-lg object-cover" /> : <div className="w-20 h-20 rounded-lg bg-slate-800 flex items-center justify-center"><Fish size={24} /></div>}
-              <div><p className="text-white font-bold">{sellKoi.name || sellKoi.variety}</p><p className="text-slate-400 text-sm">{sellKoi.grade} · {formatKoiSize(sellKoi.size)}</p></div>
+              {sellKoi.photo ? <img src={sellKoi.photo} alt="" className="w-20 h-20 rounded-lg object-contain bg-slate-900" /> : <div className="w-20 h-20 rounded-lg bg-slate-800 flex items-center justify-center"><Fish size={24} /></div>}
+              <div><p className="text-white font-bold">{sellKoi.name || sellKoi.variety}</p><p className="text-slate-400 text-sm">{formatKoiSize(sellKoi.size)} · {sellKoi.pondName}</p></div>
             </div>
             {customers.length === 0 ? (
               <p className="text-amber-300 text-sm bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
@@ -446,29 +520,12 @@ export default function KoiFish({
         )}
       </Modal>
 
-      <Modal open={!!deathKoi} onClose={() => setDeathKoi(null)} title="Record Fish Death" size="md">
-        {deathKoi && (
-          <div className="border border-red-500/30 rounded-xl p-4 space-y-3">
-            <p className="text-red-300 text-sm">Record death for {deathKoi.name || deathKoi.variety}</p>
-            <Input label="Date of death" type="date" value={deathForm.deathDate} onChange={(e) => setDeathForm((f) => ({ ...f, deathDate: e.target.value }))} required />
-            <Select label="Cause" value={deathForm.deathCause} onChange={(e) => setDeathForm((f) => ({ ...f, deathCause: e.target.value }))}
-              options={KOI_DEATH_CAUSES.map((c) => ({ value: c, label: c }))} />
-            <PhotoPicker photo={deathForm.deathPhoto} onPick={(p) => setDeathForm((f) => ({ ...f, deathPhoto: p }))} label="Death photo (optional)" />
-            <Textarea label="Notes" value={deathForm.notes} onChange={(e) => setDeathForm((f) => ({ ...f, notes: e.target.value }))} />
-            <div className="flex justify-end gap-2">
-              <Btn variant="secondary" onClick={() => setDeathKoi(null)}>Cancel</Btn>
-              <Btn variant="danger" onClick={confirmDeath}><Skull size={14} />Record Death</Btn>
-            </div>
-          </div>
-        )}
-      </Modal>
-
       <Modal open={!!viewKoi} onClose={() => setViewKoi(null)} title={viewKoi?.id} size="lg">
         {viewKoi && (
           <div className="space-y-4">
-            {viewKoi.photo ? <img src={viewKoi.photo} alt="" className={`w-full max-h-64 object-cover rounded-xl ${viewKoi.status === 'deceased' ? 'grayscale border-2 border-red-500/50' : ''}`} /> : null}
+            <KoiPhoto src={viewKoi.photo} alt={viewKoi.name || viewKoi.variety} className="w-full aspect-square max-h-80 rounded-xl" />
             <div className="grid grid-cols-2 gap-3 text-sm">
-              {[['Variety', viewKoi.variety], ['Size', formatKoiSize(viewKoi.size)], ['Grade', viewKoi.grade], ['Pond', viewKoi.pondName], ['Price', formatSGD(viewKoi.price)], ['Status', viewKoi.status]].map(([k, v]) => (
+              {[['Variety', viewKoi.variety], ['Size', formatKoiSize(viewKoi.size)], ['Pond', viewKoi.pondName], ['Price', formatSGD(viewKoi.price)], ['Status', viewKoi.status]].map(([k, v]) => (
                 <div key={k}><p className="text-slate-500 text-xs">{k}</p><p className="text-white">{v}</p></div>
               ))}
             </div>
@@ -484,13 +541,6 @@ export default function KoiFish({
                       ? 'Taken away by customer'
                       : '—'}
                 </p>
-              </Card>
-            )}
-            {viewKoi.status === 'deceased' && (
-              <Card className="p-3 border-red-500/40">
-                <p className="text-red-300 text-xs font-bold mb-2">Death record</p>
-                <p className="text-sm text-white">{viewKoi.deathDate} — {viewKoi.deathCause}</p>
-                {viewKoi.deathPhoto && <img src={viewKoi.deathPhoto} alt="" className="mt-2 rounded-lg max-h-40 border border-red-500/50" />}
               </Card>
             )}
             {viewKoi.notes && <p className="text-slate-400 text-sm">{viewKoi.notes}</p>}
