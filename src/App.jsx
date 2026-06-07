@@ -2356,24 +2356,17 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
       return;
     }
     const id = Date.now();
-    let imageUrl = "";
-    let imageData = uploadPreview;
     try {
       setUploading(true);
-      if (isSupabaseConfigured) {
-        const uploaded = await db.uploadExpenseReceipt(id, uploadPreview, uploadName);
-        imageUrl = uploaded.imageUrl || "";
-        imageData = "";
-      }
       const e = {
         id,
         category: null,
         amount: null,
         date: uploadDate,
         note: uploadNote?.trim() || "",
-        imageData,
+        imageData: uploadPreview,
         imageName: uploadName,
-        imageUrl,
+        imageUrl: "",
         addedBy: currentUser?.name || "Staff",
         booked: false,
         bookedAt: null,
@@ -2383,7 +2376,9 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
       addNotification({
         type: "success",
         title: "Receipt Saved",
-        message: isSupabaseConfigured ? "Receipt photo saved to cloud storage." : "Expense invoice photo recorded.",
+        message: isSupabaseConfigured
+          ? "Receipt saved — syncing photo to cloud storage."
+          : "Expense invoice photo recorded.",
       });
       setShowAdd(false);
       resetUpload();
@@ -4755,10 +4750,15 @@ export default function App() {
     if (!dataReady || !isSupabaseConfigured || !auth.getSessionToken() || !currentUser) return;
     if (!hasPermission(currentUser, perm)) return;
     const timer = setTimeout(() => {
-      fn(data).catch((err) => {
-        const msg = err?.message || "Sync failed";
-        handleSyncFailure(new Error(`${label}: ${msg}`));
-      });
+      fn(data)
+        .then(() => {
+          setCloudSync(true);
+          setCloudError(null);
+        })
+        .catch((err) => {
+          const msg = err?.message || "Sync failed";
+          handleSyncFailure(new Error(`${label}: ${msg}`));
+        });
     }, 800);
     return () => clearTimeout(timer);
   }, [dataReady, currentUser, handleSyncFailure]);

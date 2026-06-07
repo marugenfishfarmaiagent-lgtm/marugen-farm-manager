@@ -3,6 +3,41 @@ import { hashPin, verifyPin } from "../_shared/pin.ts";
 import { adminClient, sessionTokenFrom, validateSession } from "../_shared/supabase.ts";
 
 const SESSION_DAYS = 7;
+const MAX_PIN_LENGTH = 32;
+
+const OWNER_PERMISSIONS = [
+  "dashboard", "inventory", "koifish", "customerkoi", "ponds",
+  "invoices", "customers", "expenses", "accounting", "edit", "delete", "refund",
+  "deliveries", "calendar", "chat", "users",
+];
+
+const loginRateMap = new Map<string, { count: number; reset: number }>();
+const LOGIN_RATE_LIMIT = 10;
+const LOGIN_RATE_WINDOW_MS = 15 * 60_000;
+
+function clientIp(req: Request): string {
+  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+    || req.headers.get("x-real-ip")
+    || req.headers.get("cf-connecting-ip")
+    || "unknown";
+}
+
+function checkLoginRateLimit(key: string): boolean {
+  const now = Date.now();
+  const entry = loginRateMap.get(key);
+  if (!entry || now > entry.reset) {
+    loginRateMap.set(key, { count: 1, reset: now + LOGIN_RATE_WINDOW_MS });
+    return true;
+  }
+  if (entry.count >= LOGIN_RATE_LIMIT) return false;
+  entry.count++;
+  return true;
+}
+
+function isValidPin(pin: unknown): pin is string {
+  const s = String(pin ?? "");
+  return s.length >= 4 && s.length <= MAX_PIN_LENGTH && /^\d+$/.test(s);
+}
 
 function publicUser(row: Record<string, unknown>) {
   return {
@@ -70,8 +105,11 @@ Deno.serve(async (req) => {
 
     if (action === "login") {
       const { pin } = body;
-      if (!pin || String(pin).length < 4) {
-        return jsonResponse({ error: "Invalid PIN" }, 400);
+      if (!isValidPin(pin)) {
+        return jsonResponse({ error: "Enter a 4–32 digit PIN" }, 400);
+      }
+      if (!checkLoginRateLimit(`login:${clientIp(req)}`)) {
+        return jsonResponse({ error: "Too many login attempts. Try again in 15 minutes." }, 429);
       }
       const { data: users } = await db.from("farm_users").select("*").eq("active", true);
       for (const user of users || []) {
@@ -88,14 +126,14 @@ Deno.serve(async (req) => {
       if ((count || 0) > 0) return jsonResponse({ error: "Setup already completed" }, 400);
 
       const { name, pin } = body;
-      if (!name?.trim() || !pin || String(pin).length < 4) {
-        return jsonResponse({ error: "Name and 4-digit PIN required" }, 400);
+      if (!name?.trim() || !isValidPin(pin)) {
+        return jsonResponse({ error: "Name and a 4–32 digit PIN required" }, 400);
+      }
+      if (!checkLoginRateLimit(`setup:${clientIp(req)}`)) {
+        return jsonResponse({ error: "Too many setup attempts. Try again later." }, 429);
       }
 
-      const permissions = [
-        "dashboard", "inventory", "invoices", "customers", "expenses", "accounting",
-        "deliveries", "calendar", "chat", "users",
-      ];
+      const permissions = OWNER_PERMISSIONS;
       const pin_hash = await hashPin(String(pin));
       const { data: created, error } = await db.from("farm_users").insert({
         name: name.trim(),
@@ -123,8 +161,8 @@ Deno.serve(async (req) => {
       if (!sessionUser) return jsonResponse({ error: "Unauthorized — login required" }, 401);
 
       const { currentPin, newPin } = body;
-      if (!currentPin || !newPin || String(newPin).length < 4) {
-        return jsonResponse({ error: "Current PIN and new PIN (4+ digits) required" }, 400);
+      if (!isValidPin(currentPin) || !isValidPin(newPin)) {
+        return jsonResponse({ error: "Current and new PIN must be 4–32 digits" }, 400);
       }
       if (String(currentPin) === String(newPin)) {
         return jsonResponse({ error: "New PIN must be different from current PIN" }, 400);
