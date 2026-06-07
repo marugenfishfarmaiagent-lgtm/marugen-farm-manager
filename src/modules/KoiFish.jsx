@@ -7,6 +7,7 @@ import {
   formatSGD, formatKoiSize, normalizeKoiSizeCm, genId, today,
 } from '../data/constants'
 import { Badge, Btn, Card, Input, Modal, PondNameInput, Select, Textarea } from '../components/ui'
+import Fab from '../components/Fab'
 import { readKoiImageFile } from '../lib/koiImage'
 
 const STATUS_STYLE = {
@@ -219,17 +220,15 @@ export default function KoiFish({
   const customerName = (id) => customers.find((c) => String(c.id) === String(id))?.name || '—'
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2">
-            <Fish className="text-cyan-400" />Koi Fish Inventory
-            <Badge className="bg-cyan-500/20 text-cyan-300">{koiList.length}</Badge>
-          </h2>
-          <p className="text-slate-400 text-sm">Farm stock · sold · health records</p>
-        </div>
-        <Btn onClick={() => { setForm(emptyKoiForm()); setShowAdd(true) }} className="w-full sm:w-auto justify-center"><Plus size={16} />Add Koi</Btn>
+    <div className="space-y-4 pb-20 lg:pb-12">
+      <div>
+        <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2">
+          <Fish className="text-cyan-400" />Koi Fish Inventory
+          <Badge className="bg-cyan-500/20 text-cyan-300">{koiList.length}</Badge>
+        </h2>
+        <p className="text-slate-400 text-sm">Farm stock · sold · health records</p>
       </div>
+      <Fab onClick={() => { setForm(emptyKoiForm()); setShowAdd(true) }} label="Add Koi" />
 
       <div className="flex flex-wrap gap-2 text-xs">
         {[

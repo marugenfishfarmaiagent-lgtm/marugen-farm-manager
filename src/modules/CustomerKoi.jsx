@@ -5,6 +5,7 @@ import {
   formatCustomerKoiStatus, formatSGD, formatKoiSize, normalizeKoiSizeCm, genId, today,
 } from '../data/constants'
 import { Badge, Btn, Card, Input, Modal, PondNameInput, Select, Textarea } from '../components/ui'
+import Fab from '../components/Fab'
 import { readKoiImageFile } from '../lib/koiImage'
 import { openWhatsAppChat } from '../lib/invoiceWhatsApp'
 
@@ -369,14 +370,12 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div>
-          <h2 className="text-xl sm:text-2xl font-black text-white">Customer Koi</h2>
-          <p className="text-slate-400 text-sm">Sold koi — track pond, taken away, or deceased</p>
-        </div>
-        <Btn onClick={openAdd} className="w-full sm:w-auto justify-center"><Plus size={16} />Add Koi Record</Btn>
+    <div className="space-y-4 pb-20 lg:pb-12">
+      <div>
+        <h2 className="text-xl sm:text-2xl font-black text-white">Customer Koi</h2>
+        <p className="text-slate-400 text-sm">Sold koi — track pond, taken away, or deceased</p>
       </div>
+      <Fab onClick={openAdd} label="Add Koi Record" />
 
       <div className="flex flex-col lg:flex-row gap-4 min-h-[480px]">
         <Card className="lg:w-64 shrink-0 p-3 space-y-2 lg:sticky lg:top-4 lg:self-start max-h-[70vh] overflow-y-auto">

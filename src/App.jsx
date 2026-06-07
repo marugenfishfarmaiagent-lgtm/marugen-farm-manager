@@ -34,6 +34,7 @@ import {
   INITIAL_DELIVERIES, INITIAL_EVENTS, LOCAL_DEMO_USERS, customerDeliveryFields, invoiceDeliveryFields, makeBookedPatch,
 } from "./data/constants";
 import logo from "./assets/logo.png";
+import Fab from "./components/Fab";
 
 function BookedBadge({ booked, bookedBy }) {
   if (booked) {
@@ -657,14 +658,12 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
   const lowStockItems = products.filter((p) => p.minStock > 0 && p.stock <= p.minStock);
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-xl sm:text-2xl font-black text-white">Inventory</h2>
-          <p className="text-slate-400 text-sm">Products, Feed & Supplies</p>
-        </div>
-        <Btn onClick={() => setShowAdd(true)} className="w-full sm:w-auto justify-center"><Plus size={16} />Add Product</Btn>
+    <div className="space-y-4 pb-20 lg:pb-12">
+      <div>
+        <h2 className="text-xl sm:text-2xl font-black text-white">Inventory</h2>
+        <p className="text-slate-400 text-sm">Products, Feed & Supplies</p>
       </div>
+      <Fab onClick={() => setShowAdd(true)} label="Add Product" />
 
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
         {[
@@ -1124,17 +1123,15 @@ function InvoiceModule({ invoices, setInvoices, setCustomers, setProducts, setSt
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-xl sm:text-2xl font-black text-white">Invoices</h2>
-          <p className="text-slate-400 text-sm">Record invoices — mark when entered in your accounting app</p>
-          {unbookedInvoiceCount > 0 && (
-            <p className="text-amber-400/90 text-xs mt-1">{unbookedInvoiceCount} not yet entered in accounts</p>
-          )}
-        </div>
-        <Btn onClick={() => setShowNew(true)} className="w-full sm:w-auto justify-center"><Plus size={16} />New Invoice</Btn>
+    <div className="space-y-4 pb-20 lg:pb-12">
+      <div>
+        <h2 className="text-xl sm:text-2xl font-black text-white">Invoices</h2>
+        <p className="text-slate-400 text-sm">Record invoices — mark when entered in your accounting app</p>
+        {unbookedInvoiceCount > 0 && (
+          <p className="text-amber-400/90 text-xs mt-1">{unbookedInvoiceCount} not yet entered in accounts</p>
+        )}
       </div>
+      <Fab onClick={() => setShowNew(true)} label="New Invoice" />
 
       <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
         {["all", "pending", "paid", "overdue", "cancelled"].map(s => (
@@ -1666,11 +1663,12 @@ function CustomerModule({ customers, setCustomers, addNotification }) {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div><h2 className="text-xl sm:text-2xl font-black text-white">Customers</h2><p className="text-slate-400 text-sm">{customers.length} registered</p></div>
-        <Btn onClick={() => setShowAdd(true)} className="w-full sm:w-auto justify-center"><Plus size={16} />Add Customer</Btn>
+    <div className="space-y-4 pb-20 lg:pb-12">
+      <div>
+        <h2 className="text-xl sm:text-2xl font-black text-white">Customers</h2>
+        <p className="text-slate-400 text-sm">{customers.length} registered</p>
       </div>
+      <Fab onClick={() => setShowAdd(true)} label="Add Customer" />
 
       <div className="flex flex-wrap gap-3">
         <div className="relative flex-1 min-w-[180px]">
@@ -1903,19 +1901,15 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-xl sm:text-2xl font-black text-white">Expense Receipts</h2>
-          <p className="text-slate-400 text-sm">Upload invoice photos — enter amounts in your accounting app separately</p>
-          {unbookedExpenseCount > 0 && (
-            <p className="text-amber-400/90 text-xs mt-1">{unbookedExpenseCount} not yet entered in accounts</p>
-          )}
-        </div>
-        <Btn onClick={() => { resetUpload(); setShowAdd(true); }} className="w-full sm:w-auto justify-center">
-          <ImagePlus size={16} />Upload Receipt
-        </Btn>
+    <div className="space-y-4 pb-20 lg:pb-12">
+      <div>
+        <h2 className="text-xl sm:text-2xl font-black text-white">Expense Receipts</h2>
+        <p className="text-slate-400 text-sm">Upload invoice photos — enter amounts in your accounting app separately</p>
+        {unbookedExpenseCount > 0 && (
+          <p className="text-amber-400/90 text-xs mt-1">{unbookedExpenseCount} not yet entered in accounts</p>
+        )}
       </div>
+      <Fab onClick={() => { resetUpload(); setShowAdd(true); }} label="Upload Receipt" icon={ImagePlus} />
 
       <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
         {[
@@ -2351,16 +2345,17 @@ function DeliveryModule({
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div><h2 className="text-xl sm:text-2xl font-black text-white">Deliveries</h2><p className="text-slate-400 text-sm">Singapore delivery management</p></div>
-        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-          <Btn variant="secondary" onClick={() => setShowManageGroups(true)} className="w-full sm:w-auto justify-center">
-            <Users size={16} />WhatsApp Groups
-          </Btn>
-          <Btn onClick={openAddDelivery} className="w-full sm:w-auto justify-center"><Plus size={16} />Schedule Delivery</Btn>
+    <div className="space-y-4 pb-20 lg:pb-12">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="text-xl sm:text-2xl font-black text-white">Deliveries</h2>
+          <p className="text-slate-400 text-sm">Singapore delivery management</p>
         </div>
+        <Btn variant="secondary" onClick={() => setShowManageGroups(true)} className="w-full sm:w-auto justify-center shrink-0">
+          <Users size={16} />WhatsApp Groups
+        </Btn>
       </div>
+      <Fab onClick={openAddDelivery} label="Schedule Delivery" />
 
       <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
         {["all", "scheduled", "transit", "delivered", "cancelled"].map(s => (
@@ -2710,11 +2705,12 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
   );
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div><h2 className="text-xl sm:text-2xl font-black text-white">Calendar</h2><p className="text-slate-400 text-sm">Events & reminders</p></div>
-        <Btn onClick={openAddEvent} className="w-full sm:w-auto justify-center"><Plus size={16} />Add Event</Btn>
+    <div className="space-y-4 pb-20 lg:pb-12">
+      <div>
+        <h2 className="text-xl sm:text-2xl font-black text-white">Calendar</h2>
+        <p className="text-slate-400 text-sm">Events & reminders</p>
       </div>
+      <Fab onClick={openAddEvent} label="Add Event" />
 
       {events.length === 0 ? (
         <Card className="p-10 text-center">
@@ -3189,14 +3185,12 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2"><UserCog size={22} className="text-cyan-400 shrink-0" />Team & Permissions</h2>
-          <p className="text-slate-400 text-sm">Manage staff & owner accounts with module access</p>
-        </div>
-        <Btn onClick={openAdd} className="w-full sm:w-auto justify-center"><UserPlus size={16} />Add User</Btn>
+    <div className="space-y-4 pb-20 lg:pb-12">
+      <div>
+        <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2"><UserCog size={22} className="text-cyan-400 shrink-0" />Team & Permissions</h2>
+        <p className="text-slate-400 text-sm">Manage staff & owner accounts with module access</p>
       </div>
+      <Fab onClick={openAdd} label="Add User" icon={UserPlus} />
 
       <AiUsageStatsPanel isOwner={currentUser.role === "owner"} cloudMode={cloudMode} />
 

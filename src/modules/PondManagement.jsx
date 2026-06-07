@@ -6,6 +6,7 @@ import {
   POND_TYPES, MAINTENANCE_TYPES, DEFAULT_TREATMENT_GUIDES, genId, today,
 } from '../data/constants'
 import { Badge, Btn, Card, Input, Modal, PondNameInput, Select, Textarea } from '../components/ui'
+import Fab from '../components/Fab'
 
 const POND_TYPE_COLOR = { koi: 'bg-cyan-500/20 text-cyan-300', arowana: 'bg-amber-500/20 text-amber-300', quarantine: 'bg-red-500/20 text-red-300', display: 'bg-purple-500/20 text-purple-300' }
 
@@ -208,15 +209,22 @@ export default function PondManagement({ pondData, setPondData, addNotification,
 
   const tabs = ['ponds', 'maintenance', 'treatments', 'reminders', 'guide']
 
+  const fabByTab = {
+    ponds: { onClick: () => setShowAddPond(true), label: 'Add Pond' },
+    maintenance: { onClick: openNewMaint, label: 'Log Maintenance', disabled: !hasPonds },
+    treatments: { onClick: openNewTreatment, label: 'Log Treatment', disabled: !hasPonds },
+    reminders: { onClick: openNewReminder, label: 'Add Reminder', disabled: !hasPonds, icon: Bell },
+    guide: isOwner ? { onClick: () => setGuideModal(true), label: 'Add Guide' } : null,
+  }
+  const fabAction = fabByTab[tab]
+
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div>
-          <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2"><Droplets className="text-cyan-400" />Pond Management</h2>
-          <p className="text-slate-400 text-sm">Maintenance · treatments · reminders</p>
-        </div>
-        {tab === 'ponds' && <Btn onClick={() => setShowAddPond(true)}><Plus size={16} />Add Pond</Btn>}
+    <div className="space-y-4 pb-20 lg:pb-12">
+      <div>
+        <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2"><Droplets className="text-cyan-400" />Pond Management</h2>
+        <p className="text-slate-400 text-sm">Maintenance · treatments · reminders</p>
       </div>
+      {fabAction && <Fab {...fabAction} />}
 
       <div className="flex gap-2 overflow-x-auto pb-1">
         {tabs.map((t) => (
@@ -291,7 +299,6 @@ export default function PondManagement({ pondData, setPondData, addNotification,
               ))}
             </div>
           </Card>
-          <Btn onClick={openNewMaint} disabled={!hasPonds}><Plus size={14} />Log Maintenance</Btn>
         </>
       )}
 
@@ -318,7 +325,6 @@ export default function PondManagement({ pondData, setPondData, addNotification,
               </tbody>
             </table>
           </Card>
-          <Btn onClick={openNewTreatment} disabled={!hasPonds}><Plus size={14} />Log Treatment</Btn>
         </>
       )}
 
@@ -347,13 +353,11 @@ export default function PondManagement({ pondData, setPondData, addNotification,
               </div>
             </Card>
           ))}
-          <Btn onClick={openNewReminder} disabled={!hasPonds}><Bell size={14} />Add Reminder</Btn>
         </>
       )}
 
       {tab === 'guide' && (
         <div className="space-y-3">
-          {isOwner && <Btn onClick={() => setGuideModal(true)}><Plus size={14} />Add Guide</Btn>}
           {(treatmentGuides.length ? treatmentGuides : DEFAULT_TREATMENT_GUIDES).map((g) => (
             <Card key={g.id} className="p-4">
               <div className="flex items-start gap-2">
