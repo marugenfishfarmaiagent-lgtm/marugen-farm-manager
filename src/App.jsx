@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { Users, Users2, Fish, Droplets, FileText, TrendingUp, Truck, Calendar, MessageSquare, Bell, LogOut, Plus, Search, X, Check, AlertTriangle, Home, BarChart2, Menu, DollarSign, Boxes, Eye, Send, Phone, MapPin, Star, Activity, Zap, Clock, CheckCircle, XCircle, Info, Archive, ShoppingBag, Shield, UserCog, UserPlus, Edit2, Trash2, Lock, Printer, BookCheck, ImagePlus, Images, Camera } from "lucide-react";
+import { Users, Fish, FishSymbol, Contact, Droplets, FileText, TrendingUp, Truck, Calendar, MessageSquare, Bell, LogOut, Plus, Search, X, Check, AlertTriangle, Home, BarChart2, Menu, DollarSign, Boxes, Eye, Send, Phone, MapPin, Star, Activity, Zap, Clock, CheckCircle, XCircle, Info, Archive, ShoppingBag, Shield, UserCog, UserPlus, Edit2, Trash2, Lock, Printer, BookCheck, ImagePlus, Images, Camera } from "lucide-react";
 import KoiFish from "./modules/KoiFish";
 import CustomerKoi from "./modules/CustomerKoi";
 import PondManagement from "./modules/PondManagement";
@@ -3653,10 +3653,10 @@ const ALL_NAV_ITEMS = [
   { id: "dashboard", label: "Dashboard", icon: Home },
   { id: "inventory", label: "Inventory", icon: Boxes },
   { id: "koifish", label: "Koi Fish", icon: Fish },
-  { id: "customerkoi", label: "Customer Koi", icon: Users2 },
+  { id: "customerkoi", label: "Customer Koi", icon: FishSymbol },
   { id: "ponds", label: "Pond Mgmt", icon: Droplets },
   { id: "invoices", label: "Invoices", icon: FileText },
-  { id: "customers", label: "Customers", icon: Users },
+  { id: "customers", label: "Customers", icon: Contact },
   { id: "expenses", label: "Expenses", icon: TrendingUp },
   { id: "deliveries", label: "Deliveries", icon: Truck },
   { id: "calendar", label: "Calendar", icon: Calendar },
