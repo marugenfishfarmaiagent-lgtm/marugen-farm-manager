@@ -2,7 +2,7 @@
 enabled = true
 
 [db]
-major_version = 15
+major_version = 17
 
 [functions.auth-login]
 verify_jwt = false

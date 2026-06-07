@@ -61,9 +61,11 @@ Set in **Vercel → Project → Settings → Environment Variables**, then redep
 
 ## Supabase setup
 
-1. Create a Supabase project.
-2. Run migrations from `supabase/migrations/` in order (or use Supabase CLI `supabase db push`).
-3. Deploy edge functions:
+**Marugen production project:** `https://iqwypobdqnrpdkgebkds.supabase.co`
+
+1. **SQL Editor** → run `supabase/setup_marugen_project.sql` (one-shot patch for this project).
+2. **CLI** (logged in as project owner): `bash scripts/deploy-marugen-supabase.sh`
+3. Or manually: run migrations from `supabase/migrations/` in order, then deploy edge functions:
 
 ```bash
 supabase link --project-ref YOUR_PROJECT_REF
