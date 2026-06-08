@@ -43,6 +43,7 @@ function mapProduct(row) {
     stock: Number(row.stock),
     minStock: Number(row.min_stock ?? row.minStock),
     description: row.description || '',
+    trackStock: row.track_stock ?? row.trackStock ?? true,
   }
 }
 

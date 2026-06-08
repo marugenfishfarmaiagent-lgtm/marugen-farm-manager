@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS products (
   unit TEXT DEFAULT 'unit',
   stock NUMERIC DEFAULT 0,
   min_stock NUMERIC DEFAULT 0,
-  description TEXT DEFAULT ''
+  description TEXT DEFAULT '',
+  track_stock BOOLEAN DEFAULT true
 );
 
 CREATE TABLE IF NOT EXISTS invoices (

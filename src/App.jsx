@@ -9,6 +9,7 @@ import {
   clearLocalOnlyStorage, emptyPondData, resolveCloudKoiPayload, resolveCloudWhatsappGroups,
 } from "./lib/cloudData";
 import { deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem } from "./lib/inventoryStock";
+import { isStockTracked, priceListProducts, stockProducts } from "./lib/productCatalog";
 import {
   applyInvoiceKoiSales, restoreInvoiceKoiSales, availableKoiForInvoice,
   formatKoiInvoiceLineName, validateInvoiceKoiSales, findLinkedKoiInvoices, buildKoiRefundUpdate,
@@ -439,7 +440,7 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
   const canAccounting = can("accounting");
   const unbookedExpenses = canExpenses ? expenses.filter((e) => !e.booked).length : 0;
   const unbookedInvoices = invoices.filter((i) => !i.booked && getInvoiceStatus(i) !== "cancelled").length;
-  const lowStock = products.filter((p) => p.minStock > 0 && p.stock <= p.minStock);
+  const lowStock = products.filter((p) => isStockTracked(p) && p.minStock > 0 && p.stock <= p.minStock);
   const todayStr = today();
   const todayEvents = events
     .filter((e) => e.date === todayStr)
@@ -650,13 +651,14 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
 // ─────────────────────────────────────────────
 // INVENTORY / PRODUCTS MODULE
 // ─────────────────────────────────────────────
-const EMPTY_PRODUCT_FORM = { name: "", category: "Fish Food", sku: "", price: "", unit: "kg", stock: "", minStock: "", description: "" };
+const EMPTY_PRODUCT_FORM = { name: "", category: "Fish Food", sku: "", price: "", unit: "kg", stock: "", minStock: "", description: "", trackStock: true };
 
 function InventoryModule({ products, setProducts, stockLog, setStockLog, addNotification, currentUser }) {
   const canEdit = canEditRecords(currentUser);
   const canDelete = canDeleteRecords(currentUser);
   const [tab, setTab] = useState("stock");
   const [showAdd, setShowAdd] = useState(false);
+  const [addCatalogOnly, setAddCatalogOnly] = useState(false);
   const [editProduct, setEditProduct] = useState(null);
   const [deleteProduct, setDeleteProduct] = useState(null);
   const [showUse, setShowUse] = useState(null);
@@ -675,8 +677,12 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
   const visibleStockLog = stockLog.filter((l) => showOlderStockLog || isAppVisibleStockLog(l));
   const hiddenStockLogCount = stockLog.filter((l) => !isAppVisibleStockLog(l)).length;
 
+  const stockItems = useMemo(() => stockProducts(products), [products]);
+  const catalogItems = useMemo(() => priceListProducts(products), [products]);
+  const tabProducts = tab === "pricelist" ? catalogItems : stockItems;
+
   const searchLower = search.toLowerCase();
-  const filtered = products.filter((p) =>
+  const filtered = tabProducts.filter((p) =>
     (catFilter === "All" || p.category === catFilter) &&
     (
       (p.name || "").toLowerCase().includes(searchLower)
@@ -696,19 +702,45 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
   });
 
   const addProduct = () => {
-    if (!form.name?.trim() || form.price === "" || form.stock === "") {
-      addNotification({ type: "error", title: "Missing Fields", message: "Enter product name, price, and stock." });
+    const catalogOnly = addCatalogOnly || form.trackStock === false;
+    if (!form.name?.trim() || form.price === "") {
+      addNotification({ type: "error", title: "Missing Fields", message: "Enter product name and price." });
       return;
     }
-    if (+form.price < 0 || +form.stock < 0) {
+    if (!catalogOnly && form.stock === "") {
+      addNotification({ type: "error", title: "Missing Fields", message: "Enter opening stock for inventory items." });
+      return;
+    }
+    if (+form.price < 0 || (!catalogOnly && +form.stock < 0)) {
       addNotification({ type: "error", title: "Invalid Values", message: "Price and stock cannot be negative." });
       return;
     }
-    const p = { ...form, id: Date.now(), name: form.name.trim(), price: +form.price, stock: +form.stock, minStock: +form.minStock || 0 };
+    const p = {
+      ...form,
+      id: Date.now(),
+      name: form.name.trim(),
+      price: +form.price,
+      stock: catalogOnly ? 0 : +form.stock,
+      minStock: catalogOnly ? 0 : (+form.minStock || 0),
+      trackStock: !catalogOnly,
+    };
     setProducts(prev => [...prev, p]);
-    addNotification({ type: "success", title: "Product Added", message: `${p.name} added to inventory` });
+    addNotification({
+      type: "success",
+      title: catalogOnly ? "Price List Item Added" : "Product Added",
+      message: `${p.name} ${catalogOnly ? "added to invoice price list" : "added to inventory"}`,
+    });
     setShowAdd(false);
+    setAddCatalogOnly(false);
     setForm(EMPTY_PRODUCT_FORM);
+  };
+
+  const openAddProduct = (catalogOnly = false) => {
+    setAddCatalogOnly(catalogOnly);
+    setForm(catalogOnly
+      ? { ...EMPTY_PRODUCT_FORM, trackStock: false, stock: 0, minStock: 0, unit: "bag" }
+      : EMPTY_PRODUCT_FORM);
+    setShowAdd(true);
   };
 
   const saveEditProduct = () => {
@@ -716,11 +748,16 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
-    if (!editProduct?.name?.trim() || editProduct.price === "" || editProduct.stock === "") {
-      addNotification({ type: "error", title: "Missing Fields", message: "Enter product name, price, and stock." });
+    if (!editProduct?.name?.trim() || editProduct.price === "") {
+      addNotification({ type: "error", title: "Missing Fields", message: "Enter product name and price." });
       return;
     }
-    if (+editProduct.price < 0 || +editProduct.stock < 0) {
+    const catalogOnly = editProduct.trackStock === false;
+    if (!catalogOnly && editProduct.stock === "") {
+      addNotification({ type: "error", title: "Missing Fields", message: "Enter stock level." });
+      return;
+    }
+    if (+editProduct.price < 0 || (!catalogOnly && +editProduct.stock < 0)) {
       addNotification({ type: "error", title: "Invalid Values", message: "Price and stock cannot be negative." });
       return;
     }
@@ -729,8 +766,9 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       ...editProduct,
       name: editProduct.name.trim(),
       price: +editProduct.price,
-      stock: +editProduct.stock,
-      minStock: +editProduct.minStock || 0,
+      stock: catalogOnly ? 0 : +editProduct.stock,
+      minStock: catalogOnly ? 0 : (+editProduct.minStock || 0),
+      trackStock: !catalogOnly,
     };
     setProducts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
     if (prevName && prevName !== updated.name) {
@@ -774,20 +812,21 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
     addNotification({ type: "info", title: "Restocked", message: `${product.name} restocked by ${qty} ${product.unit}` });
   };
 
-  const totalStockValue = products.reduce((s, p) => s + p.stock * p.price, 0);
-  const lowStockItems = products.filter((p) => p.minStock > 0 && p.stock <= p.minStock);
+  const totalStockValue = stockItems.reduce((s, p) => s + p.stock * p.price, 0);
+  const lowStockItems = stockItems.filter((p) => p.minStock > 0 && p.stock <= p.minStock);
 
   return (
     <div className="space-y-4 pb-20 lg:pb-12">
       <div>
         <h2 className="text-xl sm:text-2xl font-black text-white">Inventory</h2>
-        <p className="text-slate-400 text-sm">Products, Feed & Supplies</p>
+        <p className="text-slate-400 text-sm">Stock tracking & invoice price list</p>
       </div>
-      <Fab onClick={() => setShowAdd(true)} label="Add Product" hidden={showAdd || !!editProduct || !!deleteProduct || !!showUse || !!showRestock || !!showSell} />
+      <Fab onClick={() => openAddProduct(tab === "pricelist")} label={tab === "pricelist" ? "Add Price Item" : "Add Product"} hidden={showAdd || !!editProduct || !!deleteProduct || !!showUse || !!showRestock || !!showSell} />
 
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
-          { label: "Total Products", value: products.length, icon: Boxes, color: "text-cyan-400" },
+          { label: "Stock Products", value: stockItems.length, icon: Boxes, color: "text-cyan-400" },
+          { label: "Price List Items", value: catalogItems.length, icon: FileText, color: "text-violet-400" },
           { label: "Low Stock Items", value: lowStockItems.length, icon: AlertTriangle, color: lowStockItems.length > 0 ? "text-amber-400" : "text-emerald-400" },
           { label: "Stock Value (Selling)", value: formatSGD(totalStockValue), icon: TrendingUp, color: "text-emerald-400" },
         ].map(s => (
@@ -800,15 +839,19 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       </div>
 
       <div className="flex gap-2 border-b border-slate-700 pb-0">
-        {["stock", "log"].map(t => (
-          <button key={t} onClick={() => setTab(t)}
-            className={`px-4 py-2 text-sm font-bold capitalize border-b-2 transition-all ${tab === t ? "border-cyan-400 text-cyan-400" : "border-transparent text-slate-400 hover:text-white"}`}>
-            {t === "stock" ? "📦 Stock" : "📋 Activity Log"}
+        {[
+          { id: "stock", label: "📦 Stock" },
+          { id: "pricelist", label: "📋 Price List" },
+          { id: "log", label: "📜 Activity Log" },
+        ].map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            className={`px-4 py-2 text-sm font-bold border-b-2 transition-all ${tab === t.id ? "border-cyan-400 text-cyan-400" : "border-transparent text-slate-400 hover:text-white"}`}>
+            {t.label}
           </button>
         ))}
       </div>
 
-      {tab === "stock" && (
+      {(tab === "stock" || tab === "pricelist") && (
         <>
           <div className="flex flex-wrap gap-3">
             <div className="relative flex-1 min-w-[180px]">
@@ -827,44 +870,52 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {filtered.length === 0 ? (
               <Card className="p-8 text-center text-slate-500 md:col-span-2 xl:col-span-3">
-                {products.length === 0 ? "No products yet — tap Add Product to get started." : "No products match your search or filter."}
+                {tabProducts.length === 0
+                  ? (tab === "pricelist" ? "No price list items yet — tap Add Price Item." : "No products yet — tap Add Product.")
+                  : "No products match your search or filter."}
               </Card>
             ) : filtered.map((p) => {
-              const isLow = p.minStock > 0 && p.stock <= p.minStock;
+              const isCatalog = !isStockTracked(p);
+              const isLow = !isCatalog && p.minStock > 0 && p.stock <= p.minStock;
               return (
-                <Card key={p.id} className={`p-4 ${isLow ? "border-amber-500/30 bg-amber-500/5" : ""}`}>
+                <Card key={p.id} className={`p-4 ${isLow ? "border-amber-500/30 bg-amber-500/5" : isCatalog ? "border-violet-500/20" : ""}`}>
                   <div className="flex items-start justify-between mb-3 gap-2">
                     <div className="min-w-0">
                       <p className="text-white font-bold text-sm">{p.name}</p>
                       <p className="text-slate-500 text-xs">{p.sku || "—"} · {p.category || "—"}</p>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
+                      {isCatalog && <Badge className="bg-violet-500/20 text-violet-300">Invoice only</Badge>}
                       {isLow && <Badge className="bg-amber-500/20 text-amber-300">Low Stock</Badge>}
                       {canEdit && <Btn variant="ghost" size="sm" onClick={() => setEditProduct({ ...p })} title="Edit"><Edit2 size={12} /></Btn>}
                       {canDelete && <Btn variant="danger" size="sm" onClick={() => setDeleteProduct(p)} title="Delete"><Trash2 size={12} /></Btn>}
                     </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-2 mb-4 text-center">
-                    <div className="bg-slate-900/50 rounded-lg p-2">
-                      <p className={`text-lg font-black ${isLow ? "text-amber-400" : "text-white"}`}>{p.stock}</p>
-                      <p className="text-slate-500 text-xs">In stock ({p.unit})</p>
-                    </div>
+                  <div className={`grid gap-2 mb-4 text-center ${isCatalog ? "grid-cols-1" : "grid-cols-2"}`}>
+                    {!isCatalog && (
+                      <div className="bg-slate-900/50 rounded-lg p-2">
+                        <p className={`text-lg font-black ${isLow ? "text-amber-400" : "text-white"}`}>{p.stock}</p>
+                        <p className="text-slate-500 text-xs">In stock ({p.unit})</p>
+                      </div>
+                    )}
                     <div className="bg-slate-900/50 rounded-lg p-2">
                       <p className="text-lg font-black text-cyan-400">{formatSGD(p.price)}</p>
-                      <p className="text-slate-500 text-xs">Selling price</p>
+                      <p className="text-slate-500 text-xs">{isCatalog ? "Invoice price" : "Selling price"}</p>
                     </div>
                   </div>
-                  {p.minStock > 0 && (
+                  {!isCatalog && p.minStock > 0 && (
                     <div className="mb-3">
                       <div className="flex justify-between text-xs text-slate-500 mb-1"><span>Stock Level</span><span>Min: {p.minStock}</span></div>
                       <div className="h-1.5 bg-slate-700 rounded-full"><div className={`h-full rounded-full ${isLow ? "bg-amber-400" : "bg-emerald-400"}`} style={{ width: `${Math.min((p.stock / (p.minStock * 3)) * 100, 100)}%` }} /></div>
                     </div>
                   )}
-                  <div className="flex gap-2 flex-wrap">
-                    <Btn variant="success" size="sm" onClick={() => { setShowSell(p); setSellPrice(p.price.toString()); }}><ShoppingBag size={12} />Sell</Btn>
-                    <Btn variant="secondary" size="sm" onClick={() => setShowUse(p)}><Archive size={12} />Use</Btn>
-                    <Btn variant="ghost" size="sm" onClick={() => { setShowRestock(p); setRestockQty(1); }}><Plus size={12} />Restock</Btn>
-                  </div>
+                  {!isCatalog && (
+                    <div className="flex gap-2 flex-wrap">
+                      <Btn variant="success" size="sm" onClick={() => { setShowSell(p); setSellPrice(p.price.toString()); }}><ShoppingBag size={12} />Sell</Btn>
+                      <Btn variant="secondary" size="sm" onClick={() => setShowUse(p)}><Archive size={12} />Use</Btn>
+                      <Btn variant="ghost" size="sm" onClick={() => { setShowRestock(p); setRestockQty(1); }}><Plus size={12} />Restock</Btn>
+                    </div>
+                  )}
                 </Card>
               );
             })}
@@ -912,25 +963,34 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       )}
 
       {/* Add Product Modal */}
-      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add New Product" size="lg">
+      <Modal open={showAdd} onClose={() => { setShowAdd(false); setAddCatalogOnly(false); }} title={addCatalogOnly ? "Add Price List Item" : "Add New Product"} size="lg">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {addCatalogOnly && (
+            <p className="sm:col-span-2 text-violet-300 text-xs bg-violet-500/10 border border-violet-500/30 rounded-lg p-2">
+              Invoice price list only — not tracked in stock. Use on invoices without deducting inventory.
+            </p>
+          )}
           <Input label="Product Name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required className="sm:col-span-2" />
           <Select label="Category" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} options={PRODUCT_CATEGORIES} />
           <Input label="SKU" value={form.sku} onChange={e => setForm(f => ({ ...f, sku: e.target.value }))} placeholder="FF001" />
           <Input label="Selling Price (S$)" type="number" value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))} step="0.01" required />
-          <Input label="Current Stock" type="number" value={form.stock} onChange={e => setForm(f => ({ ...f, stock: e.target.value }))} required />
-          <Input label="Min Stock Alert" type="number" value={form.minStock} onChange={e => setForm(f => ({ ...f, minStock: e.target.value }))} />
-          <Input label="Unit" value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} placeholder="kg / bottle / unit" />
+          {!addCatalogOnly && (
+            <>
+              <Input label="Current Stock" type="number" value={form.stock} onChange={e => setForm(f => ({ ...f, stock: e.target.value }))} required />
+              <Input label="Min Stock Alert" type="number" value={form.minStock} onChange={e => setForm(f => ({ ...f, minStock: e.target.value }))} />
+            </>
+          )}
+          <Input label="Unit" value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} placeholder="bag / bottle / pcs" />
           <Textarea label="Description" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} className="sm:col-span-2" />
         </div>
         <div className="modal-actions">
-          <Btn variant="secondary" onClick={() => setShowAdd(false)}>Cancel</Btn>
-          <Btn onClick={addProduct}><Plus size={14} />Add Product</Btn>
+          <Btn variant="secondary" onClick={() => { setShowAdd(false); setAddCatalogOnly(false); }}>Cancel</Btn>
+          <Btn onClick={addProduct}><Plus size={14} />{addCatalogOnly ? "Add to Price List" : "Add Product"}</Btn>
         </div>
       </Modal>
 
       {/* Edit Product Modal */}
-      <Modal open={!!editProduct} onClose={() => setEditProduct(null)} title="Edit Product" size="lg">
+      <Modal open={!!editProduct} onClose={() => setEditProduct(null)} title={editProduct?.trackStock === false ? "Edit Price List Item" : "Edit Product"} size="lg">
         {editProduct && (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -938,9 +998,13 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
               <Select label="Category" value={editProduct.category} onChange={e => setEditProduct(p => ({ ...p, category: e.target.value }))} options={PRODUCT_CATEGORIES} />
               <Input label="SKU" value={editProduct.sku} onChange={e => setEditProduct(p => ({ ...p, sku: e.target.value }))} placeholder="FF001" />
               <Input label="Selling Price (S$)" type="number" value={editProduct.price} onChange={e => setEditProduct(p => ({ ...p, price: e.target.value }))} step="0.01" required />
-              <Input label="Current Stock" type="number" value={editProduct.stock} onChange={e => setEditProduct(p => ({ ...p, stock: e.target.value }))} required />
-              <Input label="Min Stock Alert" type="number" value={editProduct.minStock} onChange={e => setEditProduct(p => ({ ...p, minStock: e.target.value }))} />
-              <Input label="Unit" value={editProduct.unit} onChange={e => setEditProduct(p => ({ ...p, unit: e.target.value }))} placeholder="kg / bottle / unit" />
+              {editProduct.trackStock !== false && (
+                <>
+                  <Input label="Current Stock" type="number" value={editProduct.stock} onChange={e => setEditProduct(p => ({ ...p, stock: e.target.value }))} required />
+                  <Input label="Min Stock Alert" type="number" value={editProduct.minStock} onChange={e => setEditProduct(p => ({ ...p, minStock: e.target.value }))} />
+                </>
+              )}
+              <Input label="Unit" value={editProduct.unit} onChange={e => setEditProduct(p => ({ ...p, unit: e.target.value }))} placeholder="bag / bottle / pcs" />
               <Textarea label="Description" value={editProduct.description} onChange={e => setEditProduct(p => ({ ...p, description: e.target.value }))} className="sm:col-span-2" />
             </div>
             <div className="modal-actions">
@@ -1143,7 +1207,7 @@ function InvoiceModule({
   const addProductItem = (productId) => {
     const p = products.find((x) => String(x.id) === String(productId));
     if (!p) return;
-    if (p.stock <= 0) {
+    if (isStockTracked(p) && p.stock <= 0) {
       addNotification({ type: "warning", title: "Out of Stock", message: `${p.name} has no stock left.` });
       return;
     }
@@ -1575,18 +1639,21 @@ function InvoiceModule({
                     if (e.target.value) { addProductItem(e.target.value); e.target.value = ""; }
                   }}
                 >
-                  <option value="">+ Add from Inventory</option>
-                  {PRODUCT_CATEGORIES.map(cat => {
-                    const catProducts = products.filter(p => p.category === cat);
-                    if (!catProducts.length) return null;
-                    return (
-                      <optgroup key={cat} label={cat}>
-                        {catProducts.map(p => (
-                          <option key={p.id} value={p.id}>{p.name} — {formatSGD(p.price)} ({p.stock} {p.unit})</option>
-                        ))}
-                      </optgroup>
-                    );
-                  })}
+                  <option value="">+ Add Product</option>
+                  {stockProducts(products).length > 0 && (
+                    <optgroup label="Inventory (stock tracked)">
+                      {stockProducts(products).map(p => (
+                        <option key={p.id} value={p.id}>{p.name} — {formatSGD(p.price)} ({p.stock} {p.unit})</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {priceListProducts(products).length > 0 && (
+                    <optgroup label="Price List (invoice only)">
+                      {priceListProducts(products).map(p => (
+                        <option key={p.id} value={p.id}>{p.name} — {formatSGD(p.price)}</option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
               )}
               <Btn variant="ghost" size="sm" onClick={addManualItem} className="shrink-0 justify-center">
@@ -1602,19 +1669,22 @@ function InvoiceModule({
             <div className="space-y-3">
               {form.items.map((it, idx) => {
                 const fromKoi = !!it.koiId;
-                const fromInventory = !it.manual && !!it.productId;
-                const lineType = fromKoi ? "fish" : fromInventory ? "inventory" : "manual";
+                const linkedProduct = it.productId ? products.find((p) => String(p.id) === String(it.productId)) : null;
+                const fromPriceList = linkedProduct && !isStockTracked(linkedProduct);
+                const fromInventory = !it.manual && !!it.productId && !fromPriceList;
+                const lineType = fromKoi ? "fish" : fromPriceList ? "pricelist" : fromInventory ? "inventory" : "manual";
                 return (
-                  <Card key={idx} className={`p-3 border-slate-700/50 ${lineType === "fish" ? "border-emerald-500/20" : lineType === "inventory" ? "border-cyan-500/20" : "border-amber-500/20"}`}>
+                  <Card key={idx} className={`p-3 border-slate-700/50 ${lineType === "fish" ? "border-emerald-500/20" : lineType === "inventory" ? "border-cyan-500/20" : lineType === "pricelist" ? "border-violet-500/20" : "border-amber-500/20"}`}>
                     <div className="flex items-center justify-between mb-2 gap-2">
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="text-xs font-bold text-slate-500 shrink-0">Line {idx + 1}</span>
                         <Badge className={
                           lineType === "fish" ? "bg-emerald-500/20 text-emerald-300"
                             : lineType === "inventory" ? "bg-cyan-500/20 text-cyan-300"
-                              : "bg-amber-500/20 text-amber-300"
+                              : lineType === "pricelist" ? "bg-violet-500/20 text-violet-300"
+                                : "bg-amber-500/20 text-amber-300"
                         }>
-                          {lineType === "fish" ? "Fish Stock" : lineType === "inventory" ? "Inventory" : "Manual"}
+                          {lineType === "fish" ? "Fish Stock" : lineType === "inventory" ? "Inventory" : lineType === "pricelist" ? "Price List" : "Manual"}
                         </Badge>
                         {it.koiAlreadySold && (
                           <Badge className="bg-blue-500/20 text-blue-300 text-[10px]">Sold</Badge>
@@ -4940,7 +5010,7 @@ export default function App() {
   const unreadCount = notifications.filter(n => !n.read).length;
 
   useEffect(() => {
-    const lowStock = products.filter((p) => p.minStock > 0 && p.stock <= p.minStock);
+    const lowStock = products.filter((p) => isStockTracked(p) && p.minStock > 0 && p.stock <= p.minStock);
     if (lowStock.length > 0 && currentUser && !lowStockNotified.current) {
       lowStockNotified.current = true;
       addNotification({

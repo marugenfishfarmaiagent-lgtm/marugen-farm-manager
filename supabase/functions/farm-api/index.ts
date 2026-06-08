@@ -342,6 +342,7 @@ Deno.serve(async (req) => {
         await upsertSync("products", (data || []).map((p: Record<string, unknown>) => ({
           id: p.id, name: p.name, category: p.category, sku: p.sku, price: p.price,
           cost: p.cost ?? 0, unit: p.unit, stock: p.stock, min_stock: p.minStock, description: p.description,
+          track_stock: p.trackStock !== false,
         })), "id");
       } else if (entity === "invoices") {
         const incoming = (data || []) as Record<string, unknown>[];

@@ -1,4 +1,5 @@
 import { today } from '../data/constants'
+import { isStockTracked } from './productCatalog'
 
 export function serializeInvoiceItem(it) {
   const item = {
@@ -25,6 +26,7 @@ export function validateStockForItems(products, items) {
   for (const it of linked) {
     const p = products.find((x) => String(x.id) === String(it.productId))
     if (!p) return { ok: false, message: `"${it.name}" is no longer in inventory.` }
+    if (!isStockTracked(p)) continue
     const qty = +it.qty || 0
     if (qty <= 0) return { ok: false, message: `Invalid quantity for ${it.name}.` }
     if (qty > p.stock) {
@@ -36,6 +38,7 @@ export function validateStockForItems(products, items) {
 
 function adjustProductsStock(setProducts, items, deltaSign) {
   setProducts((prev) => prev.map((p) => {
+    if (!isStockTracked(p)) return p
     const item = items.find((it) => it.productId != null && String(it.productId) === String(p.id))
     if (!item) return p
     const qty = +item.qty || 0
@@ -52,6 +55,7 @@ function buildLogEntries(items, products, { invoiceId, by, restore }) {
     .filter((it) => it.productId != null && it.productId !== '')
     .map((it, i) => {
       const p = products.find((x) => String(x.id) === String(it.productId))
+      if (p && !isStockTracked(p)) return null
       const qty = +it.qty || 0
       const price = +it.price || p?.price || 0
       return {
@@ -66,6 +70,7 @@ function buildLogEntries(items, products, { invoiceId, by, restore }) {
         by: by || 'Staff',
       }
     })
+    .filter(Boolean)
 }
 
 /** Deduct inventory when an invoice with linked products is created. */

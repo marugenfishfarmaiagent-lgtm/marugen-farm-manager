@@ -10,6 +10,7 @@ import { actionConfirmKey, describeRiskyAction, isRiskyAiAction } from './aiRisk
 import {
   findProductCandidates, findProductInList, formatProductCatalogEntry, productMatchHint,
 } from './productMatch'
+import { isStockTracked } from './productCatalog'
 
 const EXPENSE_ALIASES = {
   feed: 'Feed', food: 'Feed', pellets: 'Feed', fishfood: 'Feed',
@@ -235,6 +236,7 @@ function buildProductFromArgs(a, id) {
     stock,
     minStock: parseQuantity(a.minStock) ?? 0,
     description: (a.description || name).trim(),
+    trackStock: true,
   }
 }
 
@@ -409,7 +411,7 @@ export function buildBusinessContext(ctx) {
   const paid = invoices.filter((i) => getInvoiceStatus(i) === 'paid')
   const pending = invoices.filter((i) => getInvoiceStatus(i) === 'pending')
   const overdue = invoices.filter((i) => getInvoiceStatus(i) === 'overdue')
-  const lowStock = products.filter((p) => p.stock <= p.minStock)
+  const lowStock = products.filter((p) => isStockTracked(p) && p.stock <= p.minStock)
   const now = today()
   const koiAvailable = koiFishList.filter((k) => k.status !== KOI_STATUS.SOLD)
   const koiSold = koiFishList.filter((k) => k.status === KOI_STATUS.SOLD)
@@ -506,7 +508,7 @@ export function executeAiAction(name, args, ctx) {
         const q = a.query || 'summary'
         const data = {}
         if (q === 'summary' || q === 'low_stock') {
-          data.lowStock = ctx.products.filter((p) => p.stock <= p.minStock).map((p) => ({
+          data.lowStock = ctx.products.filter((p) => isStockTracked(p) && p.stock <= p.minStock).map((p) => ({
             name: p.name, stock: p.stock, minStock: p.minStock, unit: p.unit,
           }))
         }

@@ -1,0 +1,57 @@
+-- Invoice-only price list items (track_stock=false: no stock deduction, hidden from stock tab)
+
+ALTER TABLE products ADD COLUMN IF NOT EXISTS track_stock BOOLEAN DEFAULT true;
+
+INSERT INTO products (id, name, category, sku, price, cost, unit, stock, min_stock, description, track_stock)
+SELECT v.id, v.name, v.category, v.sku, v.price, 0, v.unit, 0, 0, v.name, false
+FROM (VALUES
+  (1780917820001::bigint, '1kg Dried Black Soldier Fly', 'Fish Food', 'FF001', 30, 'bag'),
+  (1780917820002, '500g Dried Black Soldier Fly', 'Fish Food', 'FF002', 18, 'pack'),
+  (1780917820003, '15kg Marugen Mix M size', 'Fish Food', 'MK001', 110, 'bag'),
+  (1780917820004, '15kg Marugen Mix L size', 'Fish Food', 'MK002', 110, 'bag'),
+  (1780917820005, '10kg Marugen Mix M size', 'Fish Food', 'MK003', 90, 'bag'),
+  (1780917820006, '10kg Marugen Mix L size', 'Fish Food', 'MK004', 90, 'bag'),
+  (1780917820007, '5kg Marugen Mix M size', 'Fish Food', 'MK005', 55, 'bag'),
+  (1780917820008, '5kg Marugen Mix L size', 'Fish Food', 'MK006', 55, 'bag'),
+  (1780917820009, '3kg Marugen Mix M size', 'Fish Food', 'MK007', 36, 'bag'),
+  (1780917820010, '3kg Marugen Mix L size', 'Fish Food', 'MK008', 36, 'bag'),
+  (1780917820011, '2kg Marugen Mix M size', 'Fish Food', 'MK009', 25, 'bag'),
+  (1780917820012, '2kg Marugen Mix L size', 'Fish Food', 'MK010', 25, 'bag'),
+  (1780917820013, '1kg Marugen Mix M size', 'Fish Food', 'MK011', 15, 'bag'),
+  (1780917820014, '1kg Marugen Mix L size', 'Fish Food', 'MK012', 15, 'bag'),
+  (1780917820015, '15kg JPD Fujizakura + Akafuji Mixed M size', 'Fish Food', 'JPDM001', 200, 'bag'),
+  (1780917820016, '15kg JPD Fujizakura + Akafuji Mixed L size', 'Fish Food', 'JPDM002', 200, 'bag'),
+  (1780917820017, '10kg JPD Fujizakura + Akafuji Mixed M size', 'Fish Food', 'JPDM003', 150, 'bag'),
+  (1780917820018, '10kg JPD Fujizakura + Akafuji Mixed L size', 'Fish Food', 'JPDM004', 150, 'bag'),
+  (1780917820019, '5kg JPD Fujizakura + Akafuji Mixed M size', 'Fish Food', 'JPDM005', 85, 'bag'),
+  (1780917820020, '5kg JPD Fujizakura + Akafuji Mixed L size', 'Fish Food', 'JPDM006', 85, 'bag'),
+  (1780917820021, '3kg JPD Fujizakura + Akafuji Mixed M size', 'Fish Food', 'JPDM007', 55, 'bag'),
+  (1780917820022, '3kg JPD Fujizakura + Akafuji Mixed L size', 'Fish Food', 'JPDM008', 55, 'bag'),
+  (1780917820023, '2kg JPD Fujizakura + Akafuji Mixed M size', 'Fish Food', 'JPDM009', 38, 'bag'),
+  (1780917820024, '2kg JPD Fujizakura + Akafuji Mixed L size', 'Fish Food', 'JPDM010', 38, 'bag'),
+  (1780917820025, '1kg JPD Fujizakura + Akafuji Mixed M size', 'Fish Food', 'JPDM011', 20, 'bag'),
+  (1780917820026, '1kg JPD Fujizakura + Akafuji Mixed L size', 'Fish Food', 'JPDM012', 20, 'bag'),
+  (1780917820027, '15kg JPD Shori + Akafuji Mixed M size', 'Fish Food', 'JPDM013', 205, 'bag'),
+  (1780917820028, '15kg JPD Shori + Akafuji Mixed L size', 'Fish Food', 'JPDM014', 205, 'bag'),
+  (1780917820029, '10kg JPD Shori + Akafuji Mixed M size', 'Fish Food', 'JPDM015', 160, 'bag'),
+  (1780917820030, '10kg JPD Shori + Akafuji Mixed L size', 'Fish Food', 'JPDM016', 160, 'bag'),
+  (1780917820031, '5kg JPD Shori + Akafuji Mixed M size', 'Fish Food', 'JPDM017', 90, 'bag'),
+  (1780917820032, '5kg JPD Shori + Akafuji Mixed L size', 'Fish Food', 'JPDM018', 90, 'bag'),
+  (1780917820033, '3kg JPD Shori + Akafuji Mixed M size', 'Fish Food', 'JPDM019', 58, 'bag'),
+  (1780917820034, '3kg JPD Shori + Akafuji Mixed L size', 'Fish Food', 'JPDM020', 58, 'bag'),
+  (1780917820035, '2kg JPD Shori + Akafuji Mixed M size', 'Fish Food', 'JPDM021', 40, 'bag'),
+  (1780917820036, '2kg JPD Shori + Akafuji Mixed L size', 'Fish Food', 'JPDM022', 40, 'bag'),
+  (1780917820037, '1kg JPD Shori + Akafuji Mixed M size', 'Fish Food', 'JPDM023', 22, 'bag'),
+  (1780917820038, '1kg JPD Shori + Akafuji Mixed L size', 'Fish Food', 'JPDM024', 22, 'bag'),
+  (1780917820039, '15kg Saki-Hikari Color M size', 'Fish Food', 'SH001', 230, 'bag'),
+  (1780917820040, '15kg Saki-Hikari Color L size', 'Fish Food', 'SH002', 230, 'bag'),
+  (1780917820041, '15kg Saki-Hikari Growth M size', 'Fish Food', 'SH003', 200, 'bag'),
+  (1780917820042, '15kg Saki-Hikari Growth L size', 'Fish Food', 'SH004', 200, 'bag'),
+  (1780917820043, '15kg Saki Mixed Colour + Growth M size', 'Fish Food', 'SHM001', 225, 'bag'),
+  (1780917820044, '10kg Saki Mixed Colour + Growth M size', 'Fish Food', 'SHM002', 170, 'bag'),
+  (1780917820045, '5kg Saki Mixed Colour + Growth M size', 'Fish Food', 'SHM003', 95, 'bag'),
+  (1780917820046, '3kg Saki Mixed Colour + Growth M size', 'Fish Food', 'SHM004', 60, 'bag'),
+  (1780917820047, '2kg Saki Mixed Colour + Growth M size', 'Fish Food', 'SHM005', 45, 'bag'),
+  (1780917820048, '1kg Saki Mixed Colour + Growth M size', 'Fish Food', 'SHM006', 25, 'bag')
+) AS v(id, name, category, sku, price, unit)
+WHERE NOT EXISTS (SELECT 1 FROM products p WHERE p.sku = v.sku OR p.name = v.name);
