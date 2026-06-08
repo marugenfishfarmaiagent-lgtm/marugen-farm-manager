@@ -53,6 +53,9 @@ CREATE TABLE IF NOT EXISTS invoices (
   id TEXT PRIMARY KEY,
   customer_id BIGINT,
   customer_name TEXT,
+  customer_phone TEXT DEFAULT '',
+  customer_whatsapp TEXT DEFAULT '',
+  customer_address TEXT DEFAULT '',
   items JSONB DEFAULT '[]',
   total NUMERIC DEFAULT 0,
   status TEXT DEFAULT 'pending',
@@ -64,6 +67,7 @@ CREATE TABLE IF NOT EXISTS invoices (
   booked BOOLEAN DEFAULT false,
   booked_at TIMESTAMPTZ,
   booked_by TEXT DEFAULT '',
+  created_by TEXT DEFAULT '',
   pdf_url TEXT DEFAULT ''
 );
 

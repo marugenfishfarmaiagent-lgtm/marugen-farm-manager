@@ -1156,7 +1156,7 @@ function InvoiceModule({
     return true;
   });
   const hiddenInvoiceCount = invoices.filter((i) => !isAppVisibleInvoice(i)).length;
-  const unbookedInvoiceCount = invoices.filter((i) => !i.booked && i.status !== "cancelled").length;
+  const unbookedInvoiceCount = invoices.filter((i) => !i.booked && getInvoiceStatus(i) !== "cancelled").length;
   const activeViewInv = viewInv ? invoices.find((i) => i.id === viewInv.id) || viewInv : null;
   const canCancelInvoice = (inv) => ["pending", "overdue"].includes(getInvoiceStatus(inv));
   const canMarkPaid = (inv) => ["pending", "overdue"].includes(getInvoiceStatus(inv));
@@ -1460,8 +1460,9 @@ function InvoiceModule({
   };
 
   const persistInvoiceWhatsapp = (invId, phone) => {
-    setInvoices((prev) => prev.map((i) => (i.id === invId ? { ...i, customerWhatsapp: phone } : i)));
-    setViewInv((prev) => (prev?.id === invId ? { ...prev, customerWhatsapp: phone } : prev));
+    const patch = (row) => (row.id === invId ? touchUpdatedAt({ ...row, customerWhatsapp: phone, customerPhone: phone }) : row);
+    setInvoices((prev) => prev.map(patch));
+    setViewInv((prev) => (prev?.id === invId ? patch(prev) : prev));
   };
 
   const sendWhatsApp = (inv, phoneOverride) => {

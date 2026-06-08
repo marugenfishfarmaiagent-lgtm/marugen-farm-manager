@@ -445,6 +445,9 @@ Deno.serve(async (req) => {
           id: i.id,
           customer_id: i.customerId,
           customer_name: i.customerName,
+          customer_phone: i.customerPhone ?? "",
+          customer_whatsapp: i.customerWhatsapp ?? "",
+          customer_address: i.customerAddress ?? "",
           items: i.items,
           total: i.total,
           status: i.status,
@@ -456,6 +459,7 @@ Deno.serve(async (req) => {
           booked: Boolean(i.booked),
           booked_at: i.bookedAt ?? null,
           booked_by: i.bookedBy ?? "",
+          created_by: i.createdBy ?? "",
         }, i)), "id", {
           ...syncOpts,
           beforeDelete: async (ids) => { await deleteInvoicePdfs(db, ids); },

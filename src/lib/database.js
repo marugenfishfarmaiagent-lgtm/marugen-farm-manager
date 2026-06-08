@@ -54,6 +54,9 @@ function mapInvoice(row) {
     id: row.id,
     customerId: row.customer_id ?? row.customerId,
     customerName: row.customer_name ?? row.customerName,
+    customerPhone: row.customer_phone ?? row.customerPhone ?? '',
+    customerWhatsapp: row.customer_whatsapp ?? row.customerWhatsapp ?? '',
+    customerAddress: row.customer_address ?? row.customerAddress ?? '',
     items: row.items || [],
     total: Number(row.total),
     status: row.status,
@@ -65,6 +68,7 @@ function mapInvoice(row) {
     booked: Boolean(row.booked),
     bookedAt: row.booked_at ?? row.bookedAt ?? null,
     bookedBy: row.booked_by ?? row.bookedBy ?? '',
+    createdBy: row.created_by ?? row.createdBy ?? '',
   })
 }
 
