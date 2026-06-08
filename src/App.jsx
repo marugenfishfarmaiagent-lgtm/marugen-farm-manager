@@ -4595,11 +4595,11 @@ function ChatModule({ aiContext, messages, setMessages }) {
 // ─────────────────────────────────────────────
 const ALL_NAV_ITEMS = [
   { id: "dashboard", label: "Dashboard", icon: Home },
+  { id: "invoices", label: "Invoices", icon: FileText },
   { id: "inventory", label: "Inventory", icon: Boxes },
   { id: "koifish", label: "Koi Fish", icon: Fish },
   { id: "customerkoi", label: "Customer Koi", icon: FishSymbol },
   { id: "ponds", label: "Pond Mgmt", icon: Droplets },
-  { id: "invoices", label: "Invoices", icon: FileText },
   { id: "customers", label: "Customers", icon: Contact },
   { id: "expenses", label: "Expenses", icon: TrendingUp },
   { id: "deliveries", label: "Deliveries", icon: Truck },
