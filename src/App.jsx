@@ -4998,7 +4998,7 @@ export default function App() {
       });
       return;
     }
-    setCustomerKoiList((prev) => [...prev, {
+    setCustomerKoiList((prev) => [...prev, touchUpdatedAt({
       id: genId("CKOI"),
       customerId: customer.id,
       customerName: customer.name,
@@ -5017,7 +5017,7 @@ export default function App() {
       deathCause: null,
       deathPhoto: null,
       deathNotes: "",
-    }]);
+    })]);
     addNotification({
       type: "info",
       title: "Customer Record Created",

@@ -1,4 +1,5 @@
 import { KOI_STATUS, formatKoiSize, today } from '../data/constants'
+import { touchUpdatedAt } from './syncMeta'
 
 export function formatKoiInvoiceLineName(koi) {
   const label = koi.name?.trim() || koi.variety
@@ -59,7 +60,7 @@ export function applyInvoiceKoiSales({
     if (!it || it.koiAlreadySold || !soldIds.has(String(k.id))) return k
     const soldPrice = +it.price || k.price
     const disposition = it.koiDisposition || 'taken'
-    return {
+    return touchUpdatedAt({
       ...k,
       status: KOI_STATUS.SOLD,
       soldTo: customerId,
@@ -67,7 +68,7 @@ export function applyInvoiceKoiSales({
       soldDate,
       sellDisposition: disposition,
       keepPondName: disposition === 'keep' ? (it.keepPondName?.trim() || k.pondName) : null,
-    }
+    })
   }))
 
   koiItems.filter((it) => !it.koiAlreadySold).forEach((it) => {
@@ -101,7 +102,7 @@ export function restoreInvoiceKoiSales(items, setKoiList, setCustomerKoiList) {
   const ids = new Set(koiItems.map((it) => String(it.koiId)))
   setKoiList((prev) => prev.map((k) => {
     if (!ids.has(String(k.id))) return k
-    return {
+    return touchUpdatedAt({
       ...k,
       status: KOI_STATUS.AVAILABLE,
       soldTo: null,
@@ -109,7 +110,7 @@ export function restoreInvoiceKoiSales(items, setKoiList, setCustomerKoiList) {
       soldDate: null,
       sellDisposition: null,
       keepPondName: null,
-    }
+    })
   }))
   if (setCustomerKoiList) {
     setCustomerKoiList((prev) => prev.filter((r) => !ids.has(String(r.koiId))))
@@ -126,7 +127,7 @@ export function buildKoiRefundUpdate(koi, reason = '') {
   const refundNote = reason.trim()
     ? `Refund ${today()}: ${reason.trim()}`
     : `Refund ${today()}`
-  return {
+  return touchUpdatedAt({
     ...koi,
     status: KOI_STATUS.AVAILABLE,
     soldTo: null,
@@ -135,5 +136,5 @@ export function buildKoiRefundUpdate(koi, reason = '') {
     sellDisposition: null,
     keepPondName: null,
     notes: koi.notes ? `${koi.notes}\n${refundNote}` : refundNote,
-  }
+  })
 }

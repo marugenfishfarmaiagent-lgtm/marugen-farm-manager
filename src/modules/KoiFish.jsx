@@ -14,6 +14,7 @@ import { isSupabaseConfigured } from '../lib/supabase'
 import { readKoiImageFile } from '../lib/koiImage'
 import { formatKoiInvoiceLineName, findLinkedKoiInvoices } from '../lib/koiInvoice'
 import { isAppVisibleKoiFarm } from '../lib/retention'
+import { touchUpdatedAt } from '../lib/syncMeta'
 
 const STATUS_STYLE = {
   available: { badge: 'bg-emerald-500/20 text-emerald-300', border: 'border-slate-700/50' },
@@ -200,7 +201,7 @@ export default function KoiFish({
       addNotification({ type: 'error', title: 'Invalid Price', message: 'Selling price cannot be negative.' })
       return
     }
-    const koi = {
+    const koi = touchUpdatedAt({
       ...form,
       id: genId('KOI'),
       name: form.name?.trim() || '',
@@ -212,7 +213,7 @@ export default function KoiFish({
       soldTo: null, soldDate: null, soldPrice: null,
       sellDisposition: null, keepPondName: null,
       deathDate: null, deathCause: null, deathPhoto: null,
-    }
+    })
     setKoiList((prev) => [...prev, koi])
     addNotification({ type: 'success', title: 'Koi Added', message: `${koi.variety} added to ${koi.pondName}` })
     setShowAdd(false)
@@ -248,13 +249,13 @@ export default function KoiFish({
         keepPondName: null,
       }
     }
-    setKoiList((prev) => prev.map((k) => (k.id === editKoi.id ? updated : k)))
+    setKoiList((prev) => prev.map((k) => (k.id === editKoi.id ? touchUpdatedAt(updated) : k)))
     addNotification({ type: 'success', title: 'Updated', message: `${editKoi.id} saved` })
     setEditKoi(null)
   }
 
   const setKoiStatus = (koi, status) => {
-    setKoiList((prev) => prev.map((k) => (k.id === koi.id ? { ...k, status } : k)))
+    setKoiList((prev) => prev.map((k) => (k.id === koi.id ? touchUpdatedAt({ ...k, status }) : k)))
     if (status === KOI_STATUS.SICK) {
       addNotification({ type: 'warning', title: 'Marked Sick', message: `${koi.name || koi.variety} moved to sick list — use Ship to quarantine if needed.` })
     } else if (status === KOI_STATUS.AVAILABLE) {
@@ -279,7 +280,7 @@ export default function KoiFish({
       return
     }
     const from = shipKoi.pondName
-    setKoiList((prev) => prev.map((k) => (k.id === shipKoi.id ? { ...k, pondName: to } : k)))
+    setKoiList((prev) => prev.map((k) => (k.id === shipKoi.id ? touchUpdatedAt({ ...k, pondName: to }) : k)))
     addNotification({ type: 'success', title: 'Pond Transfer', message: `${shipKoi.name || shipKoi.variety} moved ${from} → ${to}` })
     setShipKoi(null)
     setShipToPond('')
@@ -302,7 +303,7 @@ export default function KoiFish({
     const soldPrice = +sellForm.soldPrice || sellKoi.price
     const soldDate = sellForm.soldDate || today()
     const keepPondName = sellForm.keepPondName?.trim() || ''
-    setKoiList((prev) => prev.map((k) => (k.id === sellKoi.id ? {
+    setKoiList((prev) => prev.map((k) => (k.id === sellKoi.id ? touchUpdatedAt({
       ...k,
       status: KOI_STATUS.SOLD,
       soldTo: sellForm.customerId,
@@ -310,7 +311,7 @@ export default function KoiFish({
       soldDate,
       sellDisposition: sellForm.disposition,
       keepPondName: sellForm.disposition === 'keep' ? keepPondName : null,
-    } : k)))
+    }) : k)))
     onKoiSold?.(sellKoi, customer, soldPrice, soldDate, {
       disposition: sellForm.disposition,
       keepPondName,
@@ -350,14 +351,14 @@ export default function KoiFish({
 
   const confirmDeath = () => {
     if (!deathKoi) return
-    setKoiList((prev) => prev.map((k) => (k.id === deathKoi.id ? {
+    setKoiList((prev) => prev.map((k) => (k.id === deathKoi.id ? touchUpdatedAt({
       ...k,
       status: KOI_STATUS.DECEASED,
       deathDate: deathForm.deathDate,
       deathCause: deathForm.deathCause,
       deathPhoto: deathForm.deathPhoto,
       notes: deathForm.notes || k.notes,
-    } : k)))
+    }) : k)))
     addNotification({ type: 'warning', title: 'Death Recorded', message: `${deathKoi.name || deathKoi.variety} recorded as deceased` })
     setDeathKoi(null)
     setDeathForm({ deathDate: today(), deathCause: KOI_DEATH_CAUSES[0], deathPhoto: null, notes: '' })

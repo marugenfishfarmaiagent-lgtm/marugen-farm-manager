@@ -977,7 +977,7 @@ export function executeAiAction(name, args, ctx) {
         }
         const soldPrice = parseQuantity(a.soldPrice) || koi.price || 0
         const soldDate = a.soldDate || today()
-        ctx.setKoiFishList((prev) => prev.map((k) => (k.id === koi.id ? {
+        ctx.setKoiFishList((prev) => prev.map((k) => (k.id === koi.id ? touchUpdatedAt({
           ...k,
           status: KOI_STATUS.SOLD,
           soldTo: customer.id,
@@ -985,7 +985,7 @@ export function executeAiAction(name, args, ctx) {
           soldDate,
           sellDisposition: disposition,
           keepPondName: disposition === 'keep' ? keepPondName : null,
-        } : k)))
+        }) : k)))
         ctx.onKoiSold?.(koi, customer, soldPrice, soldDate, { disposition, keepPondName })
         const dispositionNote = disposition === 'keep' ? `kept at ${keepPondName}` : 'taken away'
         addNotification?.({

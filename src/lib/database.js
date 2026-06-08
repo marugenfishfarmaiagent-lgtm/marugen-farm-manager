@@ -249,11 +249,7 @@ function stampOutgoing(data) {
 function stampRecord(record) {
   if (!record || typeof record !== 'object') return record
   if (record.updatedAt) return record
-  const idNum = Number(record.id)
-  if (Number.isFinite(idNum) && idNum > 1e12) {
-    return { ...record, updatedAt: new Date().toISOString() }
-  }
-  return record
+  return { ...record, updatedAt: new Date().toISOString() }
 }
 
 export function mapPublicUsers(rows) {
