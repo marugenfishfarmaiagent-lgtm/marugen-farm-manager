@@ -711,7 +711,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
     )
   );
 
-  const stockLogEntry = (product, type, extra = {}) => ({
+  const stockLogEntry = (product, type, extra = {}) => touchUpdatedAt({
     id: Date.now(),
     productId: product.id,
     productName: product.name,
@@ -820,7 +820,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       return;
     }
     if (useQty <= 0 || useQty > product.stock) return;
-    setProducts(prev => prev.map(p => p.id === product.id ? { ...p, stock: p.stock - useQty } : p));
+    setProducts(prev => prev.map(p => p.id === product.id ? touchUpdatedAt({ ...p, stock: p.stock - useQty }) : p));
     setStockLog((prev) => [stockLogEntry(product, "use", { qty: useQty, note: useNote }), ...prev]);
     if (product.stock - useQty <= product.minStock) addNotification({ type: "warning", title: "Low Stock", message: `${product.name} stock is low (${product.stock - useQty} ${product.unit} remaining)` });
     setShowUse(null); setUseQty(1); setUseNote("");
@@ -832,7 +832,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       return;
     }
     if (sellQty <= 0 || sellQty > product.stock) return;
-    setProducts(prev => prev.map(p => p.id === product.id ? { ...p, stock: p.stock - sellQty } : p));
+    setProducts(prev => prev.map(p => p.id === product.id ? touchUpdatedAt({ ...p, stock: p.stock - sellQty }) : p));
     const price = +sellPrice || product.price;
     setStockLog((prev) => [stockLogEntry(product, "sell", { qty: sellQty, price, total: sellQty * price }), ...prev]);
     addNotification({ type: "success", title: "Sale Recorded", message: `Sold ${sellQty}x ${product.name} for ${formatSGD(sellQty * price)}` });
@@ -844,7 +844,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
-    setProducts(prev => prev.map(p => p.id === product.id ? { ...p, stock: p.stock + qty } : p));
+    setProducts(prev => prev.map(p => p.id === product.id ? touchUpdatedAt({ ...p, stock: p.stock + qty }) : p));
     setStockLog((prev) => [stockLogEntry(product, "restock", { qty, note: "Manual restock" }), ...prev]);
     addNotification({ type: "info", title: "Restocked", message: `${product.name} restocked by ${qty} ${product.unit}` });
   };
@@ -858,7 +858,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
         <h2 className="text-xl sm:text-2xl font-black text-white">Inventory</h2>
         <p className="text-slate-400 text-sm">Stock tracking & invoice price list</p>
       </div>
-      <Fab onClick={() => openAddProduct(tab === "pricelist")} label={tab === "pricelist" ? "Add Price Item" : "Add Product"} hidden={showAdd || !!editProduct || !!deleteProduct || !!showUse || !!showRestock || !!showSell} />
+      <Fab onClick={() => openAddProduct(tab === "pricelist")} label={tab === "pricelist" ? "Add Price Item" : "Add Product"} hidden={!canEdit || showAdd || !!editProduct || !!deleteProduct || !!showUse || !!showRestock || !!showSell} />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
@@ -946,7 +946,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
                       <div className="h-1.5 bg-slate-700 rounded-full"><div className={`h-full rounded-full ${isLow ? "bg-amber-400" : "bg-emerald-400"}`} style={{ width: `${Math.min((p.stock / (p.minStock * 3)) * 100, 100)}%` }} /></div>
                     </div>
                   )}
-                  {!isCatalog && (
+                  {!isCatalog && canEdit && (
                     <div className="flex gap-2 flex-wrap">
                       <Btn variant="success" size="sm" onClick={() => { setShowSell(p); setSellPrice(p.price.toString()); }}><ShoppingBag size={12} />Sell</Btn>
                       <Btn variant="secondary" size="sm" onClick={() => setShowUse(p)}><Archive size={12} />Use</Btn>

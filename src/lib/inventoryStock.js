@@ -1,5 +1,6 @@
 import { today } from '../data/constants'
 import { isStockTracked } from './productCatalog'
+import { touchUpdatedAt } from './syncMeta'
 
 export function serializeInvoiceItem(it) {
   const item = {
@@ -51,7 +52,7 @@ function adjustProductsStock(setProducts, items, deltaSign) {
     if (!isStockTracked(p)) return p
     const qty = qtyByProduct.get(String(p.id))
     if (!qty) return p
-    return { ...p, stock: Math.max(0, p.stock + deltaSign * qty) }
+    return touchUpdatedAt({ ...p, stock: Math.max(0, p.stock + deltaSign * qty) })
   }))
 }
 
@@ -67,7 +68,7 @@ function buildLogEntries(items, products, { invoiceId, by, restore }) {
       if (p && !isStockTracked(p)) return null
       const line = (items || []).find((it) => String(it.productId) === productId)
       const price = +line?.price || p?.price || 0
-      return {
+      return touchUpdatedAt({
         id: Date.now() + i,
         productId,
         productName: line?.name || p?.name || 'Product',
@@ -77,7 +78,7 @@ function buildLogEntries(items, products, { invoiceId, by, restore }) {
         note: restore ? `Invoice cancelled ${invoiceId}` : `Invoice ${invoiceId}`,
         date: today(),
         by: by || 'Staff',
-      }
+      })
     })
     .filter(Boolean)
 }
