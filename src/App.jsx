@@ -3840,6 +3840,10 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
   const canDelete = canDeleteRecords(currentUser);
 
   const openAdd = () => {
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
     setForm({ name: "", role: "staff", pin: "", permissions: [...DEFAULT_PERMISSIONS.staff], active: true });
     setEditUser(null);
     setShowAdd(true);
@@ -3869,7 +3873,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
   };
 
   const saveUser = async () => {
-    if (editUser && !canEdit) {
+    if (!canEdit) {
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
@@ -4055,7 +4059,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
         <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2"><UserCog size={22} className="text-cyan-400 shrink-0" />Team & Permissions</h2>
         <p className="text-slate-400 text-sm">Manage staff & owner accounts with module access</p>
       </div>
-      <Fab onClick={openAdd} label="Add User" icon={UserPlus} hidden={showAdd} />
+      <Fab onClick={openAdd} label="Add User" icon={UserPlus} hidden={showAdd || !canEdit} />
 
       <AiUsageStatsPanel isOwner={currentUser.role === "owner"} cloudMode={cloudMode} />
 
@@ -4079,7 +4083,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
           <Card className="p-10 text-center">
             <UserCog size={40} className="mx-auto text-slate-600 mb-3" />
             <p className="text-slate-400 text-sm">No team accounts yet.</p>
-            <Btn className="mt-4 mx-auto" onClick={openAdd}><UserPlus size={14} />Add first user</Btn>
+            <Btn className="mt-4 mx-auto" onClick={openAdd} disabled={!canEdit}><UserPlus size={14} />Add first user</Btn>
           </Card>
         ) : users.map((user) => (
           <Card key={user.id} className={`p-4 ${user.active === false ? "opacity-50" : ""}`}>

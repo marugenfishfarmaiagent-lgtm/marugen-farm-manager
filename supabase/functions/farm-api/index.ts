@@ -383,6 +383,10 @@ Deno.serve(async (req) => {
             .eq("id", u.id)
             .maybeSingle();
 
+          if (target?.is_system && String(u.role) !== "owner") {
+            return J({ error: "System owner account must remain an owner" }, 400);
+          }
+
           if (target?.role === "owner" && target.active !== false) {
             const { count } = await db.from("farm_users")
               .select("*", { count: "exact", head: true })
@@ -676,6 +680,10 @@ Deno.serve(async (req) => {
         .eq("id", userId)
         .maybeSingle();
       if (fetchErr || !target) return J({ error: "User not found" }, 404);
+
+      if (target.is_system && role !== "owner") {
+        return J({ error: "System owner account must remain an owner" }, 400);
+      }
 
       if (target.role === "owner" && target.active !== false) {
         const { count } = await db.from("farm_users")
