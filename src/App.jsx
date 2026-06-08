@@ -3495,12 +3495,12 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
       }
       setEvents((prev) => prev.map((e) => (
         String(e.id) === String(editEventId)
-          ? { ...e, ...payload, createdBy: e.createdBy || currentUser?.name || "Staff" }
+          ? touchUpdatedAt({ ...e, ...payload, createdBy: e.createdBy || currentUser?.name || "Staff" })
           : e
       )));
       addNotification({ type: "success", title: "Event Updated", message: `"${title}" saved.` });
     } else {
-      const ev = { ...payload, id: Date.now(), createdBy: currentUser?.name || "Staff" };
+      const ev = touchUpdatedAt({ ...payload, id: Date.now(), createdBy: currentUser?.name || "Staff" });
       setEvents((prev) => [...prev, ev]);
       addNotification({ type: "info", title: "Event Added", message: `${ev.title} on ${ev.date}` });
     }

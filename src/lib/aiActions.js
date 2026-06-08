@@ -885,7 +885,7 @@ export function executeAiAction(name, args, ctx) {
         if (!canDo(currentUser, 'calendar')) return { success: false, error: 'No permission for calendar' }
         const title = a.title?.trim()
         if (!title || !a.date) return { success: false, error: 'Need event title and date' }
-        const ev = {
+        const ev = touchUpdatedAt({
           id: Date.now(),
           title,
           date: a.date,
@@ -893,7 +893,7 @@ export function executeAiAction(name, args, ctx) {
           type: a.type || 'other',
           note: a.note || '',
           createdBy: currentUser.name,
-        }
+        })
         ctx.setEvents((prev) => [...prev, ev])
         addNotification?.({ type: 'info', title: 'Event Added (AI)', message: title })
         onNavigate?.('calendar')
@@ -1066,14 +1066,14 @@ export function executeAiAction(name, args, ctx) {
         if (!canEdit(currentUser)) return { success: false, error: 'No edit permission' }
         const ev = findCalendarEvent(ctx, a)
         if (!ev) return { success: false, error: 'Event not found' }
-        const updated = {
+        const updated = touchUpdatedAt({
           ...ev,
           title: a.newTitle ?? ev.title,
           date: a.newDate ?? ev.date,
           time: a.newTime ?? ev.time,
           type: a.newType ?? ev.type,
           note: a.note ?? ev.note,
-        }
+        })
         ctx.setEvents((prev) => prev.map((e) => (e.id === ev.id ? updated : e)))
         addNotification?.({ type: 'success', title: 'Event Updated (AI)', message: updated.title })
         onNavigate?.('calendar')
