@@ -1441,7 +1441,7 @@ function InvoiceModule({
       setCustomers((prev) => prev.map((c) => {
         if (String(c.id) !== String(inv.customerId)) return c;
         const totalSpent = (Number(c.totalSpent) || 0) + paidTotal;
-        return { ...c, totalSpent, tier: calcCustomerTier(totalSpent) };
+        return touchUpdatedAt({ ...c, totalSpent, tier: calcCustomerTier(totalSpent) });
       }));
     }
     addNotification({ type: "success", title: "Payment Received", message: `${id} marked as paid - ${formatSGD(paidTotal)}` });
@@ -2090,7 +2090,7 @@ function CustomerModule({ customers, setCustomers, addNotification, currentUser 
       addNotification({ type: "error", title: "WhatsApp Required", message: "Enter a WhatsApp number." });
       return;
     }
-    const c = {
+    const c = touchUpdatedAt({
       name,
       phone: whatsapp,
       whatsapp,
@@ -2102,7 +2102,7 @@ function CustomerModule({ customers, setCustomers, addNotification, currentUser 
       id: Date.now(),
       totalSpent: 0,
       tier: calcCustomerTier(0),
-    };
+    });
     setCustomers((prev) => [...prev, c]);
     addNotification({ type: "success", title: "Customer Added", message: `${c.name} added to CRM` });
     setShowAdd(false);
@@ -2126,7 +2126,7 @@ function CustomerModule({ customers, setCustomers, addNotification, currentUser 
       addNotification({ type: "error", title: "WhatsApp Required", message: "Enter a WhatsApp number." });
       return;
     }
-    const updated = {
+    const updated = touchUpdatedAt({
       ...editCustomer,
       name,
       phone: whatsapp,
@@ -2137,7 +2137,7 @@ function CustomerModule({ customers, setCustomers, addNotification, currentUser 
       notes: editCustomer.notes?.trim() || "",
       fishTypes: editCustomer.fishTypes || [],
       tier: calcCustomerTier(Number(editCustomer.totalSpent) || 0),
-    };
+    });
     setCustomers((prev) => prev.map((c) => (String(c.id) === String(updated.id) ? updated : c)));
     addNotification({ type: "success", title: "Customer Updated", message: `${updated.name} saved` });
     setEditCustomer(null);

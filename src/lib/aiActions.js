@@ -659,12 +659,12 @@ export function executeAiAction(name, args, ctx) {
         if (!inv) return { success: false, error: 'No matching unpaid invoice found' }
         if (getInvoiceStatus(inv) === 'paid') return { success: false, error: `${inv.id} is already paid` }
 
-        ctx.setInvoices((prev) => prev.map((i) => (i.id === inv.id ? { ...i, status: 'paid' } : i)))
+        ctx.setInvoices((prev) => prev.map((i) => (i.id === inv.id ? touchUpdatedAt({ ...i, status: 'paid' }) : i)))
         if (inv.customerId) {
           ctx.setCustomers((prev) => prev.map((c) => {
             if (c.id !== inv.customerId) return c
-            const totalSpent = c.totalSpent + inv.total
-            return { ...c, totalSpent, tier: calcCustomerTier(totalSpent) }
+            const totalSpent = (Number(c.totalSpent) || 0) + (Number(inv.total) || 0)
+            return touchUpdatedAt({ ...c, totalSpent, tier: calcCustomerTier(totalSpent) })
           }))
         }
         addNotification?.({ type: 'success', title: 'Payment Received (AI)', message: `${inv.id} — ${formatSGD(inv.total)}` })
@@ -676,7 +676,7 @@ export function executeAiAction(name, args, ctx) {
         if (!canDo(currentUser, 'customers')) return { success: false, error: 'No permission for customers' }
         const name = a.name?.trim()
         if (!name) return { success: false, error: 'Customer name required' }
-        const c = {
+        const c = touchUpdatedAt({
           id: Date.now(),
           name,
           phone: a.phone || a.whatsapp || '',
@@ -688,7 +688,7 @@ export function executeAiAction(name, args, ctx) {
           tier: 'Bronze',
           notes: a.notes || '',
           totalSpent: 0,
-        }
+        })
         ctx.setCustomers((prev) => [...prev, c])
         addNotification?.({ type: 'success', title: 'Customer Added (AI)', message: name })
         onNavigate?.('customers')
@@ -921,7 +921,7 @@ export function executeAiAction(name, args, ctx) {
         if (!canEdit(currentUser)) return { success: false, error: 'No edit permission' }
         const customer = findCustomer(ctx, a.name)
         if (!customer) return { success: false, error: `Customer not found: ${a.name}` }
-        const updated = {
+        const updated = touchUpdatedAt({
           ...customer,
           whatsapp: a.whatsapp ?? customer.whatsapp,
           phone: a.phone ?? customer.phone,
@@ -929,7 +929,7 @@ export function executeAiAction(name, args, ctx) {
           address: a.address ?? customer.address,
           fishTypes: a.fishTypes ?? customer.fishTypes,
           notes: a.notes ?? customer.notes,
-        }
+        })
         ctx.setCustomers((prev) => prev.map((c) => (c.id === customer.id ? updated : c)))
         addNotification?.({ type: 'success', title: 'Customer Updated (AI)', message: customer.name })
         onNavigate?.('customers')
