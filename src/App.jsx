@@ -441,10 +441,19 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
     return status === "pending" || status === "overdue";
   });
   const pendingRevenue = openInvoices.reduce((s, i) => s + (Number(i.total) || 0), 0);
+  const canInvoices = can("invoices");
   const canExpenses = can("expenses");
   const canAccounting = can("accounting");
   const unbookedExpenses = canExpenses ? expenses.filter((e) => !e.booked).length : 0;
-  const unbookedInvoices = invoices.filter((i) => !i.booked && getInvoiceStatus(i) !== "cancelled").length;
+  const unbookedInvoices = canInvoices
+    ? invoices.filter((i) => !i.booked && getInvoiceStatus(i) !== "cancelled").length
+    : 0;
+  const pendingAccountsCount = unbookedExpenses + unbookedInvoices;
+  const pendingAccountsTab = unbookedExpenses > 0 && canExpenses
+    ? "expenses"
+    : unbookedInvoices > 0 && canInvoices
+      ? "invoices"
+      : null;
   const lowStock = products.filter((p) => isStockTracked(p) && p.minStock > 0 && p.stock <= p.minStock);
   const todayStr = today();
   const todayEvents = events
@@ -463,16 +472,18 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
   const showKoiSummary = can("koifish") || can("customerkoi");
 
   const stats = [
-    { label: "Revenue (Paid)", value: formatSGD(totalRevenue), icon: DollarSign, color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20", tab: can("invoices") ? "invoices" : null },
-    { label: "Pending / Overdue", value: formatSGD(pendingRevenue), icon: Clock, color: "text-amber-400", bg: "bg-amber-500/10 border-amber-500/20", tab: can("invoices") ? "invoices" : null },
+    ...(canInvoices ? [
+      { label: "Revenue (Paid)", value: formatSGD(totalRevenue), icon: DollarSign, color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20", tab: "invoices" },
+      { label: "Pending / Overdue", value: formatSGD(pendingRevenue), icon: Clock, color: "text-amber-400", bg: "bg-amber-500/10 border-amber-500/20", tab: "invoices" },
+    ] : []),
     ...(canExpenses ? [{ label: "Expense Receipts", value: String(expenses.length), icon: ImagePlus, color: "text-purple-400", bg: "bg-purple-500/10 border-purple-500/20", tab: "expenses" }] : []),
-    ...(canAccounting ? [{
+    ...(canAccounting && (canExpenses || canInvoices) ? [{
       label: "Pending Accounts",
-      value: String(unbookedExpenses + unbookedInvoices),
+      value: String(pendingAccountsCount),
       icon: BookCheck,
       color: "text-cyan-400",
       bg: "bg-cyan-500/10 border-cyan-500/20",
-      tab: unbookedExpenses > 0 && unbookedInvoices === 0 && canExpenses ? "expenses" : "invoices",
+      tab: pendingAccountsTab,
     }] : []),
   ];
 
@@ -490,7 +501,11 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
         <p className="text-xs text-slate-500 shrink-0">{new Date().toLocaleDateString("en-SG", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</p>
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map((s) => {
+        {stats.length === 0 ? (
+          <Card className="p-4 col-span-2 lg:col-span-4 border-slate-700/50">
+            <p className="text-slate-400 text-sm">No summary modules assigned yet. Contact the farm owner for access to invoices, expenses, or inventory.</p>
+          </Card>
+        ) : stats.map((s) => {
           const inner = (
             <>
               <div className={`w-9 h-9 rounded-lg flex items-center justify-center mb-3 ${s.bg}`}><s.icon size={18} className={s.color} /></div>
@@ -5058,8 +5073,9 @@ export default function App() {
   const unreadCount = notifications.filter(n => !n.read).length;
 
   useEffect(() => {
+    if (!currentUser || !hasPermission(currentUser, "inventory")) return;
     const lowStock = products.filter((p) => isStockTracked(p) && p.minStock > 0 && p.stock <= p.minStock);
-    if (lowStock.length > 0 && currentUser && !lowStockNotified.current) {
+    if (lowStock.length > 0 && !lowStockNotified.current) {
       lowStockNotified.current = true;
       addNotification({
         type: "warning",
