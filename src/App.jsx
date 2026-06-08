@@ -2973,16 +2973,16 @@ function DeliveryModule({
     if (isEditing) {
       setDeliveries((prev) => prev.map((d) => (
         String(d.id) === String(editDeliveryId)
-          ? { ...d, ...payload, createdBy: d.createdBy || currentUser?.name || "Staff" }
+          ? touchUpdatedAt({ ...d, ...payload, createdBy: d.createdBy || currentUser?.name || "Staff" })
           : d
       )));
       addNotification({ type: "success", title: "Delivery Updated", message: `${editDeliveryId} saved.` });
     } else {
-      const d = {
+      const d = touchUpdatedAt({
         ...payload,
         id: genId("DEL"),
         createdBy: currentUser?.name || "Staff",
-      };
+      });
       setDeliveries((prev) => [...prev, d]);
       addNotification({
         type: "info",
@@ -3039,7 +3039,7 @@ function DeliveryModule({
   };
 
   const updateStatus = (id, status) => {
-    setDeliveries((prev) => prev.map((d) => (String(d.id) === String(id) ? { ...d, status } : d)));
+    setDeliveries((prev) => prev.map((d) => (String(d.id) === String(id) ? touchUpdatedAt({ ...d, status }) : d)));
     if (status === "delivered") {
       addNotification({ type: "success", title: "Delivery Completed", message: `${id} delivered successfully!` });
     } else if (status === "transit") {
@@ -3071,7 +3071,7 @@ function DeliveryModule({
       addNotification({ type: "error", title: "Invalid Link", message: "Paste a WhatsApp group invite link (chat.whatsapp.com/...)." });
       return;
     }
-    persistWhatsappGroups([...whatsappGroups, { id: genId("GRP"), name, link }]);
+    persistWhatsappGroups([...whatsappGroups, touchUpdatedAt({ id: genId("GRP"), name, link })]);
     setGroupForm({ name: "", link: "" });
     addNotification({ type: "success", title: "Group Saved", message: `${name} added to WhatsApp groups.` });
   };

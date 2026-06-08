@@ -846,7 +846,7 @@ export function executeAiAction(name, args, ctx) {
             error: 'Need a delivery address — add it to the customer profile or include it in your message.',
           }
         }
-        const d = {
+        const d = touchUpdatedAt({
           id: genId('DEL'),
           customerId: fromCustomer.customerId || null,
           customerName: displayName,
@@ -858,7 +858,7 @@ export function executeAiAction(name, args, ctx) {
           driver: a.driver || '',
           notes: a.notes || '',
           createdBy: currentUser.name,
-        }
+        })
         ctx.setDeliveries((prev) => [...prev, d])
         addNotification?.({ type: 'info', title: 'Delivery Scheduled (AI)', message: `${d.id} → ${displayName}` })
         onNavigate?.('deliveries')
@@ -873,7 +873,7 @@ export function executeAiAction(name, args, ctx) {
         if (!['scheduled', 'transit', 'delivered', 'cancelled'].includes(status)) {
           return { success: false, error: `Unknown status: ${a.status}` }
         }
-        ctx.setDeliveries((prev) => prev.map((d) => (String(d.id) === String(del.id) ? { ...d, status } : d)))
+        ctx.setDeliveries((prev) => prev.map((d) => (String(d.id) === String(del.id) ? touchUpdatedAt({ ...d, status }) : d)))
         if (status === 'delivered') {
           addNotification?.({ type: 'success', title: 'Delivery Completed (AI)', message: `${del.id} delivered` })
         }
@@ -1043,7 +1043,7 @@ export function executeAiAction(name, args, ctx) {
           driver: a.driver ?? del.driver,
           notes: a.notes ?? del.notes,
         }
-        ctx.setDeliveries((prev) => prev.map((d) => (String(d.id) === String(del.id) ? { ...d, ...patch } : d)))
+        ctx.setDeliveries((prev) => prev.map((d) => (String(d.id) === String(del.id) ? touchUpdatedAt({ ...d, ...patch }) : d)))
         addNotification?.({ type: 'success', title: 'Delivery Updated (AI)', message: del.id })
         onNavigate?.('deliveries')
         return { success: true, message: `Updated delivery ${del.id}` }
@@ -1055,6 +1055,7 @@ export function executeAiAction(name, args, ctx) {
         const del = findDelivery(ctx, a)
         if (!del) return { success: false, error: 'Delivery not found' }
         ctx.setDeliveries((prev) => prev.filter((d) => String(d.id) !== String(del.id)))
+        markDeleted('deliveries', del.id)
         addNotification?.({ type: 'info', title: 'Delivery Deleted (AI)', message: del.id })
         onNavigate?.('deliveries')
         return { success: true, message: `Deleted delivery ${del.id} (${del.customerName})` }
