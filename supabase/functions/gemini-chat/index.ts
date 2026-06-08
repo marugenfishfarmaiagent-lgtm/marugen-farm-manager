@@ -10,9 +10,10 @@ import {
 import { sessionTokenFrom, validateSession } from "../_shared/supabase.ts";
 
 const PRIMARY_MODEL = "gemini-2.5-flash";
-const FALLBACK_MODEL = "gemini-2.0-flash";
+const FALLBACK_MODEL = "gemini-2.5-flash-lite";
 const MAX_GEMINI_ATTEMPTS = 4;
 const RETRYABLE_GEMINI = /high demand|overloaded|resource.?exhausted|unavailable|try again|too many requests|deadline exceeded/i;
+const MODEL_UNAVAILABLE = /no longer available|deprecated|not found|does not exist/i;
 
 const rateMap = new Map<string, { count: number; reset: number }>();
 const RATE_LIMIT = 30;
@@ -23,6 +24,7 @@ function sleep(ms: number) {
 }
 
 function isRetryableGeminiError(status: number, message: string): boolean {
+  if (MODEL_UNAVAILABLE.test(message)) return false;
   if (status === 429 || status === 503 || status === 500 || status === 502 || status === 504) return true;
   return RETRYABLE_GEMINI.test(message);
 }
