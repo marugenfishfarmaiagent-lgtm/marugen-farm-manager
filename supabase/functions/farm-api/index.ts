@@ -58,6 +58,10 @@ function permittedObject<T extends Record<string, unknown>>(user: SessionUser, p
   return hasPermission(user, perm) ? value : {} as T;
 }
 
+function normId(id: unknown): string {
+  return String(id);
+}
+
 async function deleteFarmUsers(db: ReturnType<typeof adminClient>, userIds: (string | number)[]) {
   if (!userIds.length) return;
   await db.from("auth_sessions").delete().in("user_id", userIds);
