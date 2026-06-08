@@ -1,6 +1,6 @@
 import {
   calcCustomerTier, customerDeliveryFields, EXPENSE_CATEGORIES, formatSGD, genId, genInvoiceId,
-  getInvoiceStatus, today, KOI_STATUS, formatKoiSize,
+  getInvoiceStatus, today, KOI_STATUS, formatKoiSize, PRODUCT_CATEGORIES,
 } from '../data/constants'
 import { calcInvoiceAmounts } from './invoiceDesign'
 import { formatCustomerAddress, resolveInvoiceCustomer } from './invoiceWhatsApp'
@@ -186,6 +186,81 @@ function resolveExpenseCategory(raw) {
   return 'Other'
 }
 
+const PRODUCT_CATEGORY_ALIASES = {
+  feed: 'Fish Food', food: 'Fish Food', fishfood: 'Fish Food', pellets: 'Fish Food',
+  water: 'Water Treatment', treatment: 'Water Treatment', antichlorine: 'Water Treatment',
+  medicine: 'Medicine', med: 'Medicine',
+  equipment: 'Equipment', pump: 'Equipment',
+  pond: 'Pond Supplies', supplies: 'Pond Supplies',
+  accessory: 'Accessories', accessories: 'Accessories',
+}
+
+function resolveProductCategory(raw) {
+  if (!raw) return 'Fish Food'
+  if (PRODUCT_CATEGORIES.includes(raw)) return raw
+  const key = normalizeText(raw).replace(/\s+/g, '')
+  if (PRODUCT_CATEGORY_ALIASES[key]) return PRODUCT_CATEGORY_ALIASES[key]
+  for (const [alias, cat] of Object.entries(PRODUCT_CATEGORY_ALIASES)) {
+    if (key.includes(alias) || alias.includes(key)) return cat
+  }
+  return 'Fish Food'
+}
+
+function resolveProductUnit(raw, category) {
+  if (raw?.trim()) return raw.trim()
+  if (category === 'Fish Food') return 'bag'
+  return 'pcs'
+}
+
+function defaultProductStock(category, stock) {
+  const parsed = parseQuantity(stock)
+  if (parsed != null && parsed >= 0) return parsed
+  return category === 'Fish Food' ? 10 : 0
+}
+
+function buildProductFromArgs(a, id) {
+  const name = (a.name || a.productName || a.product || '').trim()
+  const category = resolveProductCategory(a.category)
+  const unit = resolveProductUnit(a.unit, category)
+  const stock = defaultProductStock(category, a.stock ?? a.quantity)
+  const price = parseQuantity(a.price) ?? 0
+  return {
+    id,
+    name,
+    category,
+    sku: a.sku?.trim() || '',
+    price,
+    cost: parseQuantity(a.cost) ?? 0,
+    unit,
+    stock,
+    minStock: parseQuantity(a.minStock) ?? 0,
+    description: (a.description || name).trim(),
+  }
+}
+
+function addProductToInventory(ctx, product, { by, note = 'AI initial stock' } = {}) {
+  ctx.setProducts((prev) => [...prev, product])
+  if (product.stock > 0) {
+    ctx.setStockLog((prev) => [{
+      id: Date.now() + Math.floor(Math.random() * 1000),
+      productId: product.id,
+      productName: product.name,
+      type: 'restock',
+      qty: product.stock,
+      note,
+      date: today(),
+      by: by || 'Staff',
+    }, ...prev])
+  }
+}
+
+function findProductInCatalog(catalog, name) {
+  return findProductInList(catalog, name)
+    || findByName(catalog, name, 'name')
+    || findByName(catalog, name, 'description')
+    || findByName(catalog, name, 'sku')
+}
+
 function resolveStatus(raw) {
   const key = normalizeText(raw).replace(/\s+/g, '')
   return STATUS_ALIASES[key] || raw
@@ -244,6 +319,17 @@ function normalizeArgs(name, args, ctx) {
   if (name === 'restock_product') {
     a.productName = a.productName || a.product || a.item || a.name || a.description
     a.quantity = parseQuantity(a.quantity ?? a.qty ?? a.amount)
+  }
+  if (name === 'create_product') {
+    a.name = a.name || a.productName || a.product || a.item
+    a.stock = a.stock ?? a.quantity
+  }
+  if (name === 'create_products' && Array.isArray(a.products)) {
+    a.products = a.products.map((p) => ({
+      ...p,
+      name: p.name || p.productName || p.product || p.item,
+      stock: p.stock ?? p.quantity,
+    }))
   }
   if (name === 'schedule_delivery' || name === 'update_delivery') {
     a.customerName = a.customerName || a.customer || a.name
@@ -339,6 +425,7 @@ Users may attach one or more photos. You CAN see them — describe what you noti
 Use images to:
   • Identify koi variety, grade, size estimate, visible health issues (spots, fin damage, parasites)
   • Read expense receipts / supplier invoices (amount, date, vendor) and offer to record expenses
+  • Read supplier product lists / delivery notes → create_products for each NEW line (fish food: unit=bag, stock=10 unless user says otherwise)
   • Read pond water-test readings, medicine labels, equipment nameplates
   • Match a fish photo to farm stock when an ID tag or unique markings are visible
 If a photo is unclear, say what you can and cannot see. Do not invent details.
@@ -364,7 +451,8 @@ Phrase mapping:
   • cancel / void invoice → cancel_invoice (needs user confirmation)
   • sell koi / mark sold → sell_koi (confirmation)
   • refund koi → refund_koi_sale (confirmation)
-  • stock in → restock_product
+  • stock in (existing product) → restock_product
+  • add new product / from receipt → create_product (one) or create_products (many lines)
   • deliver → schedule_delivery (postal + address, no area field)
   • delete / remove → matching delete_* tool (confirmation)
   • edit / update → matching update_* tool (confirmation)
@@ -601,6 +689,97 @@ export function executeAiAction(name, args, ctx) {
         addNotification?.({ type: 'success', title: 'Customer Added (AI)', message: name })
         onNavigate?.('customers')
         return { success: true, message: `Added customer ${name}` }
+      }
+
+      case 'create_product': {
+        if (!canDo(currentUser, 'inventory')) return { success: false, error: 'No permission for inventory' }
+        const name = (a.name || a.productName)?.trim()
+        if (!name) return { success: false, error: 'Product name required' }
+        const existing = findProduct(ctx, name)
+        if (existing) {
+          return {
+            success: false,
+            error: `"${name}" already exists as "${existing.name}". Use restock_product to add stock.`,
+          }
+        }
+        const product = buildProductFromArgs(a, Date.now())
+        addProductToInventory(ctx, product, { by: currentUser.name })
+        addNotification?.({ type: 'success', title: 'Product Added (AI)', message: product.name })
+        onNavigate?.('inventory')
+        return {
+          success: true,
+          message: `Added ${product.name} — ${product.stock} ${product.unit}, ${formatSGD(product.price)}`,
+        }
+      }
+
+      case 'create_products': {
+        if (!canDo(currentUser, 'inventory')) return { success: false, error: 'No permission for inventory' }
+        const lines = Array.isArray(a.products) ? a.products : []
+        if (!lines.length) return { success: false, error: 'No products to add' }
+
+        const catalog = [...ctx.products]
+        const newProducts = []
+        const newLogEntries = []
+        const created = []
+        const skipped = []
+        const failed = []
+        let idBase = Date.now()
+
+        for (let i = 0; i < lines.length; i++) {
+          const line = normalizeArgs('create_product', lines[i], ctx)
+          const name = line.name?.trim()
+          if (!name) {
+            failed.push('Unnamed product line skipped')
+            continue
+          }
+          const existing = findProductInCatalog(catalog, name)
+          if (existing) {
+            skipped.push(`${name} (exists as ${existing.name})`)
+            continue
+          }
+          const product = buildProductFromArgs(line, idBase + i)
+          catalog.push(product)
+          newProducts.push(product)
+          if (product.stock > 0) {
+            newLogEntries.push({
+              id: idBase + i + 50000,
+              productId: product.id,
+              productName: product.name,
+              type: 'restock',
+              qty: product.stock,
+              note: 'AI receipt import',
+              date: today(),
+              by: currentUser.name,
+            })
+          }
+          created.push(`${product.name} (${product.stock} ${product.unit})`)
+        }
+
+        if (newProducts.length) {
+          ctx.setProducts((prev) => [...prev, ...newProducts])
+          if (newLogEntries.length) {
+            ctx.setStockLog((prev) => [...newLogEntries, ...prev])
+          }
+          addNotification?.({
+            type: 'success',
+            title: 'Products Added (AI)',
+            message: `${newProducts.length} product(s) added`,
+          })
+          onNavigate?.('inventory')
+        }
+
+        const parts = []
+        if (created.length) parts.push(`Added ${created.length}: ${created.join('; ')}`)
+        if (skipped.length) parts.push(`Skipped existing: ${skipped.join('; ')}`)
+        if (failed.length) parts.push(failed.join('; '))
+
+        if (!created.length) {
+          return {
+            success: false,
+            error: parts.join(' · ') || 'No new products were added',
+          }
+        }
+        return { success: true, message: parts.join(' · ') }
       }
 
       case 'restock_product': {

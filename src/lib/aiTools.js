@@ -127,8 +127,55 @@ export const AI_TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'create_product',
+    description: 'Add a NEW product to inventory when it does not exist yet. Use for supplier receipts / new SKUs. Fish food: unit=bag, stock=10 unless user says otherwise. If product already exists, use restock_product instead.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Product name — e.g. "15kg AkaFuji Colour M size"' },
+        category: { type: 'string', description: 'Fish Food, Water Treatment, Equipment, Accessories, Medicine, Pond Supplies' },
+        unit: { type: 'string', description: 'bag for fish food; kg, pcs, bottle, etc. for others' },
+        stock: { type: 'number', description: 'Opening stock quantity (default 10 for fish food)' },
+        price: { type: 'number', description: 'Selling price in SGD (0 if unknown)' },
+        cost: { type: 'number', description: 'Cost price if known from receipt' },
+        sku: { type: 'string' },
+        description: { type: 'string', description: 'Long description if different from name' },
+        minStock: { type: 'number' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'create_products',
+    description: 'Add multiple NEW products at once (e.g. from a receipt photo). Skips lines that already exist — use restock_product for those. Fish food defaults: unit=bag, stock=10.',
+    parameters: {
+      type: 'object',
+      properties: {
+        products: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              category: { type: 'string' },
+              unit: { type: 'string' },
+              stock: { type: 'number' },
+              price: { type: 'number' },
+              cost: { type: 'number' },
+              sku: { type: 'string' },
+              description: { type: 'string' },
+              minStock: { type: 'number' },
+            },
+            required: ['name'],
+          },
+        },
+      },
+      required: ['products'],
+    },
+  },
+  {
     name: 'restock_product',
-    description: 'Add inventory stock. productName can be short inventory name or long description (e.g. "15kg JPD Shori Floating L").',
+    description: 'Add stock to an EXISTING product only. productName can be short inventory name or long description (e.g. "15kg JPD Shori Floating L"). If product is missing, use create_product first.',
     parameters: {
       type: 'object',
       properties: {
