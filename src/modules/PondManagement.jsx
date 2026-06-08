@@ -9,6 +9,7 @@ import {
 import { Badge, Btn, Card, Input, Modal, PondNameInput, Select, Textarea } from '../components/ui'
 import Fab from '../components/Fab'
 import { filterPondLogsForApp } from '../lib/retention'
+import { touchPondData } from '../lib/syncMeta'
 
 const POND_TYPE_COLOR = { koi: 'bg-cyan-500/20 text-cyan-300', arowana: 'bg-amber-500/20 text-amber-300', quarantine: 'bg-red-500/20 text-red-300', display: 'bg-purple-500/20 text-purple-300' }
 
@@ -51,11 +52,11 @@ export default function PondManagement({ pondData, setPondData, addNotification,
   const [editingGuideId, setEditingGuideId] = useState(null)
 
   const todayStr = today()
-  const activeTreatments = treatmentLogs.filter((t) => t.startDate <= todayStr && (!t.endDate || t.endDate >= todayStr))
+  const activeTreatments = visiblePond.treatmentLogs.filter((t) => t.startDate <= todayStr && (!t.endDate || t.endDate >= todayStr))
   const overdueReminders = visiblePond.reminders.filter((r) => r.status === 'pending' && r.dueDate < todayStr)
   const pendingReminders = visiblePond.reminders.filter((r) => r.status === 'pending' && r.dueDate >= todayStr)
 
-  const update = (patch) => setPondData((prev) => ({ ...prev, ...patch }))
+  const update = (patch) => setPondData((prev) => touchPondData({ ...prev, ...patch }))
   const hasPonds = ponds.length > 0
 
   const displayGuides = treatmentGuides.length ? treatmentGuides : DEFAULT_TREATMENT_GUIDES
