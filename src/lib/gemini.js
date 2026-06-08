@@ -1,4 +1,4 @@
-import { clearSession, getSessionToken } from './auth'
+import { clearSession, getSessionToken, hasCloudSession } from './auth'
 import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
 
 const RETRYABLE_CHAT = /high demand|overloaded|resource.?exhausted|unavailable|try again|rate limit|too many requests/i
@@ -18,9 +18,22 @@ function friendlyGeminiError(data, status) {
   return { message: raw, retryable: Boolean(data?.retryable) }
 }
 
-async function callGeminiChat(body, { method = 'POST' } = {}) {
+function chatHeaders() {
+  const headers = {
+    'Content-Type': 'application/json',
+    apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+  }
   const token = getSessionToken()
-  if (!token) throw new Error('Please log in to use AI Chat.')
+  if (token) headers.Authorization = `Session ${token}`
+  return headers
+}
+
+async function callGeminiChat(body, { method = 'POST' } = {}) {
+  if (isSupabaseConfigured && !hasCloudSession()) {
+    throw new Error('Please log in to use AI Chat.')
+  }
+  const token = getSessionToken()
+  if (!isSupabaseConfigured && !token) throw new Error('Please log in to use AI Chat.')
 
   const maxAttempts = method === 'POST' ? 2 : 1
   let lastErr = null
@@ -28,11 +41,8 @@ async function callGeminiChat(body, { method = 'POST' } = {}) {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const response = await fetch(`${getFunctionsUrl()}/gemini-chat`, {
       method,
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-        Authorization: `Session ${token}`,
-      },
+      credentials: 'include',
+      headers: chatHeaders(),
       body: method === 'POST' ? JSON.stringify(body) : undefined,
     })
 
@@ -60,16 +70,12 @@ export async function fetchAiUsage() {
 
 export async function fetchAiUsageStats() {
   if (!isSupabaseConfigured) return null
-  const token = getSessionToken()
-  if (!token) throw new Error('Not authenticated')
+  if (!hasCloudSession() && !getSessionToken()) throw new Error('Not authenticated')
 
   const res = await fetch(`${getFunctionsUrl()}/farm-api`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-      Authorization: `Session ${token}`,
-    },
+    credentials: 'include',
+    headers: chatHeaders(),
     body: JSON.stringify({ action: 'ai_usage_stats' }),
   })
   const data = await res.json()
@@ -157,4 +163,3 @@ export async function sendChatMessage({
 
   throw new Error('AI action loop limit reached. Please try again.')
 }
-

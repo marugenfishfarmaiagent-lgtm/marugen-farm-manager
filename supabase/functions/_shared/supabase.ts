@@ -1,5 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
+import { sessionTokenFromCookie } from "./sessionCookie.ts";
+
 export function adminClient() {
   const url = Deno.env.get("SUPABASE_URL")!;
   const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -41,6 +43,8 @@ export async function validateSession(token: string | null): Promise<SessionUser
 }
 
 export function sessionTokenFrom(req: Request): string | null {
+  const fromCookie = sessionTokenFromCookie(req);
+  if (fromCookie) return fromCookie;
   const header = req.headers.get("x-session-token") || req.headers.get("authorization") || "";
   if (header.startsWith("Session ")) return header.slice(8).trim();
   if (header.startsWith("Bearer ") && !header.includes("eyJ")) return header.slice(7).trim();

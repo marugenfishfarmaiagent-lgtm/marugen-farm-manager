@@ -1,4 +1,5 @@
-import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
+import { checkRateLimit } from "../_shared/rateLimit.ts";
+import { jsonResponse, optionsResponse } from "../_shared/cors.ts";
 import {
   AI_DAILY_FREE_TOKENS,
   addDailyUsage,
@@ -7,7 +8,7 @@ import {
   parseGeminiUsage,
   usageFlags,
 } from "../_shared/aiUsage.ts";
-import { sessionTokenFrom, hasPermission, validateSession } from "../_shared/supabase.ts";
+import { adminClient, sessionTokenFrom, hasPermission, validateSession } from "../_shared/supabase.ts";
 
 const PRIMARY_MODEL = "gemini-2.5-flash";
 const FALLBACK_MODEL = "gemini-2.5-flash-lite";
@@ -15,7 +16,6 @@ const MAX_GEMINI_ATTEMPTS = 4;
 const RETRYABLE_GEMINI = /high demand|overloaded|resource.?exhausted|unavailable|try again|too many requests|deadline exceeded/i;
 const MODEL_UNAVAILABLE = /no longer available|deprecated|not found|does not exist/i;
 
-const rateMap = new Map<string, { count: number; reset: number }>();
 const RATE_LIMIT = 30;
 const RATE_WINDOW_MS = 60_000;
 
@@ -41,18 +41,6 @@ function parseDataUrl(dataUrl: string): { mimeType: string; data: string } | nul
   const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
   if (!match) return null;
   return { mimeType: match[1], data: match[2] };
-}
-
-function checkRateLimit(key: string): boolean {
-  const now = Date.now();
-  const entry = rateMap.get(key);
-  if (!entry || now > entry.reset) {
-    rateMap.set(key, { count: 1, reset: now + RATE_WINDOW_MS });
-    return true;
-  }
-  if (entry.count >= RATE_LIMIT) return false;
-  entry.count++;
-  return true;
 }
 
 function toGeminiContents(messages: ChatMessage[]) {
@@ -116,35 +104,38 @@ async function checkDailyQuota(userId: number, confirmOverage: boolean) {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS") return optionsResponse(req);
+
+  const J = (payload: unknown, status = 200) => jsonResponse(payload, status, req);
 
   try {
+    const db = adminClient();
     const token = sessionTokenFrom(req);
     const user = await validateSession(token);
-    if (!user) return jsonResponse({ error: "Unauthorized — login required" }, 401);
+    if (!user) return J({ error: "Unauthorized — login required" }, 401);
     if (!hasPermission(user, "chat")) {
-      return jsonResponse({ error: "Permission denied (chat)" }, 403);
+      return J({ error: "Permission denied (chat)" }, 403);
     }
 
     if (req.method === "GET") {
       const row = await getDailyRow(user.id);
       const flags = usageFlags(row.total_tokens);
-      return jsonResponse({ usage: buildUsageMeta(row), ...flags });
+      return J({ usage: buildUsageMeta(row), ...flags });
     }
 
-    if (!checkRateLimit(String(user.id))) {
-      return jsonResponse({ error: "Rate limit exceeded. Try again shortly." }, 429);
+    if (!(await checkRateLimit(db, `gemini:${user.id}`, RATE_LIMIT, RATE_WINDOW_MS))) {
+      return J({ error: "Rate limit exceeded. Try again shortly." }, 429);
     }
 
     const apiKey = Deno.env.get("GEMINI_API_KEY");
-    if (!apiKey) return jsonResponse({ error: "GEMINI_API_KEY not set on server" }, 500);
+    if (!apiKey) return J({ error: "GEMINI_API_KEY not set on server" }, 500);
 
     const body = await req.json();
     const { systemPrompt, messages, tools, confirmOverage } = body;
 
     const quota = await checkDailyQuota(user.id, Boolean(confirmOverage));
     if (quota.blocked) {
-      return jsonResponse({
+      return J({
         requiresConfirm: true,
         usage: quota.usage,
         message: `You've used all ${(AI_DAILY_FREE_TOKENS / 1000).toFixed(0)}k free AI tokens today. Continue anyway?`,
@@ -183,7 +174,7 @@ Deno.serve(async (req) => {
       lastStatus = res.status || 500;
       const retryable = isRetryableGeminiError(lastStatus, lastError);
       if (!retryable || attempt === MAX_GEMINI_ATTEMPTS - 1) {
-        return jsonResponse({
+        return J({
           error: lastError,
           retryable,
           modelAttempted: model,
@@ -210,11 +201,11 @@ Deno.serve(async (req) => {
     const base = { usage, lastCallTokens: tokenDelta.totalTokens, ...flags };
 
     if (functionCalls.length) {
-      return jsonResponse({ functionCalls, text: text || undefined, ...base });
+      return J({ functionCalls, text: text || undefined, ...base });
     }
 
-    return jsonResponse({ text: text || "No response received.", ...base });
+    return J({ text: text || "No response received.", ...base });
   } catch (err) {
-    return jsonResponse({ error: err.message }, 500);
+    return jsonResponse({ error: err.message }, 500, req);
   }
 });

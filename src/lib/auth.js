@@ -2,8 +2,21 @@ import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
 
 const SESSION_KEY = 'marugen_session'
 
+function cloudFetch(url, options = {}) {
+  return fetch(url, {
+    ...options,
+    credentials: 'include',
+    headers: {
+      apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+      ...(options.headers || {}),
+    },
+  })
+}
+
 function readSessionRaw() {
-  // iOS Safari and Home Screen PWA use separate storage — prefer localStorage so login persists in standalone mode.
+  if (isSupabaseConfigured) {
+    return sessionStorage.getItem(SESSION_KEY)
+  }
   const fromLocal = localStorage.getItem(SESSION_KEY)
   if (fromLocal) return fromLocal
   const fromSession = sessionStorage.getItem(SESSION_KEY)
@@ -27,13 +40,16 @@ export function getSession() {
 }
 
 export function setSession({ token, user }) {
-  const json = JSON.stringify({ token, user })
-  try {
-    localStorage.setItem(SESSION_KEY, json)
-  } catch {
-    /* quota or private mode */
-  }
+  const payload = isSupabaseConfigured ? { user } : { token, user }
+  const json = JSON.stringify(payload)
   sessionStorage.setItem(SESSION_KEY, json)
+  if (!isSupabaseConfigured) {
+    try {
+      localStorage.setItem(SESSION_KEY, json)
+    } catch {
+      /* quota or private mode */
+    }
+  }
 }
 
 export function clearSession() {
@@ -42,14 +58,17 @@ export function clearSession() {
 }
 
 export function getSessionToken() {
+  if (isSupabaseConfigured) return null
   return getSession()?.token || null
+}
+
+export function hasCloudSession() {
+  return isSupabaseConfigured ? Boolean(getSession()?.user) : Boolean(getSessionToken())
 }
 
 export async function authStatus() {
   if (!isSupabaseConfigured) return { needsSetup: false, hasUsers: true, cloud: false }
-  const res = await fetch(`${getFunctionsUrl()}/auth-login`, {
-    headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY },
-  })
+  const res = await cloudFetch(`${getFunctionsUrl()}/auth-login`)
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Auth status failed')
   return { ...data, cloud: true }
@@ -57,43 +76,36 @@ export async function authStatus() {
 
 export async function loginWithPin(pin) {
   if (!isSupabaseConfigured) return null
-  const res = await fetch(`${getFunctionsUrl()}/auth-login`, {
+  const res = await cloudFetch(`${getFunctionsUrl()}/auth-login`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'login', pin }),
   })
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Login failed')
-  setSession(data)
+  setSession({ user: data.user })
   return data
 }
 
 export async function fetchPublicUsers() {
   if (!isSupabaseConfigured) return []
-  const res = await fetch(`${getFunctionsUrl()}/auth-login`, {
-    headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY },
-  })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.error || 'Failed to load users')
-  return data.users || []
+  const status = await authStatus()
+  return status.hasUsers ? [{ id: 'cloud', name: 'Team member', role: 'staff', active: true }] : []
 }
 
-export async function setupOwner({ name, pin }) {
+export async function setupOwner({ name, pin, setupSecret }) {
   if (!isSupabaseConfigured) return null
-  const res = await fetch(`${getFunctionsUrl()}/auth-login`, {
+  const res = await cloudFetch(`${getFunctionsUrl()}/auth-login`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+      ...(setupSecret ? { 'x-setup-secret': setupSecret } : {}),
     },
-    body: JSON.stringify({ action: 'setup', name, pin }),
+    body: JSON.stringify({ action: 'setup', name, pin, setupSecret }),
   })
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Setup failed')
-  setSession(data)
+  setSession({ user: data.user })
   return data
 }
 
@@ -101,16 +113,9 @@ export async function changeMyPin({ currentPin, newPin }) {
   if (!isSupabaseConfigured) {
     return { local: true }
   }
-  const token = getSessionToken()
-  if (!token) throw new Error('Not logged in')
-
-  const res = await fetch(`${getFunctionsUrl()}/auth-login`, {
+  const res = await cloudFetch(`${getFunctionsUrl()}/auth-login`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-      Authorization: `Session ${token}`,
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'change_pin', currentPin, newPin }),
   })
   const data = await res.json()
@@ -119,16 +124,21 @@ export async function changeMyPin({ currentPin, newPin }) {
 }
 
 export async function logout() {
-  const session = getSession()
-  if (session?.token && isSupabaseConfigured) {
-    await fetch(`${getFunctionsUrl()}/auth-login`, {
+  if (isSupabaseConfigured) {
+    await cloudFetch(`${getFunctionsUrl()}/auth-login`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-      },
-      body: JSON.stringify({ action: 'logout', token: session.token }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'logout' }),
     }).catch(() => {})
+  } else {
+    const session = getSession()
+    if (session?.token) {
+      await fetch(`${getFunctionsUrl()}/auth-login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: import.meta.env.VITE_SUPABASE_ANON_KEY },
+        body: JSON.stringify({ action: 'logout', token: session.token }),
+      }).catch(() => {})
+    }
   }
   clearSession()
 }

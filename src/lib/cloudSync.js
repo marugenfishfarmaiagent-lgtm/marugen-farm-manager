@@ -20,17 +20,17 @@ export function canSyncEntity(user, perm, hasPermission) {
   return hasPermission(user, perm)
 }
 
-export function buildSyncTasks(user, state, hasPermission) {
+export function buildSyncTasks(user, state, hasPermission, { prune = false } = {}) {
   return SYNC_ENTITIES
     .filter((e) => canSyncEntity(user, e.perm, hasPermission))
     .map((e) => ({
       label: e.label,
-      run: () => e.sync(state[e.key]),
+      run: () => e.sync(state[e.key], { prune }),
     }))
 }
 
-export async function syncAllAllowed(user, state, hasPermission) {
-  const tasks = buildSyncTasks(user, state, hasPermission)
+export async function syncAllAllowed(user, state, hasPermission, options = {}) {
+  const tasks = buildSyncTasks(user, state, hasPermission, options)
   if (!tasks.length) return { synced: 0, skipped: SYNC_ENTITIES.length }
 
   const results = await Promise.allSettled(tasks.map((t) => t.run()))

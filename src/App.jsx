@@ -40,6 +40,8 @@ import {
 } from "./lib/retention";
 import { isSupabaseConfigured } from "./lib/supabase";
 import * as auth from "./lib/auth";
+import { markDeleted, clearAllDeletions } from "./lib/syncDeletions";
+import { touchUpdatedAt } from "./lib/syncMeta";
 import {
   FISH_TYPES, PRODUCT_CATEGORIES,
   CUSTOMER_TIERS, ALL_PERMISSIONS, DEFAULT_PERMISSIONS,
@@ -406,7 +408,9 @@ function LoginScreen({ onLogin, users, cloudMode }) {
               className="w-full bg-slate-900/50 border border-slate-600 rounded-xl px-3 py-4 text-white text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 touch-manipulation" />
             <p className="text-xs text-slate-500 mt-2 text-center">Enter your assigned PIN to login</p>
           </div>
-          {activeUsers.length > 0 && (
+          {cloudMode ? (
+            <p className="text-xs text-slate-500 mt-2 text-center">Enter your team PIN to sign in.</p>
+          ) : activeUsers.length > 0 ? (
             <div className="mb-4 p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
               <p className="text-xs text-slate-500 mb-2 uppercase tracking-wide font-semibold">Registered Users</p>
               <div className="space-y-1">
@@ -418,7 +422,7 @@ function LoginScreen({ onLogin, users, cloudMode }) {
                 ))}
               </div>
             </div>
-          )}
+          ) : null}
           {error && <div className="bg-red-500/20 border border-red-500/30 rounded-lg p-3 mb-4 text-red-300 text-sm flex items-center gap-2"><AlertTriangle size={14} />{error}</div>}
           <Btn onClick={handleLogin} disabled={loading} className="w-full justify-center" size="lg">{loading ? "Logging in..." : "Login →"}</Btn>
         </Card>
@@ -720,7 +724,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       addNotification({ type: "error", title: "Invalid Values", message: "Price and stock cannot be negative." });
       return;
     }
-    const p = {
+    const p = touchUpdatedAt({
       ...form,
       id: Date.now(),
       name: form.name.trim(),
@@ -728,7 +732,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       stock: catalogOnly ? 0 : +form.stock,
       minStock: catalogOnly ? 0 : (+form.minStock || 0),
       trackStock: !catalogOnly,
-    };
+    });
     setProducts(prev => [...prev, p]);
     addNotification({
       type: "success",
@@ -767,14 +771,14 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       return;
     }
     const prevName = products.find((p) => p.id === editProduct.id)?.name;
-    const updated = {
+    const updated = touchUpdatedAt({
       ...editProduct,
       name: editProduct.name.trim(),
       price: +editProduct.price,
       stock: catalogOnly ? 0 : +editProduct.stock,
       minStock: catalogOnly ? 0 : (+editProduct.minStock || 0),
       trackStock: !catalogOnly,
-    };
+    });
     setProducts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
     if (prevName && prevName !== updated.name) {
       setStockLog((prev) => prev.map((l) => (l.productId === updated.id ? { ...l, productName: updated.name } : l)));
@@ -790,6 +794,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       return;
     }
     setProducts((prev) => prev.filter((p) => p.id !== deleteProduct.id));
+    markDeleted("products", deleteProduct.id);
     addNotification({ type: "info", title: "Product Deleted", message: `${deleteProduct.name} removed from inventory` });
     setDeleteProduct(null);
   };
@@ -1160,14 +1165,16 @@ function InvoiceModule({
     if (!bookedConfirm) return;
     const { id, currentlyBooked } = bookedConfirm;
     const patch = makeBookedPatch(!currentlyBooked, currentUser.name);
-    setInvoices((prev) => prev.map((inv) => (inv.id === id ? { ...inv, ...patch } : inv)));
-    setViewInv((prev) => (prev?.id === id ? { ...prev, ...patch } : prev));
+    const apply = (row) => (row.id === id ? touchUpdatedAt({ ...row, ...patch }) : row);
+    setInvoices((prev) => prev.map(apply));
+    setViewInv((prev) => (prev?.id === id ? apply(prev) : prev));
     setBookedConfirm(null);
   };
 
   const patchInvoice = (id, patch) => {
-    setInvoices((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)));
-    setViewInv((prev) => (prev?.id === id ? { ...prev, ...patch } : prev));
+    const apply = (i) => (i.id === id ? touchUpdatedAt({ ...i, ...patch }) : i);
+    setInvoices((prev) => prev.map(apply));
+    setViewInv((prev) => (prev?.id === id ? apply(prev) : prev));
   };
 
   const applyInvoiceDiscount = (inv, discountType, discountValueRaw) => {
@@ -1370,7 +1377,7 @@ function InvoiceModule({
       total: formAmounts.total, status: "pending", date: issueDate, due: form.due || issueDate, notes: form.notes, createdBy: currentUser.name,
       booked: false, bookedAt: null, bookedBy: "",
     };
-    setInvoices(prev => [inv, ...prev]);
+    setInvoices(prev => [touchUpdatedAt(inv), ...prev]);
     setShowNew(false);
     setViewInv(inv);
     setFormError("");
@@ -1399,7 +1406,7 @@ function InvoiceModule({
       by: currentUser?.name || "Staff",
     });
     restoreInvoiceKoiSales(inv.items || [], setKoiFishList, setCustomerKoiList);
-    setInvoices((prev) => prev.map((i) => (i.id === id ? { ...i, status: "cancelled" } : i)));
+    setInvoices((prev) => prev.map((i) => (i.id === id ? touchUpdatedAt({ ...i, status: "cancelled" }) : i)));
     setViewInv((prev) => (prev?.id === id ? null : prev));
     addNotification({ type: "info", title: "Invoice Cancelled", message: `${id} has been cancelled. Inventory and fish stock restored where applicable.` });
   };
@@ -1413,7 +1420,7 @@ function InvoiceModule({
       return;
     }
     const paidTotal = calcInvoiceAmounts(inv).total;
-    setInvoices((prev) => prev.map((i) => (i.id === id ? { ...i, status: "paid" } : i)));
+    setInvoices((prev) => prev.map((i) => (i.id === id ? touchUpdatedAt({ ...i, status: "paid" }) : i)));
     setViewInv((prev) => (prev?.id === id ? { ...prev, status: "paid" } : prev));
     if (inv.customerId != null && inv.customerId !== "") {
       setCustomers((prev) => prev.map((c) => {
@@ -2130,6 +2137,7 @@ function CustomerModule({ customers, setCustomers, addNotification, currentUser 
     }
     const id = deleteCustomer.id;
     setCustomers((prev) => prev.filter((c) => String(c.id) !== String(id)));
+    markDeleted("customers", id);
     if (String(viewId) === String(id)) setViewId(null);
     addNotification({ type: "info", title: "Customer Deleted", message: `${deleteCustomer.name} removed from CRM` });
     setDeleteCustomer(null);
@@ -2443,6 +2451,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
     const label = expense.imageName || expense.date || "this receipt";
     if (!confirm(`Delete ${label}? This cannot be undone.`)) return;
     setExpenses((prev) => prev.filter((e) => e.id !== expense.id));
+    markDeleted("expenses", expense.id);
     setViewExpenseId((prev) => (String(prev) === String(expense.id) ? null : prev));
     addNotification({ type: "info", title: "Receipt Deleted", message: "Expense receipt removed." });
   };
@@ -2976,6 +2985,7 @@ function DeliveryModule({
     const label = `${d.id} → ${d.customerName}`;
     if (!confirm(`Delete ${label}? This cannot be undone.`)) return;
     setDeliveries((prev) => prev.filter((x) => String(x.id) !== String(d.id)));
+    markDeleted("deliveries", d.id);
     if (String(editDeliveryId) === String(d.id)) closeDeliveryForm();
     if (String(whatsappDeliveryId) === String(d.id)) closeWhatsappPicker();
     addNotification({ type: "info", title: "Delivery Deleted", message: `${d.id} removed.` });
@@ -3056,6 +3066,7 @@ function DeliveryModule({
       return;
     }
     persistWhatsappGroups(whatsappGroups.filter((g) => g.id !== id));
+    markDeleted("whatsapp_groups", id);
   };
 
   const openWhatsappPicker = (d) => {
@@ -3488,6 +3499,7 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
     const label = e.title || "this event";
     if (!confirm(`Delete "${label}" on ${e.date}? This cannot be undone.`)) return;
     setEvents((prev) => prev.filter((x) => String(x.id) !== String(e.id)));
+    markDeleted("events", e.id);
     if (String(editEventId) === String(e.id)) closeEventForm();
     addNotification({ type: "info", title: "Event Deleted", message: `"${label}" removed.` });
   };
@@ -4820,6 +4832,7 @@ export default function App() {
     setCustomerKoiList([]);
     setPondData(emptyPondData());
     setWhatsappGroups([]);
+    clearAllDeletions();
     setCloudHydrated(false);
   }, []);
 
@@ -4835,12 +4848,6 @@ export default function App() {
           return;
         }
         if (!auth.getSession()) {
-          if (status.users?.length) {
-            setUsers(db.mapPublicUsers(status.users));
-          } else {
-            const publicUsers = await auth.fetchPublicUsers();
-            if (publicUsers.length) setUsers(db.mapPublicUsers(publicUsers));
-          }
           setCloudSync(true);
           setCloudError(null);
           setDataReady(true);
@@ -4882,7 +4889,7 @@ export default function App() {
   }, [warnCloudSaveFailed, resetCloudBusinessState]);
 
   const syncDebounced = useCallback((perm, label, fn, data) => {
-    if (!dataReady || !cloudHydrated || !isSupabaseConfigured || !auth.getSessionToken() || !currentUser) return;
+    if (!dataReady || !cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
     if (!hasPermission(currentUser, perm)) return;
     const timer = setTimeout(() => {
       fn(data)
@@ -4904,11 +4911,13 @@ export default function App() {
   }), [customers, products, invoices, expenses, deliveries, events, stockLog, koiFishList, customerKoiList, pondData, whatsappGroups]);
 
   const retryCloudSync = useCallback(async () => {
-    if (!isSupabaseConfigured || !auth.getSessionToken() || !currentUser || !cloudHydrated) return;
+    if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser || !cloudHydrated) return;
     setCloudRetrying(true);
     try {
       const tasks = SYNC_ENTITIES.filter((e) => hasPermission(currentUser, e.perm));
-      const results = await Promise.allSettled(tasks.map((e) => e.sync(syncState[e.key])));
+      const results = await Promise.allSettled(
+        tasks.map((e) => e.sync(syncState[e.key], { prune: true })),
+      );
       const failed = results
         .map((r, i) => (r.status === "rejected" ? tasks[i].label : null))
         .filter(Boolean);

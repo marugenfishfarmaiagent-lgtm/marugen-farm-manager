@@ -3,6 +3,8 @@ import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
 import { normalizeCustomerKoiRecord } from '../data/constants'
 import { emptyPondData } from './cloudData'
 import { normalizeImageFieldForSync, storagePaths } from './farmImage'
+import { consumeDeletions } from './syncDeletions'
+import { touchPondData, withUpdatedAt } from './syncMeta'
 
 function mapUser(row) {
   return {
@@ -16,7 +18,7 @@ function mapUser(row) {
 }
 
 function mapCustomer(row) {
-  return {
+  return withUpdatedAt({
     id: row.id,
     name: row.name,
     phone: row.phone || '',
@@ -28,11 +30,11 @@ function mapCustomer(row) {
     tier: row.tier || 'Bronze',
     notes: row.notes || '',
     totalSpent: Number(row.total_spent ?? row.totalSpent) || 0,
-  }
+  })
 }
 
 function mapProduct(row) {
-  return {
+  return withUpdatedAt({
     id: row.id,
     name: row.name,
     category: row.category,
@@ -44,11 +46,11 @@ function mapProduct(row) {
     minStock: Number(row.min_stock ?? row.minStock),
     description: row.description || '',
     trackStock: row.track_stock ?? row.trackStock ?? true,
-  }
+  })
 }
 
 function mapInvoice(row) {
-  return {
+  return withUpdatedAt({
     id: row.id,
     customerId: row.customer_id ?? row.customerId,
     customerName: row.customer_name ?? row.customerName,
@@ -63,7 +65,7 @@ function mapInvoice(row) {
     booked: Boolean(row.booked),
     bookedAt: row.booked_at ?? row.bookedAt ?? null,
     bookedBy: row.booked_by ?? row.bookedBy ?? '',
-  }
+  })
 }
 
 function expenseStoragePath(id) {
@@ -72,7 +74,7 @@ function expenseStoragePath(id) {
 
 function mapExpense(row) {
   const imageUrl = row.image_url ?? row.imageUrl ?? ''
-  return {
+  return withUpdatedAt({
     id: row.id,
     category: row.category || '',
     amount: Number(row.amount) || 0,
@@ -85,11 +87,11 @@ function mapExpense(row) {
     booked: Boolean(row.booked),
     bookedAt: row.booked_at ?? row.bookedAt ?? null,
     bookedBy: row.booked_by ?? row.bookedBy ?? '',
-  }
+  })
 }
 
 function mapDelivery(row) {
-  return {
+  return withUpdatedAt({
     id: row.id,
     invoiceId: row.invoice_id ?? row.invoiceId ?? '',
     customerId: row.customer_id ?? row.customerId ?? null,
@@ -103,11 +105,11 @@ function mapDelivery(row) {
     driver: row.driver || '',
     notes: row.notes || '',
     createdBy: row.created_by ?? row.createdBy ?? '',
-  }
+  })
 }
 
 function mapEvent(row) {
-  return {
+  return withUpdatedAt({
     id: row.id,
     title: row.title,
     date: row.date,
@@ -115,11 +117,11 @@ function mapEvent(row) {
     type: row.type,
     note: row.note || '',
     createdBy: row.created_by ?? row.createdBy ?? '',
-  }
+  })
 }
 
 function mapStockLog(row) {
-  return {
+  return withUpdatedAt({
     id: row.id,
     productId: row.product_id ?? row.productId,
     productName: row.product_name ?? row.productName,
@@ -130,11 +132,11 @@ function mapStockLog(row) {
     note: row.note || '',
     date: row.date,
     by: row.added_by ?? row.by ?? '',
-  }
+  })
 }
 
 function mapKoiFish(row) {
-  return {
+  return withUpdatedAt({
     id: row.id,
     photo: row.photo || null,
     name: row.name || '',
@@ -154,11 +156,11 @@ function mapKoiFish(row) {
     deathDate: row.death_date ?? row.deathDate ?? null,
     deathCause: row.death_cause ?? row.deathCause ?? null,
     deathPhoto: row.death_photo ?? row.deathPhoto ?? null,
-  }
+  })
 }
 
 function mapCustomerKoi(row) {
-  return normalizeCustomerKoiRecord({
+  return withUpdatedAt(normalizeCustomerKoiRecord({
     id: row.id,
     customerId: row.customer_id ?? row.customerId,
     customerName: row.customer_name ?? row.customerName ?? '',
@@ -177,39 +179,41 @@ function mapCustomerKoi(row) {
     deathCause: row.death_cause ?? row.deathCause ?? null,
     deathPhoto: row.death_photo ?? row.deathPhoto ?? null,
     deathNotes: row.death_notes ?? row.deathNotes ?? '',
-  })
+  }))
 }
 
-function mapPondData(payload) {
+function mapPondData(payload, updatedAt) {
   if (!payload || typeof payload !== 'object') return emptyPondData()
-  return {
+  const base = {
     ...emptyPondData(),
     ...payload,
     treatmentGuides: payload.treatmentGuides?.length
       ? payload.treatmentGuides
       : emptyPondData().treatmentGuides,
   }
+  return updatedAt ? { ...base, updatedAt } : base
 }
 
 function mapWhatsappGroup(row) {
-  return {
+  return withUpdatedAt({
     id: row.id,
     name: row.name || '',
     link: row.link || '',
-  }
+  })
 }
 
 async function apiCall(body) {
   const token = getSessionToken()
-  if (!token) throw new Error('Not authenticated')
+  const headers = {
+    'Content-Type': 'application/json',
+    apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+  }
+  if (token) headers.Authorization = `Session ${token}`
 
   const res = await fetch(`${getFunctionsUrl()}/farm-api`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-      Authorization: `Session ${token}`,
-    },
+    credentials: 'include',
+    headers,
     body: JSON.stringify(body),
   })
   const data = await res.json()
@@ -219,6 +223,33 @@ async function apiCall(body) {
   }
   if (!res.ok) throw new Error(data.error || `API error: ${res.status}`)
   return data
+}
+
+async function syncCall(entity, data, { prune = false } = {}) {
+  const payload = stampOutgoing(data)
+  await apiCall({
+    action: 'sync',
+    entity,
+    data: payload,
+    deletedIds: consumeDeletions(entity),
+    prune,
+  })
+}
+
+function stampOutgoing(data) {
+  if (Array.isArray(data)) return data.map(stampRecord)
+  if (data && typeof data === 'object') return stampRecord(data)
+  return data
+}
+
+function stampRecord(record) {
+  if (!record || typeof record !== 'object') return record
+  if (record.updatedAt) return record
+  const idNum = Number(record.id)
+  if (Number.isFinite(idNum) && idNum > 1e12) {
+    return { ...record, updatedAt: new Date().toISOString() }
+  }
+  return record
 }
 
 export function mapPublicUsers(rows) {
@@ -235,6 +266,7 @@ export function mapPublicUsers(rows) {
 export async function isDatabaseEmpty() {
   if (!isSupabaseConfigured) return false
   const res = await fetch(`${getFunctionsUrl()}/auth-login`, {
+    credentials: 'include',
     headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY },
   })
   const data = await res.json()
@@ -255,7 +287,7 @@ export async function fetchAllData() {
     stockActivity: (data.stockActivity || []).map(mapStockLog),
     koiFish: (data.koiFish || []).map(mapKoiFish),
     customerKoi: (data.customerKoi || []).map(mapCustomerKoi),
-    pondData: mapPondData(data.pondData),
+    pondData: mapPondData(data.pondData, data.pondUpdatedAt),
     whatsappGroups: (data.whatsappGroups || []).map(mapWhatsappGroup),
   }
 }
@@ -293,19 +325,19 @@ export async function fetchUsers() {
   return (data.users || []).map(mapUser)
 }
 
-export async function syncCustomers(customers) {
+export async function syncCustomers(customers, options) {
   if (!isSupabaseConfigured) return
-  await apiCall({ action: 'sync', entity: 'customers', data: customers })
+  await syncCall('customers', customers, options)
 }
 
-export async function syncProducts(products) {
+export async function syncProducts(products, options) {
   if (!isSupabaseConfigured) return
-  await apiCall({ action: 'sync', entity: 'products', data: products })
+  await syncCall('products', products, options)
 }
 
-export async function syncInvoices(invoices) {
+export async function syncInvoices(invoices, options) {
   if (!isSupabaseConfigured) return
-  await apiCall({ action: 'sync', entity: 'invoices', data: invoices })
+  await syncCall('invoices', invoices, options)
 }
 
 export async function uploadExpenseReceipt(expenseId, imageData, imageName = '') {
@@ -313,7 +345,7 @@ export async function uploadExpenseReceipt(expenseId, imageData, imageName = '')
   return apiCall({ action: 'upload_expense_receipt', expenseId, imageData, imageName })
 }
 
-export async function syncExpenses(expenses) {
+export async function syncExpenses(expenses, options) {
   if (!isSupabaseConfigured) return
   const payload = expenses.map((e) => {
     const hasHttpUrl = e.imageUrl?.startsWith('http')
@@ -325,7 +357,7 @@ export async function syncExpenses(expenses) {
       imageData: hasHttpUrl ? '' : (e.imageData || ''),
     }
   })
-  await apiCall({ action: 'sync', entity: 'expenses', data: payload })
+  await syncCall('expenses', payload, options)
 }
 
 export async function refreshSignedImage({ entity, id, field }) {
@@ -337,49 +369,49 @@ export async function refreshExpenseReceiptUrl(expenseId) {
   return refreshSignedImage({ entity: 'expense', id: expenseId, field: 'image' })
 }
 
-export async function syncDeliveries(deliveries) {
+export async function syncDeliveries(deliveries, options) {
   if (!isSupabaseConfigured) return
-  await apiCall({ action: 'sync', entity: 'deliveries', data: deliveries })
+  await syncCall('deliveries', deliveries, options)
 }
 
-export async function syncEvents(events) {
+export async function syncEvents(events, options) {
   if (!isSupabaseConfigured) return
-  await apiCall({ action: 'sync', entity: 'events', data: events })
+  await syncCall('events', events, options)
 }
 
-export async function syncStockActivity(logs) {
+export async function syncStockActivity(logs, options) {
   if (!isSupabaseConfigured) return
-  await apiCall({ action: 'sync', entity: 'stock_activity', data: logs })
+  await syncCall('stock_activity', logs, options)
 }
 
-export async function syncKoiFish(list) {
+export async function syncKoiFish(list, options) {
   if (!isSupabaseConfigured) return
   const payload = (list || []).map((k) => ({
     ...k,
     photo: normalizeImageFieldForSync(k.photo, storagePaths.koiFishPhoto(k.id)),
     deathPhoto: normalizeImageFieldForSync(k.deathPhoto, storagePaths.koiFishDeathPhoto(k.id)),
   }))
-  await apiCall({ action: 'sync', entity: 'koi_fish', data: payload })
+  await syncCall('koi_fish', payload, options)
 }
 
-export async function syncCustomerKoi(list) {
+export async function syncCustomerKoi(list, options) {
   if (!isSupabaseConfigured) return
   const payload = (list || []).map((r) => ({
     ...r,
     photo: normalizeImageFieldForSync(r.photo, storagePaths.customerKoiPhoto(r.id)),
     deathPhoto: normalizeImageFieldForSync(r.deathPhoto, storagePaths.customerKoiDeathPhoto(r.id)),
   }))
-  await apiCall({ action: 'sync', entity: 'customer_koi', data: payload })
+  await syncCall('customer_koi', payload, options)
 }
 
-export async function syncPondData(pondData) {
+export async function syncPondData(pondData, options) {
   if (!isSupabaseConfigured) return
-  await apiCall({ action: 'sync', entity: 'farm_pond_data', data: pondData })
+  await syncCall('farm_pond_data', touchPondData(pondData), options)
 }
 
-export async function syncWhatsappGroups(groups) {
+export async function syncWhatsappGroups(groups, options) {
   if (!isSupabaseConfigured) return
-  await apiCall({ action: 'sync', entity: 'whatsapp_groups', data: groups })
+  await syncCall('whatsapp_groups', groups, options)
 }
 
 export { isSupabaseConfigured }

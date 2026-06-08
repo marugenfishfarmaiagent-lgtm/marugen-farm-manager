@@ -1,5 +1,5 @@
 import { fetchTodayUsageByUser, fetchWeekUsageByUser } from "../_shared/aiUsage.ts";
-import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
+import { corsHeadersFor, jsonResponse, optionsResponse } from "../_shared/cors.ts";
 import {
   deleteExpenseReceiptImages,
   expenseReceiptPath,
@@ -74,36 +74,70 @@ async function upsertSync(
   table: string,
   rows: Record<string, unknown>[],
   idField: string,
+  options: {
+    prune?: boolean;
+    deletedIds?: unknown[];
+    beforeDelete?: (ids: unknown[]) => Promise<void>;
+  } = {},
 ) {
   const db = adminClient();
-  const textId = idField === "id" && (
-    table === "invoices" || table === "deliveries" || table === "koi_fish"
-    || table === "customer_koi" || table === "whatsapp_groups"
-  );
-  const incomingSet = new Set(
-    rows.map((r) => r[idField]).filter((id) => id != null).map(normId),
-  );
+  const now = new Date().toISOString();
+  const { prune = false, deletedIds = [], beforeDelete } = options;
+
+  if (deletedIds.length) {
+    if (beforeDelete) await beforeDelete(deletedIds);
+    const { error } = await db.from(table).delete().in(idField, deletedIds);
+    if (error) throw error;
+  }
 
   if (!rows.length) {
-    if (table === "farm_users") {
+    if (table === "farm_users" && prune) {
       const { data: existing } = await db.from(table).select(idField);
       const allIds = (existing || []).map((r) => r[idField]).filter((id) => id != null);
       await deleteFarmUsers(db, allIds);
-      return;
     }
-    // Empty sync payload must not wipe cloud tables (e.g. before client hydration).
     return;
   }
 
-  const { error } = await db.from(table).upsert(rows, { onConflict: idField });
-  if (error) throw error;
+  const ids = rows.map((r) => r[idField]).filter((id) => id != null);
+  const { data: existingRows } = ids.length
+    ? await db.from(table).select(`${idField}, updated_at`).in(idField, ids)
+    : { data: [] as Record<string, unknown>[] };
+  const existingMap = new Map(
+    (existingRows || []).map((r) => [normId(r[idField]), r.updated_at as string | null]),
+  );
 
+  const toUpsert = rows.filter((row) => {
+    const serverTs = existingMap.get(normId(row[idField]));
+    if (!serverTs) return true;
+    const clientRaw = row.updated_at ?? row.updatedAt;
+    if (!clientRaw) return false;
+    const clientTs = new Date(String(clientRaw)).getTime();
+    const serverTime = new Date(String(serverTs)).getTime();
+    return Number.isFinite(clientTs) && clientTs >= serverTime;
+  }).map((row) => {
+    const next = { ...row, updated_at: now };
+    delete next.updatedAt;
+    return next;
+  });
+
+  if (toUpsert.length) {
+    const { error } = await db.from(table).upsert(toUpsert, { onConflict: idField });
+    if (error) throw error;
+  }
+
+  if (!prune) return;
+
+  const incomingSet = new Set(
+    rows.map((r) => r[idField]).filter((id) => id != null).map(normId),
+  );
   const { data: existing } = await db.from(table).select(idField);
   const toDelete = (existing || [])
     .map((r) => r[idField])
     .filter((id) => id != null && !incomingSet.has(normId(id)));
 
   if (toDelete.length) {
+    if (beforeDelete) await beforeDelete(toDelete);
     if (table === "farm_users") {
       await deleteFarmUsers(db, toDelete);
     } else {
@@ -135,12 +169,13 @@ async function isPinTaken(db: ReturnType<typeof adminClient>, pin: string, excep
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS") return optionsResponse(req);
 
   try {
+    const J = (payload: unknown, status = 200) => jsonResponse(payload, status, req);
     const token = sessionTokenFrom(req);
     const user = await validateSession(token);
-    if (!user) return jsonResponse({ error: "Unauthorized" }, 401);
+    if (!user) return J({ error: "Unauthorized" }, 401);
 
     const body = await req.json();
     const db = adminClient();
@@ -162,7 +197,7 @@ Deno.serve(async (req) => {
         db.from("stock_activity").select("*").order("id", { ascending: false }),
         db.from("koi_fish").select("*").order("date_added", { ascending: false }),
         db.from("customer_koi").select("*").order("purchase_date", { ascending: false }),
-        db.from("farm_pond_data").select("data").eq("id", "default").maybeSingle(),
+        db.from("farm_pond_data").select("data, updated_at").eq("id", "default").maybeSingle(),
         db.from("whatsapp_groups").select("*").order("name"),
       ]);
 
@@ -170,7 +205,7 @@ Deno.serve(async (req) => {
         users, customers, products, invoices, expenses, deliveries, events, stockActivity,
         koiFish, customerKoi, pondRow, whatsappGroups,
       ].map((r) => r.error).filter(Boolean);
-      if (errors.length) return jsonResponse({ error: errors[0]!.message }, 500);
+      if (errors.length) return J({ error: errors[0]!.message }, 500);
 
       const canManageUsers = hasPermission(user, "users");
       const usersPayload = canManageUsers
@@ -184,7 +219,7 @@ Deno.serve(async (req) => {
       const koiFishRows = permittedRows(user, "koifish", koiFish.data || []);
       const customerKoiRows = permittedRows(user, "customerkoi", customerKoi.data || []);
 
-      return jsonResponse({
+      return J({
         users: mapUsers(usersPayload),
         customers: permittedRows(user, "customers", customers.data || []),
         products: permittedRows(user, "inventory", products.data || []),
@@ -207,22 +242,23 @@ Deno.serve(async (req) => {
           ? await Promise.all(customerKoiRows.map((k) => signCustomerKoiRowPhotos(db, k)))
           : [],
         pondData: permittedObject(user, "ponds", pondRow.data?.data || {}),
+        pondUpdatedAt: hasPermission(user, "ponds") ? (pondRow.data as { updated_at?: string } | null)?.updated_at ?? null : null,
         whatsappGroups: permittedRows(user, "deliveries", whatsappGroups.data || []),
       });
     }
 
     if (body.action === "upload_expense_receipt") {
       if (!hasPermission(user, "expenses")) {
-        return jsonResponse({ error: "Permission denied (expenses)" }, 403);
+        return J({ error: "Permission denied (expenses)" }, 403);
       }
       const { expenseId, imageData, imageName } = body;
-      if (expenseId == null) return jsonResponse({ error: "expenseId required" }, 400);
+      if (expenseId == null) return J({ error: "expenseId required" }, 400);
       if (!imageData || typeof imageData !== "string" || !imageData.startsWith("data:image/")) {
-        return jsonResponse({ error: "Valid image data required" }, 400);
+        return J({ error: "Valid image data required" }, 400);
       }
       const path = await uploadExpenseReceiptImage(db, expenseId, imageData);
       const imageUrl = await signExpenseReceiptUrl(db, path, expenseId);
-      return jsonResponse({ imageUrl, imagePath: path, imageName: imageName || "" });
+      return J({ imageUrl, imagePath: path, imageName: imageName || "" });
     }
 
     if (body.action === "refresh_expense_receipt" || body.action === "refresh_signed_image") {
@@ -233,7 +269,7 @@ Deno.serve(async (req) => {
       const field = body.action === "refresh_expense_receipt" ? "image" : body.field;
 
       if (!entity || recordId == null || !field) {
-        return jsonResponse({ error: "entity, id, and field required" }, 400);
+        return J({ error: "entity, id, and field required" }, 400);
       }
 
       type ImageTarget = {
@@ -295,9 +331,9 @@ Deno.serve(async (req) => {
       };
 
       const target = targets[entity]?.[field];
-      if (!target) return jsonResponse({ error: "Unknown image target" }, 400);
+      if (!target) return J({ error: "Unknown image target" }, 400);
       if (!hasPermission(user, target.perm)) {
-        return jsonResponse({ error: `Permission denied (${entity})` }, 403);
+        return J({ error: `Permission denied (${entity})` }, 403);
       }
 
       const { data: row, error: fetchErr } = await db.from(target.table)
@@ -306,32 +342,40 @@ Deno.serve(async (req) => {
         .maybeSingle();
       const stored = row?.[target.column as keyof typeof row];
       if (fetchErr || !stored) {
-        return jsonResponse({ error: "Image not found" }, 404);
+        return J({ error: "Image not found" }, 404);
       }
 
       const url = await target.sign(db, String(stored), recordId);
-      return jsonResponse({ url, imageUrl: url });
+      return J({ url, imageUrl: url });
     }
 
     if (body.action === "sync") {
-      const { entity, data } = body;
+      const { entity, data, prune, deletedIds } = body;
       const perm = ENTITY_PERMS[entity];
       if (!perm || !hasPermission(user, perm)) {
-        return jsonResponse({ error: `Permission denied (${entity})` }, 403);
+        return J({ error: `Permission denied (${entity})` }, 403);
       }
+      const syncOpts = {
+        prune: Boolean(prune),
+        deletedIds: Array.isArray(deletedIds) ? deletedIds : [],
+      };
+      const withTs = (fields: Record<string, unknown>, client: Record<string, unknown>) => ({
+        ...fields,
+        updated_at: client.updatedAt ?? client.updated_at ?? undefined,
+      });
 
       if (entity === "users") {
         if (!hasPermission(user, "users")) {
-          return jsonResponse({ error: "Permission denied (users)" }, 403);
+          return J({ error: "Permission denied (users)" }, 403);
         }
 
         for (const u of data || []) {
-          if (!u.name?.trim()) return jsonResponse({ error: "Name is required" }, 400);
+          if (!u.name?.trim()) return J({ error: "Name is required" }, 400);
           if (!["owner", "staff"].includes(String(u.role))) {
-            return jsonResponse({ error: "Invalid role" }, 400);
+            return J({ error: "Invalid role" }, 400);
           }
           if (!Array.isArray(u.permissions) || !u.permissions.length) {
-            return jsonResponse({ error: "At least one permission required" }, 400);
+            return J({ error: "At least one permission required" }, 400);
           }
 
           const { data: target } = await db.from("farm_users")
@@ -346,10 +390,10 @@ Deno.serve(async (req) => {
               .eq("active", true);
             if ((count || 0) <= 1) {
               if (String(u.role) !== "owner") {
-                return jsonResponse({ error: "At least one active owner is required" }, 400);
+                return J({ error: "At least one active owner is required" }, 400);
               }
               if (!u.permissions?.includes("users")) {
-                return jsonResponse({ error: "Last owner must keep Team permission" }, 400);
+                return J({ error: "Last owner must keep Team permission" }, 400);
               }
             }
           }
@@ -365,7 +409,7 @@ Deno.serve(async (req) => {
           let pin_hash: string | undefined;
           if (u.pin && String(u.pin).length >= 4) {
             if (await isPinTaken(db, String(u.pin), Number(u.id))) {
-              return jsonResponse({ error: "PIN already in use" }, 400);
+              return J({ error: "PIN already in use" }, 400);
             }
             pin_hash = await hashPin(String(u.pin));
             row.pin_hash = pin_hash;
@@ -380,31 +424,24 @@ Deno.serve(async (req) => {
           }
         }
 
-        return jsonResponse({ ok: true });
+        return J({ ok: true });
       }
 
       if (entity === "customers") {
-        await upsertSync("customers", (data || []).map((c: Record<string, unknown>) => ({
+        await upsertSync("customers", (data || []).map((c: Record<string, unknown>) => withTs({
           id: c.id, name: c.name, phone: c.phone, whatsapp: c.whatsapp, area: c.area,
           postal_code: c.postalCode, address: c.address,
           fish_types: c.fishTypes, tier: c.tier, notes: c.notes, total_spent: c.totalSpent,
-        })), "id");
+        }, c)), "id", syncOpts);
       } else if (entity === "products") {
-        await upsertSync("products", (data || []).map((p: Record<string, unknown>) => ({
+        await upsertSync("products", (data || []).map((p: Record<string, unknown>) => withTs({
           id: p.id, name: p.name, category: p.category, sku: p.sku, price: p.price,
           cost: p.cost ?? 0, unit: p.unit, stock: p.stock, min_stock: p.minStock, description: p.description,
           track_stock: p.trackStock !== false,
-        })), "id");
+        }, p)), "id", syncOpts);
       } else if (entity === "invoices") {
         const incoming = (data || []) as Record<string, unknown>[];
-        const incomingIds = new Set(incoming.map((i) => normId(i.id)));
-        const { data: existingInvoices } = await db.from("invoices").select("id");
-        const removedIds = (existingInvoices || [])
-          .map((r) => r.id)
-          .filter((id) => id != null && !incomingIds.has(normId(id)));
-        if (removedIds.length) await deleteInvoicePdfs(db, removedIds);
-
-        await upsertSync("invoices", incoming.map((i) => ({
+        await upsertSync("invoices", incoming.map((i) => withTs({
           id: i.id,
           customer_id: i.customerId,
           customer_name: i.customerName,
@@ -419,17 +456,12 @@ Deno.serve(async (req) => {
           booked: Boolean(i.booked),
           booked_at: i.bookedAt ?? null,
           booked_by: i.bookedBy ?? "",
-        })), "id");
+        }, i)), "id", {
+          ...syncOpts,
+          beforeDelete: async (ids) => { await deleteInvoicePdfs(db, ids); },
+        });
       } else if (entity === "expenses") {
         const incoming = (data || []) as Record<string, unknown>[];
-        const incomingIds = new Set(incoming.map((e) => normId(e.id)));
-
-        const { data: existingExpenses } = await db.from("expenses").select("id");
-        const removedIds = (existingExpenses || [])
-          .map((r) => r.id)
-          .filter((id) => id != null && !incomingIds.has(normId(id)));
-        if (removedIds.length) await deleteExpenseReceiptImages(db, removedIds);
-
         const rows = await Promise.all(incoming.map(async (e) => {
           let imagePath = normalizeImageUrlForStorage(String(e.imageUrl ?? ""), e.id);
           let imageData = e.imageData ?? null;
@@ -439,42 +471,38 @@ Deno.serve(async (req) => {
           } else if (imagePath) {
             imageData = null;
           }
-          return {
+          return withTs({
             id: e.id, category: e.category ?? null, amount: e.amount ?? null, date: e.date, note: e.note,
             image_data: imageData, image_name: e.imageName ?? "", image_url: imagePath,
             added_by: e.addedBy,
             booked: Boolean(e.booked), booked_at: e.bookedAt ?? null, booked_by: e.bookedBy ?? "",
-          };
+          }, e);
         }));
-        await upsertSync("expenses", rows, "id");
+        await upsertSync("expenses", rows, "id", {
+          ...syncOpts,
+          beforeDelete: async (ids) => { await deleteExpenseReceiptImages(db, ids); },
+        });
       } else if (entity === "deliveries") {
-        await upsertSync("deliveries", (data || []).map((d: Record<string, unknown>) => ({
+        await upsertSync("deliveries", (data || []).map((d: Record<string, unknown>) => withTs({
           id: d.id, invoice_id: d.invoiceId ?? "",
           customer_id: d.customerId != null && d.customerId !== "" ? d.customerId : null,
           customer_name: d.customerName, area: d.area,
           postal_code: d.postalCode, address: d.address, schedule: d.schedule, status: d.status, items: d.items,
           driver: d.driver, notes: d.notes, created_by: d.createdBy ?? "",
-        })), "id");
+        }, d)), "id", syncOpts);
       } else if (entity === "events") {
-        await upsertSync("events", (data || []).map((e: Record<string, unknown>) => ({
+        await upsertSync("events", (data || []).map((e: Record<string, unknown>) => withTs({
           id: e.id, title: e.title, date: e.date, time: e.time, type: e.type, note: e.note,
           created_by: e.createdBy ?? "",
-        })), "id");
+        }, e)), "id", syncOpts);
       } else if (entity === "stock_activity") {
-        await upsertSync("stock_activity", (data || []).map((l: Record<string, unknown>) => ({
+        await upsertSync("stock_activity", (data || []).map((l: Record<string, unknown>) => withTs({
           id: l.id, product_id: l.productId, product_name: l.productName, type: l.type,
           qty: l.qty, value: l.value ?? l.total ?? null, note: l.note || "", date: l.date, added_by: l.by || "",
-        })), "id");
+        }, l)), "id", syncOpts);
       } else if (entity === "koi_fish") {
         const incoming = (data || []) as Record<string, unknown>[];
-        const incomingIds = new Set(incoming.map((k) => normId(k.id)));
-        const { data: existingKoi } = await db.from("koi_fish").select("id");
-        const removedIds = (existingKoi || [])
-          .map((r) => r.id)
-          .filter((id) => id != null && !incomingIds.has(normId(id)));
-        if (removedIds.length) await deleteKoiFishImages(db, removedIds);
-
-        const rows = await Promise.all(incoming.map(async (k) => ({
+        const rows = await Promise.all(incoming.map(async (k) => withTs({
           id: k.id,
           photo: await resolveKoiFishPhoto(db, k.id, k.photo),
           name: k.name ?? "",
@@ -494,18 +522,14 @@ Deno.serve(async (req) => {
           death_date: k.deathDate ?? null,
           death_cause: k.deathCause ?? null,
           death_photo: await resolveKoiFishDeathPhoto(db, k.id, k.deathPhoto ?? k.death_photo),
-        })));
-        await upsertSync("koi_fish", rows, "id");
+        }, k)));
+        await upsertSync("koi_fish", rows, "id", {
+          ...syncOpts,
+          beforeDelete: async (ids) => { await deleteKoiFishImages(db, ids); },
+        });
       } else if (entity === "customer_koi") {
         const incoming = (data || []) as Record<string, unknown>[];
-        const incomingIds = new Set(incoming.map((r) => normId(r.id)));
-        const { data: existingRows } = await db.from("customer_koi").select("id");
-        const removedIds = (existingRows || [])
-          .map((r) => r.id)
-          .filter((id) => id != null && !incomingIds.has(normId(id)));
-        if (removedIds.length) await deleteCustomerKoiImages(db, removedIds);
-
-        const rows = await Promise.all(incoming.map(async (r) => ({
+        const rows = await Promise.all(incoming.map(async (r) => withTs({
           id: r.id,
           customer_id: r.customerId ?? null,
           customer_name: r.customerName ?? "",
@@ -524,28 +548,42 @@ Deno.serve(async (req) => {
           death_cause: r.deathCause ?? null,
           death_photo: await resolveCustomerKoiDeathPhoto(db, r.id, r.deathPhoto ?? r.death_photo),
           death_notes: r.deathNotes ?? "",
-        })));
-        await upsertSync("customer_koi", rows, "id");
+        }, r)));
+        await upsertSync("customer_koi", rows, "id", {
+          ...syncOpts,
+          beforeDelete: async (ids) => { await deleteCustomerKoiImages(db, ids); },
+        });
       } else if (entity === "farm_pond_data") {
-        const payload = data && typeof data === "object" ? data : {};
+        const raw = data && typeof data === "object" ? { ...(data as Record<string, unknown>) } : {};
+        const clientTs = raw.updatedAt ?? raw.updated_at;
+        delete raw.updatedAt;
+        delete raw.updated_at;
+        const { data: existing } = await db.from("farm_pond_data").select("updated_at").eq("id", "default").maybeSingle();
+        if (existing?.updated_at && clientTs) {
+          const clientTime = new Date(String(clientTs)).getTime();
+          const serverTime = new Date(String(existing.updated_at)).getTime();
+          if (Number.isFinite(clientTime) && clientTime < serverTime) {
+            return J({ ok: true, skipped: true });
+          }
+        }
         const { error } = await db.from("farm_pond_data").upsert(
-          { id: "default", data: payload },
+          { id: "default", data: raw, updated_at: new Date().toISOString() },
           { onConflict: "id" },
         );
         if (error) throw error;
       } else if (entity === "whatsapp_groups") {
-        await upsertSync("whatsapp_groups", (data || []).map((g: Record<string, unknown>) => ({
+        await upsertSync("whatsapp_groups", (data || []).map((g: Record<string, unknown>) => withTs({
           id: g.id, name: g.name ?? "", link: g.link ?? "",
-        })), "id");
+        }, g)), "id", syncOpts);
       } else {
-        return jsonResponse({ error: "Unknown entity" }, 400);
+        return J({ error: "Unknown entity" }, 400);
       }
 
-      return jsonResponse({ ok: true });
+      return J({ ok: true });
     }
 
     if (body.action === "seed") {
-      if (user.role !== "owner") return jsonResponse({ error: "Permission denied" }, 403);
+      if (user.role !== "owner") return J({ error: "Permission denied" }, 403);
       const { seed } = body;
       if (seed?.customers?.length) {
         await db.from("customers").insert(seed.customers.map((c: Record<string, unknown>) => ({
@@ -588,21 +626,21 @@ Deno.serve(async (req) => {
           title: e.title, date: e.date, time: e.time, type: e.type, note: e.note, created_by: e.createdBy ?? "",
         })));
       }
-      return jsonResponse({ ok: true });
+      return J({ ok: true });
     }
 
     if (body.action === "add_user") {
       if (!hasPermission(user, "users")) {
-        return jsonResponse({ error: "Permission denied" }, 403);
+        return J({ error: "Permission denied" }, 403);
       }
       const { name, role, pin, permissions, active } = body;
-      if (!name?.trim()) return jsonResponse({ error: "Name is required" }, 400);
-      if (!pin || String(pin).length < 4) return jsonResponse({ error: "4-digit PIN required" }, 400);
-      if (!permissions?.length) return jsonResponse({ error: "At least one permission required" }, 400);
-      if (!["owner", "staff"].includes(role)) return jsonResponse({ error: "Invalid role" }, 400);
+      if (!name?.trim()) return J({ error: "Name is required" }, 400);
+      if (!pin || String(pin).length < 4) return J({ error: "4-digit PIN required" }, 400);
+      if (!permissions?.length) return J({ error: "At least one permission required" }, 400);
+      if (!["owner", "staff"].includes(role)) return J({ error: "Invalid role" }, 400);
 
       if (await isPinTaken(db, String(pin))) {
-        return jsonResponse({ error: "PIN already in use" }, 400);
+        return J({ error: "PIN already in use" }, 400);
       }
 
       const pin_hash = await hashPin(String(pin));
@@ -614,26 +652,26 @@ Deno.serve(async (req) => {
         permissions,
         is_system: false,
       }).select("id, name, role, active, permissions, is_system").single();
-      if (error) return jsonResponse({ error: error.message }, 500);
+      if (error) return J({ error: error.message }, 500);
 
-      return jsonResponse({ ok: true, user: mapUsers([created])[0] });
+      return J({ ok: true, user: mapUsers([created])[0] });
     }
 
     if (body.action === "update_user") {
       if (!hasPermission(user, "users")) {
-        return jsonResponse({ error: "Permission denied" }, 403);
+        return J({ error: "Permission denied" }, 403);
       }
       const { userId, name, role, pin, permissions, active } = body;
-      if (userId == null) return jsonResponse({ error: "userId required" }, 400);
-      if (!name?.trim()) return jsonResponse({ error: "Name is required" }, 400);
-      if (!permissions?.length) return jsonResponse({ error: "At least one permission required" }, 400);
-      if (!["owner", "staff"].includes(role)) return jsonResponse({ error: "Invalid role" }, 400);
+      if (userId == null) return J({ error: "userId required" }, 400);
+      if (!name?.trim()) return J({ error: "Name is required" }, 400);
+      if (!permissions?.length) return J({ error: "At least one permission required" }, 400);
+      if (!["owner", "staff"].includes(role)) return J({ error: "Invalid role" }, 400);
 
       const { data: target, error: fetchErr } = await db.from("farm_users")
         .select("id, role, active, is_system")
         .eq("id", userId)
         .maybeSingle();
-      if (fetchErr || !target) return jsonResponse({ error: "User not found" }, 404);
+      if (fetchErr || !target) return J({ error: "User not found" }, 404);
 
       if (target.role === "owner" && target.active !== false) {
         const { count } = await db.from("farm_users")
@@ -642,10 +680,10 @@ Deno.serve(async (req) => {
           .eq("active", true);
         if ((count || 0) <= 1) {
           if (role !== "owner") {
-            return jsonResponse({ error: "At least one active owner is required" }, 400);
+            return J({ error: "At least one active owner is required" }, 400);
           }
           if (!permissions?.includes("users")) {
-            return jsonResponse({ error: "Last owner must keep Team permission" }, 400);
+            return J({ error: "Last owner must keep Team permission" }, 400);
           }
         }
       }
@@ -658,7 +696,7 @@ Deno.serve(async (req) => {
       };
       if (pin && String(pin).length >= 4) {
         if (await isPinTaken(db, String(pin), Number(userId))) {
-          return jsonResponse({ error: "PIN already in use" }, 400);
+          return J({ error: "PIN already in use" }, 400);
         }
         row.pin_hash = await hashPin(String(pin));
       }
@@ -668,28 +706,28 @@ Deno.serve(async (req) => {
         .eq("id", userId)
         .select("id, name, role, active, permissions, is_system")
         .single();
-      if (error) return jsonResponse({ error: error.message }, 500);
+      if (error) return J({ error: error.message }, 500);
 
-      return jsonResponse({ ok: true, user: mapUsers([updated])[0] });
+      return J({ ok: true, user: mapUsers([updated])[0] });
     }
 
     if (body.action === "delete_user") {
       if (!hasPermission(user, "users")) {
-        return jsonResponse({ error: "Permission denied" }, 403);
+        return J({ error: "Permission denied" }, 403);
       }
       const userId = body.userId;
-      if (userId == null) return jsonResponse({ error: "userId required" }, 400);
+      if (userId == null) return J({ error: "userId required" }, 400);
       if (Number(userId) === user.id) {
-        return jsonResponse({ error: "Cannot delete your own account" }, 400);
+        return J({ error: "Cannot delete your own account" }, 400);
       }
 
       const { data: target, error: fetchErr } = await db.from("farm_users")
         .select("id, role, active, is_system")
         .eq("id", userId)
         .maybeSingle();
-      if (fetchErr || !target) return jsonResponse({ error: "User not found" }, 404);
+      if (fetchErr || !target) return J({ error: "User not found" }, 404);
       if (target.is_system) {
-        return jsonResponse({ error: "Cannot delete the system owner account" }, 400);
+        return J({ error: "Cannot delete the system owner account" }, 400);
       }
 
       if (target.role === "owner" && target.active !== false) {
@@ -698,27 +736,27 @@ Deno.serve(async (req) => {
           .eq("role", "owner")
           .eq("active", true);
         if ((count || 0) <= 1) {
-          return jsonResponse({ error: "At least one active owner is required" }, 400);
+          return J({ error: "At least one active owner is required" }, 400);
         }
       }
 
       await deleteFarmUsers(db, [userId]);
-      return jsonResponse({ ok: true });
+      return J({ ok: true });
     }
 
     if (body.action === "ai_usage_stats") {
       if (user.role !== "owner") {
-        return jsonResponse({ error: "Owner access only" }, 403);
+        return J({ error: "Owner access only" }, 403);
       }
       const [today, week] = await Promise.all([
         fetchTodayUsageByUser(),
         fetchWeekUsageByUser(),
       ]);
-      return jsonResponse({ today, week });
+      return J({ today, week });
     }
 
-    return jsonResponse({ error: "Unknown action" }, 400);
+    return J({ error: "Unknown action" }, 400);
   } catch (err) {
-    return jsonResponse({ error: err.message }, 500);
+    return jsonResponse({ error: err.message }, 500, req);
   }
 });

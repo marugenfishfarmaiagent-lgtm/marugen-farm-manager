@@ -3,6 +3,8 @@ import {
   getInvoiceStatus, today, KOI_STATUS, formatKoiSize, PRODUCT_CATEGORIES,
 } from '../data/constants'
 import { calcInvoiceAmounts } from './invoiceDesign'
+import { markDeleted } from './syncDeletions'
+import { touchUpdatedAt } from './syncMeta'
 import { formatCustomerAddress, resolveInvoiceCustomer } from './invoiceWhatsApp'
 import { deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem } from './inventoryStock'
 import { formatKoiInvoiceLineName, restoreInvoiceKoiSales } from './koiInvoice'
@@ -225,7 +227,7 @@ function buildProductFromArgs(a, id) {
   const unit = resolveProductUnit(a.unit, category)
   const stock = defaultProductStock(category, a.stock ?? a.quantity)
   const price = parseQuantity(a.price) ?? 0
-  return {
+  return touchUpdatedAt({
     id,
     name,
     category,
@@ -237,7 +239,7 @@ function buildProductFromArgs(a, id) {
     minStock: parseQuantity(a.minStock) ?? 0,
     description: (a.description || name).trim(),
     trackStock: true,
-  }
+  })
 }
 
 function addProductToInventory(ctx, product, { by, note = 'AI initial stock' } = {}) {
@@ -940,6 +942,7 @@ export function executeAiAction(name, args, ctx) {
         const customer = findCustomer(ctx, a.name)
         if (!customer) return { success: false, error: `Customer not found: ${a.name}` }
         ctx.setCustomers((prev) => prev.filter((c) => c.id !== customer.id))
+        markDeleted('customers', customer.id)
         addNotification?.({ type: 'info', title: 'Customer Deleted (AI)', message: customer.name })
         onNavigate?.('customers')
         return { success: true, message: `Deleted customer ${customer.name}` }
@@ -951,6 +954,7 @@ export function executeAiAction(name, args, ctx) {
         const product = findProduct(ctx, a.productName)
         if (!product) return { success: false, error: `Product not found: ${a.productName}` }
         ctx.setProducts((prev) => prev.filter((p) => p.id !== product.id))
+        markDeleted('products', product.id)
         addNotification?.({ type: 'info', title: 'Product Deleted (AI)', message: product.name })
         onNavigate?.('inventory')
         return { success: true, message: `Removed ${product.name} from inventory` }
@@ -1081,6 +1085,7 @@ export function executeAiAction(name, args, ctx) {
         const ev = findCalendarEvent(ctx, a)
         if (!ev) return { success: false, error: 'Event not found' }
         ctx.setEvents((prev) => prev.filter((e) => e.id !== ev.id))
+        markDeleted('events', ev.id)
         addNotification?.({ type: 'info', title: 'Event Deleted (AI)', message: ev.title })
         onNavigate?.('calendar')
         return { success: true, message: `Deleted event "${ev.title}" on ${ev.date}` }
