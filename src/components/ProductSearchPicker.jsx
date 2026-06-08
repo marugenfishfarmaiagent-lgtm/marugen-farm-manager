@@ -33,9 +33,10 @@ function ProductOption({ product, onPick, disabled, hint }) {
   )
 }
 
-function DropdownPanel({ style, filteredStock, filteredCatalog, hasResults, onPick }) {
+function DropdownPanel({ style, panelRef, filteredStock, filteredCatalog, hasResults, onPick }) {
   return (
     <div
+      ref={panelRef}
       style={style}
       className="max-h-56 overflow-y-auto overscroll-contain bg-slate-800 border border-slate-600 rounded-lg shadow-xl"
     >
@@ -82,6 +83,7 @@ export default function ProductSearchPicker({ products, onSelect, className = ''
   const [open, setOpen] = useState(false)
   const [dropdownStyle, setDropdownStyle] = useState(null)
   const wrapRef = useRef(null)
+  const panelRef = useRef(null)
 
   const stock = useMemo(() => stockProducts(products), [products])
   const catalog = useMemo(() => priceListProducts(products), [products])
@@ -116,7 +118,10 @@ export default function ProductSearchPicker({ products, onSelect, className = ''
 
   useEffect(() => {
     const onDoc = (e) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false)
+      const target = e.target
+      if (wrapRef.current?.contains(target)) return
+      if (panelRef.current?.contains(target)) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', onDoc)
     document.addEventListener('touchstart', onDoc)
@@ -153,6 +158,7 @@ export default function ProductSearchPicker({ products, onSelect, className = ''
       </div>
       {showDropdown && dropdownStyle && createPortal(
         <DropdownPanel
+          panelRef={panelRef}
           style={dropdownStyle}
           filteredStock={filteredStock}
           filteredCatalog={filteredCatalog}
