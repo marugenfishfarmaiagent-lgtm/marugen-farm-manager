@@ -6,6 +6,10 @@ SET sku = 'JPD001', price = 222, unit = 'bag', stock = 10, category = 'Fish Food
 WHERE name = '15kg AkaFuji Colour M size' AND (sku IS NULL OR sku = '');
 
 INSERT INTO products (id, name, category, sku, price, cost, unit, stock, min_stock, description)
+SELECT 1780917810000::bigint, '15kg AkaFuji Colour M size', 'Fish Food', 'JPD001', 222, 0, 'bag', 10, 0, '15kg AkaFuji Colour M size'
+WHERE NOT EXISTS (SELECT 1 FROM products p WHERE p.sku = 'JPD001' OR p.name = '15kg AkaFuji Colour M size');
+
+INSERT INTO products (id, name, category, sku, price, cost, unit, stock, min_stock, description)
 SELECT v.id, v.name, v.category, v.sku, v.price, 0, v.unit, v.stock, 0, v.name
 FROM (VALUES
   (1780917810001::bigint, '15kg AkaFuji Colour L size', 'Fish Food', 'JPD002', 222, 'bag', 10),
