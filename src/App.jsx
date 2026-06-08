@@ -5031,7 +5031,11 @@ export default function App() {
       return;
     }
     if (!koi || koi.status !== KOI_STATUS.SOLD) return;
-    setCustomerKoiList((prev) => prev.filter((r) => String(r.koiId) !== String(koi.id)));
+    setCustomerKoiList((prev) => {
+      const removed = prev.filter((r) => String(r.koiId) === String(koi.id));
+      removed.forEach((r) => markDeleted("customer_koi", r.id));
+      return prev.filter((r) => String(r.koiId) !== String(koi.id));
+    });
     setKoiFishList((prev) => prev.map((k) => (k.id === koi.id ? buildKoiRefundUpdate(k, reason) : k)));
     const linked = findLinkedKoiInvoices(invoices, koi.id).filter(
       (inv) => !["cancelled", "paid"].includes(getInvoiceStatus(inv)),

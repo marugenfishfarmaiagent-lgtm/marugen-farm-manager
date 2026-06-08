@@ -1,5 +1,6 @@
 import { KOI_STATUS, formatKoiSize, today } from '../data/constants'
 import { touchUpdatedAt } from './syncMeta'
+import { markDeleted } from './syncDeletions'
 
 export function formatKoiInvoiceLineName(koi) {
   const label = koi.name?.trim() || koi.variety
@@ -113,7 +114,11 @@ export function restoreInvoiceKoiSales(items, setKoiList, setCustomerKoiList) {
     })
   }))
   if (setCustomerKoiList) {
-    setCustomerKoiList((prev) => prev.filter((r) => !ids.has(String(r.koiId))))
+    setCustomerKoiList((prev) => {
+      const removed = prev.filter((r) => ids.has(String(r.koiId)))
+      removed.forEach((r) => markDeleted('customer_koi', r.id))
+      return prev.filter((r) => !ids.has(String(r.koiId)))
+    })
   }
 }
 

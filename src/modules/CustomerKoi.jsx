@@ -9,6 +9,7 @@ import Fab from '../components/Fab'
 import { readKoiImageFile } from '../lib/koiImage'
 import { openWhatsAppChat } from '../lib/invoiceWhatsApp'
 import { isAppVisibleCustomerKoi } from '../lib/retention'
+import { touchUpdatedAt } from '../lib/syncMeta'
 import StoredImage from '../components/StoredImage'
 import * as db from '../lib/database'
 import { isSupabaseConfigured } from '../lib/supabase'
@@ -233,7 +234,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
         return
       }
     }
-    const rec = {
+    const rec = touchUpdatedAt({
       ...form,
       id: genId('CKOI'),
       customerName: customer.name,
@@ -243,7 +244,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       pondName: form.status === CUSTOMER_KOI_STATUS.IN_POND ? form.pondName.trim() : form.pondName?.trim() || '',
       collectedDate: form.status === CUSTOMER_KOI_STATUS.COLLECTED ? (form.collectedDate || today()) : null,
       deathDate: null, deathCause: null, deathPhoto: null, deathNotes: '',
-    }
+    })
     setRecords((prev) => [...prev, rec])
     addNotification({ type: 'success', title: 'Record Added', message: `${displayFishName(rec)} added for ${customer.name}` })
     setShowAdd(false)
@@ -289,7 +290,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
     if (updated.status === CUSTOMER_KOI_STATUS.COLLECTED && !updated.collectedDate) {
       updated.collectedDate = today()
     }
-    setRecords((prev) => prev.map((r) => (r.id === editRec.id ? updated : r)))
+    setRecords((prev) => prev.map((r) => (r.id === editRec.id ? touchUpdatedAt(updated) : r)))
     addNotification({ type: 'success', title: 'Updated', message: `${displayFishName(updated)} — ${formatCustomerKoiStatus(updated.status)}` })
     setEditRec(null)
   }
@@ -297,11 +298,11 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
   const confirmCollect = () => {
     if (!collectRec) return
     if (!canEdit) { denyEdit(); return }
-    setRecords((prev) => prev.map((r) => (r.id === collectRec.id ? {
+    setRecords((prev) => prev.map((r) => (r.id === collectRec.id ? touchUpdatedAt({
       ...r,
       status: CUSTOMER_KOI_STATUS.COLLECTED,
       collectedDate: collectDate || today(),
-    } : r)))
+    }) : r)))
     addNotification({ type: 'success', title: 'Marked Taken Away', message: `${displayFishName(collectRec)} — customer collected on ${collectDate}` })
     setCollectRec(null)
   }
@@ -309,11 +310,11 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
   const confirmDeath = () => {
     if (!deathRec) return
     if (!canEdit) { denyEdit(); return }
-    setRecords((prev) => prev.map((r) => (r.id === deathRec.id ? {
+    setRecords((prev) => prev.map((r) => (r.id === deathRec.id ? touchUpdatedAt({
       ...r,
       status: CUSTOMER_KOI_STATUS.DECEASED,
       ...deathForm,
-    } : r)))
+    }) : r)))
     addNotification({ type: 'warning', title: 'Death Recorded', message: `${displayFishName(deathRec)} (${deathRec.customerName}) recorded deceased` })
     setDeathRec(null)
   }
