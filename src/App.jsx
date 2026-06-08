@@ -2455,7 +2455,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
     if (!bookedConfirm) return;
     const { id, currentlyBooked } = bookedConfirm;
     const patch = makeBookedPatch(!currentlyBooked, currentUser.name);
-    setExpenses((prev) => prev.map((e) => (String(e.id) === String(id) ? { ...e, ...patch } : e)));
+    setExpenses((prev) => prev.map((e) => (String(e.id) === String(id) ? touchUpdatedAt({ ...e, ...patch }) : e)));
     setBookedConfirm(null);
   };
 
@@ -2477,7 +2477,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
       addNotification({ type: "error", title: "Date Required", message: "Choose a receipt date before saving." });
       return;
     }
-    setExpenses((prev) => prev.map((e) => (String(e.id) === String(id) ? { ...e, date } : e)));
+    setExpenses((prev) => prev.map((e) => (String(e.id) === String(id) ? touchUpdatedAt({ ...e, date }) : e)));
     addNotification({ type: "success", title: "Date Updated", message: "Receipt date saved." });
   };
 
@@ -2494,7 +2494,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
     const id = Date.now();
     try {
       setUploading(true);
-      const e = {
+      const e = touchUpdatedAt({
         id,
         category: null,
         amount: null,
@@ -2507,7 +2507,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
         booked: false,
         bookedAt: null,
         bookedBy: "",
-      };
+      });
       setExpenses((prev) => [...prev, e]);
       addNotification({
         type: "success",
