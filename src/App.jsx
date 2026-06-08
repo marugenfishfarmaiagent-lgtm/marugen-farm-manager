@@ -49,6 +49,7 @@ import {
 } from "./data/constants";
 import logo from "./assets/logo.png";
 import Fab from "./components/Fab";
+import ProductSearchPicker from "./components/ProductSearchPicker";
 import ToastStack from "./components/ToastStack";
 import { buildTeamNotification, buildToastNotification, isTeamNotification } from "./lib/notifications";
 
@@ -1632,29 +1633,7 @@ function InvoiceModule({
                 );
               })()}
               {products.length > 0 && (
-                <select
-                  className="flex-1 min-w-[200px] bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
-                  defaultValue=""
-                  onChange={e => {
-                    if (e.target.value) { addProductItem(e.target.value); e.target.value = ""; }
-                  }}
-                >
-                  <option value="">+ Add Product</option>
-                  {stockProducts(products).length > 0 && (
-                    <optgroup label="Inventory (stock tracked)">
-                      {stockProducts(products).map(p => (
-                        <option key={p.id} value={p.id}>{p.name} — {formatSGD(p.price)} ({p.stock} {p.unit})</option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {priceListProducts(products).length > 0 && (
-                    <optgroup label="Price List (invoice only)">
-                      {priceListProducts(products).map(p => (
-                        <option key={p.id} value={p.id}>{p.name} — {formatSGD(p.price)}</option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
+                <ProductSearchPicker products={products} onSelect={addProductItem} />
               )}
               <Btn variant="ghost" size="sm" onClick={addManualItem} className="shrink-0 justify-center">
                 <Plus size={12} />Manual Item
