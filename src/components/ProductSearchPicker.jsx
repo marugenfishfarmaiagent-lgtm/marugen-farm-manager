@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Search } from 'lucide-react'
 import { formatSGD } from '../data/constants'
 import { priceListProducts, stockProducts } from '../lib/productCatalog'
@@ -32,9 +33,54 @@ function ProductOption({ product, onPick, disabled, hint }) {
   )
 }
 
+function DropdownPanel({ style, filteredStock, filteredCatalog, hasResults, onPick }) {
+  return (
+    <div
+      style={style}
+      className="max-h-56 overflow-y-auto overscroll-contain bg-slate-800 border border-slate-600 rounded-lg shadow-xl"
+    >
+      {!hasResults && (
+        <p className="px-3 py-3 text-slate-500 text-sm">No products match your search.</p>
+      )}
+      {filteredStock.length > 0 && (
+        <div>
+          <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-cyan-400/80 bg-slate-900/50 sticky top-0">
+            Inventory (stock tracked)
+          </p>
+          {filteredStock.map((p) => (
+            <ProductOption
+              key={p.id}
+              product={p}
+              onPick={onPick}
+              disabled={p.stock <= 0}
+              hint={p.stock > 0 ? `${p.stock} ${p.unit} in stock` : 'out of stock'}
+            />
+          ))}
+        </div>
+      )}
+      {filteredCatalog.length > 0 && (
+        <div>
+          <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-violet-400/80 bg-slate-900/50 sticky top-0">
+            Price list (invoice only)
+          </p>
+          {filteredCatalog.map((p) => (
+            <ProductOption
+              key={p.id}
+              product={p}
+              onPick={onPick}
+              hint="price list"
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function ProductSearchPicker({ products, onSelect, className = '' }) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
+  const [dropdownStyle, setDropdownStyle] = useState(null)
   const wrapRef = useRef(null)
 
   const stock = useMemo(() => stockProducts(products), [products])
@@ -45,12 +91,39 @@ export default function ProductSearchPicker({ products, onSelect, className = ''
   const filteredCatalog = useMemo(() => catalog.filter((p) => matchesQuery(p, q)), [catalog, q])
   const hasResults = filteredStock.length > 0 || filteredCatalog.length > 0
 
+  const updateDropdownPosition = () => {
+    if (!wrapRef.current) return
+    const rect = wrapRef.current.getBoundingClientRect()
+    setDropdownStyle({
+      position: 'fixed',
+      top: rect.bottom + 4,
+      left: rect.left,
+      width: rect.width,
+      zIndex: 9999,
+    })
+  }
+
+  useLayoutEffect(() => {
+    if (!open) return undefined
+    updateDropdownPosition()
+    window.addEventListener('scroll', updateDropdownPosition, true)
+    window.addEventListener('resize', updateDropdownPosition)
+    return () => {
+      window.removeEventListener('scroll', updateDropdownPosition, true)
+      window.removeEventListener('resize', updateDropdownPosition)
+    }
+  }, [open, query])
+
   useEffect(() => {
     const onDoc = (e) => {
       if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false)
     }
     document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
+    document.addEventListener('touchstart', onDoc)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('touchstart', onDoc)
+    }
   }, [])
 
   const pick = (productId) => {
@@ -78,43 +151,15 @@ export default function ProductSearchPicker({ products, onSelect, className = ''
           className="w-full bg-slate-900/50 border border-slate-600 rounded-lg pl-9 pr-3 py-2.5 text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
         />
       </div>
-      {showDropdown && (
-        <div className="absolute z-30 left-0 right-0 mt-1 max-h-56 overflow-y-auto overscroll-contain bg-slate-800 border border-slate-600 rounded-lg shadow-xl">
-          {!hasResults && (
-            <p className="px-3 py-3 text-slate-500 text-sm">No products match your search.</p>
-          )}
-          {filteredStock.length > 0 && (
-            <div>
-              <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-cyan-400/80 bg-slate-900/50 sticky top-0">
-                Inventory (stock tracked)
-              </p>
-              {filteredStock.map((p) => (
-                <ProductOption
-                  key={p.id}
-                  product={p}
-                  onPick={pick}
-                  disabled={p.stock <= 0}
-                  hint={p.stock > 0 ? `${p.stock} ${p.unit} in stock` : 'out of stock'}
-                />
-              ))}
-            </div>
-          )}
-          {filteredCatalog.length > 0 && (
-            <div>
-              <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-violet-400/80 bg-slate-900/50 sticky top-0">
-                Price list (invoice only)
-              </p>
-              {filteredCatalog.map((p) => (
-                <ProductOption
-                  key={p.id}
-                  product={p}
-                  onPick={pick}
-                  hint="price list"
-                />
-              ))}
-            </div>
-          )}
-        </div>
+      {showDropdown && dropdownStyle && createPortal(
+        <DropdownPanel
+          style={dropdownStyle}
+          filteredStock={filteredStock}
+          filteredCatalog={filteredCatalog}
+          hasResults={hasResults}
+          onPick={pick}
+        />,
+        document.body,
       )}
     </div>
   )

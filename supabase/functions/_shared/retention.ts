@@ -31,6 +31,18 @@ function daysSince(dateStr: string | null | undefined): number {
   return Math.floor((now.getTime() - d.getTime()) / MS_PER_DAY)
 }
 
+function getInvoiceStatus(inv: { status?: string; due?: string | null }): string {
+  if (inv.status === "paid" || inv.status === "cancelled") return inv.status
+  if (inv.due && inv.due < todayStr() && inv.status === "pending") return "overdue"
+  return inv.status || "pending"
+}
+
+function isCloudKeptInvoice(inv: { status?: string; due?: string | null; date?: string | null }): boolean {
+  const status = getInvoiceStatus(inv)
+  if (status === "pending" || status === "overdue") return true
+  return isWithinDays(inv.date, CLOUD_RETENTION_DAYS.invoice)
+}
+
 function isWithinDays(dateStr: string | null | undefined, maxDays: number): boolean {
   return daysSince(dateStr) <= maxDays
 }
@@ -71,9 +83,13 @@ export async function purgeExpiredCloudData(db: ReturnType<typeof import("./supa
     await deleteExpenseReceiptImages(db, expiringExpenses.map((r) => r.id))
   }
 
-  const { data: expiringInvoices } = await db.from("invoices").select("id").lt("date", invCut)
-  if (expiringInvoices?.length) {
-    await deleteInvoicePdfs(db, expiringInvoices.map((r) => r.id))
+  const { data: expiringInvoices } = await db.from("invoices").select("id, status, due, date").lt("date", invCut)
+  const invoiceIdsToPurge = (expiringInvoices || [])
+    .filter((inv) => !isCloudKeptInvoice(inv))
+    .map((r) => r.id)
+  if (invoiceIdsToPurge.length) {
+    await deleteInvoicePdfs(db, invoiceIdsToPurge)
+    await db.from("invoices").delete().in("id", invoiceIdsToPurge)
   }
 
   const { data: expiredDeceasedKoi } = await db.from("koi_fish").select("id")
@@ -97,7 +113,6 @@ export async function purgeExpiredCloudData(db: ReturnType<typeof import("./supa
   if (ckDeathStrip?.length) await deleteKoiDeathPhotosFromRows(db, ckDeathStrip)
 
   await Promise.all([
-    db.from("invoices").delete().lt("date", invCut),
     db.from("expenses").delete().lt("date", expCut),
     db.from("deliveries").delete().in("status", ["delivered", "cancelled"]).lt("schedule", `${delCut}T23:59:59`),
     db.from("events").delete().lt("date", evtCut),

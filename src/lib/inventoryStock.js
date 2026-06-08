@@ -21,14 +21,23 @@ export function serializeInvoiceItem(it) {
   return item
 }
 
+function aggregateQtyByProduct(items) {
+  const qtyByProduct = new Map()
+  for (const it of items || []) {
+    if (it.productId == null || it.productId === '') continue
+    const key = String(it.productId)
+    qtyByProduct.set(key, (qtyByProduct.get(key) || 0) + (+it.qty || 0))
+  }
+  return qtyByProduct
+}
+
 export function validateStockForItems(products, items) {
-  const linked = (items || []).filter((it) => it.productId != null && it.productId !== '')
-  for (const it of linked) {
-    const p = products.find((x) => String(x.id) === String(it.productId))
-    if (!p) return { ok: false, message: `"${it.name}" is no longer in inventory.` }
+  const qtyByProduct = aggregateQtyByProduct(items)
+  for (const [productId, qty] of qtyByProduct) {
+    const p = products.find((x) => String(x.id) === productId)
+    if (!p) return { ok: false, message: 'One or more invoice products are no longer in inventory.' }
     if (!isStockTracked(p)) continue
-    const qty = +it.qty || 0
-    if (qty <= 0) return { ok: false, message: `Invalid quantity for ${it.name}.` }
+    if (qty <= 0) return { ok: false, message: `Invalid quantity for ${p.name}.` }
     if (qty > p.stock) {
       return { ok: false, message: `Not enough ${p.name} in stock (${p.stock} ${p.unit || 'unit'} available, need ${qty}).` }
     }
@@ -37,11 +46,11 @@ export function validateStockForItems(products, items) {
 }
 
 function adjustProductsStock(setProducts, items, deltaSign) {
+  const qtyByProduct = aggregateQtyByProduct(items)
   setProducts((prev) => prev.map((p) => {
     if (!isStockTracked(p)) return p
-    const item = items.find((it) => it.productId != null && String(it.productId) === String(p.id))
-    if (!item) return p
-    const qty = +item.qty || 0
+    const qty = qtyByProduct.get(String(p.id))
+    if (!qty) return p
     return { ...p, stock: Math.max(0, p.stock + deltaSign * qty) }
   }))
 }
@@ -51,17 +60,17 @@ function appendStockLog(setStockLog, entries) {
 }
 
 function buildLogEntries(items, products, { invoiceId, by, restore }) {
-  return items
-    .filter((it) => it.productId != null && it.productId !== '')
-    .map((it, i) => {
-      const p = products.find((x) => String(x.id) === String(it.productId))
+  const qtyByProduct = aggregateQtyByProduct(items)
+  return [...qtyByProduct.entries()]
+    .map(([productId, qty], i) => {
+      const p = products.find((x) => String(x.id) === productId)
       if (p && !isStockTracked(p)) return null
-      const qty = +it.qty || 0
-      const price = +it.price || p?.price || 0
+      const line = (items || []).find((it) => String(it.productId) === productId)
+      const price = +line?.price || p?.price || 0
       return {
         id: Date.now() + i,
-        productId: it.productId,
-        productName: it.name || p?.name || 'Product',
+        productId,
+        productName: line?.name || p?.name || 'Product',
         type: restore ? 'restock' : 'sell',
         qty,
         ...(restore ? {} : { price, total: qty * price }),

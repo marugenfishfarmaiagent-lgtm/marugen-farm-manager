@@ -703,6 +703,10 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
   });
 
   const addProduct = () => {
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
     const catalogOnly = addCatalogOnly || form.trackStock === false;
     if (!form.name?.trim() || form.price === "") {
       addNotification({ type: "error", title: "Missing Fields", message: "Enter product name and price." });
@@ -791,6 +795,10 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
   };
 
   const confirmUseStock = (product) => {
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
     if (useQty <= 0 || useQty > product.stock) return;
     setProducts(prev => prev.map(p => p.id === product.id ? { ...p, stock: p.stock - useQty } : p));
     setStockLog((prev) => [stockLogEntry(product, "use", { qty: useQty, note: useNote }), ...prev]);
@@ -799,6 +807,10 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
   };
 
   const sellStock = (product) => {
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
     if (sellQty <= 0 || sellQty > product.stock) return;
     setProducts(prev => prev.map(p => p.id === product.id ? { ...p, stock: p.stock - sellQty } : p));
     const price = +sellPrice || product.price;
@@ -808,6 +820,10 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
   };
 
   const restock = (product, qty) => {
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
     setProducts(prev => prev.map(p => p.id === product.id ? { ...p, stock: p.stock + qty } : p));
     setStockLog((prev) => [stockLogEntry(product, "restock", { qty, note: "Manual restock" }), ...prev]);
     addNotification({ type: "info", title: "Restocked", message: `${product.name} restocked by ${qty} ${product.unit}` });
@@ -1208,6 +1224,30 @@ function InvoiceModule({
   const addProductItem = (productId) => {
     const p = products.find((x) => String(x.id) === String(productId));
     if (!p) return;
+    const activeItems = stripBlankItems(form.items);
+    const existingIdx = activeItems.findIndex((it) => String(it.productId) === String(productId));
+    if (existingIdx >= 0) {
+      const existing = activeItems[existingIdx];
+      const nextQty = (+existing.qty || 0) + 1;
+      if (isStockTracked(p) && nextQty > p.stock) {
+        addNotification({
+          type: "warning",
+          title: "Insufficient Stock",
+          message: `Only ${p.stock} ${p.unit || "unit"} of ${p.name} available.`,
+        });
+        return;
+      }
+      setForm((f) => {
+        const items = stripBlankItems(f.items);
+        const idx = items.findIndex((it) => String(it.productId) === String(productId));
+        if (idx < 0) return f;
+        return {
+          ...f,
+          items: items.map((it, i) => (i === idx ? { ...it, qty: nextQty } : it)),
+        };
+      });
+      return;
+    }
     if (isStockTracked(p) && p.stock <= 0) {
       addNotification({ type: "warning", title: "Out of Stock", message: `${p.name} has no stock left.` });
       return;
@@ -1367,6 +1407,7 @@ function InvoiceModule({
   const markPaid = (id) => {
     const inv = invoices.find((i) => i.id === id);
     if (!inv) return;
+    if (inv.status === "paid") return;
     if (!canMarkPaid(inv)) {
       addNotification({ type: "warning", title: "Cannot Mark Paid", message: `${id} is ${getInvoiceStatus(inv)}.` });
       return;
@@ -4629,6 +4670,7 @@ export default function App() {
   const [showChangePin, setShowChangePin] = useState(false);
   const [needsSetup, setNeedsSetup] = useState(false);
   const [dataReady, setDataReady] = useState(!isSupabaseConfigured);
+  const [cloudHydrated, setCloudHydrated] = useState(!isSupabaseConfigured);
   const [cloudSync, setCloudSync] = useState(isSupabaseConfigured);
   const [cloudError, setCloudError] = useState(null);
   const [cloudRetrying, setCloudRetrying] = useState(false);
@@ -4763,7 +4805,23 @@ export default function App() {
         actorRole: "system",
       });
     }
+    setCloudHydrated(true);
   }, [addNotification]);
+
+  const resetCloudBusinessState = useCallback(() => {
+    setCustomers(INITIAL_CUSTOMERS);
+    setProducts(INITIAL_PRODUCTS);
+    setInvoices(INITIAL_INVOICES);
+    setExpenses(INITIAL_EXPENSES);
+    setDeliveries(INITIAL_DELIVERIES);
+    setEvents(INITIAL_EVENTS);
+    setStockLog([]);
+    setKoiFishList([]);
+    setCustomerKoiList([]);
+    setPondData(emptyPondData());
+    setWhatsappGroups([]);
+    setCloudHydrated(false);
+  }, []);
 
   useEffect(() => {
     if (!isSupabaseConfigured) return;
@@ -4798,6 +4856,7 @@ export default function App() {
         if (err.message?.includes("Session expired")) {
           auth.clearSession();
           setCurrentUser(null);
+          resetCloudBusinessState();
         }
       } finally {
         setDataReady(true);
@@ -4805,7 +4864,7 @@ export default function App() {
     }
 
     loadFromCloud();
-  }, [applyCloudData]);
+  }, [applyCloudData, resetCloudBusinessState]);
 
   const handleSyncFailure = useCallback((err) => {
     const msg = err?.message || "Sync failed";
@@ -4818,11 +4877,12 @@ export default function App() {
     if (msg.includes("Session expired")) {
       auth.clearSession();
       setCurrentUser(null);
+      resetCloudBusinessState();
     }
-  }, [warnCloudSaveFailed]);
+  }, [warnCloudSaveFailed, resetCloudBusinessState]);
 
   const syncDebounced = useCallback((perm, label, fn, data) => {
-    if (!dataReady || !isSupabaseConfigured || !auth.getSessionToken() || !currentUser) return;
+    if (!dataReady || !cloudHydrated || !isSupabaseConfigured || !auth.getSessionToken() || !currentUser) return;
     if (!hasPermission(currentUser, perm)) return;
     const timer = setTimeout(() => {
       fn(data)
@@ -4836,7 +4896,7 @@ export default function App() {
         });
     }, 800);
     return () => clearTimeout(timer);
-  }, [dataReady, currentUser, handleSyncFailure]);
+  }, [dataReady, cloudHydrated, currentUser, handleSyncFailure]);
 
   const syncState = useMemo(() => ({
     customers, products, invoices, expenses, deliveries, events, stockLog,
@@ -4844,7 +4904,7 @@ export default function App() {
   }), [customers, products, invoices, expenses, deliveries, events, stockLog, koiFishList, customerKoiList, pondData, whatsappGroups]);
 
   const retryCloudSync = useCallback(async () => {
-    if (!isSupabaseConfigured || !auth.getSessionToken() || !currentUser) return;
+    if (!isSupabaseConfigured || !auth.getSessionToken() || !currentUser || !cloudHydrated) return;
     setCloudRetrying(true);
     try {
       const tasks = SYNC_ENTITIES.filter((e) => hasPermission(currentUser, e.perm));
@@ -4875,7 +4935,7 @@ export default function App() {
       setCloudRetrying(false);
     }
   }, [
-    currentUser, syncState, handleSyncFailure, dismissToast, showProminentToast,
+    currentUser, cloudHydrated, syncState, handleSyncFailure, dismissToast, showProminentToast,
   ]);
 
   useEffect(() => syncDebounced("customers", "Customers", db.syncCustomers, customers), [customers, syncDebounced]);
@@ -5014,8 +5074,8 @@ export default function App() {
   }, [currentUser, activeTab]);
 
   const handleLogin = async (user) => {
-    setCurrentUser(user);
     setNeedsSetup(false);
+    setCloudHydrated(false);
     if (isSupabaseConfigured) {
       try {
         const data = await db.fetchAllData();
@@ -5025,8 +5085,12 @@ export default function App() {
       } catch (err) {
         setCloudSync(false);
         setCloudError(err?.message || "Failed to load cloud data");
+        resetCloudBusinessState();
       }
+    } else {
+      setCloudHydrated(true);
     }
+    setCurrentUser(user);
     const allowed = ALL_NAV_ITEMS.filter((item) => hasPermission(user, item.id));
     setActiveTab(allowed[0]?.id || "dashboard");
   };
@@ -5034,6 +5098,7 @@ export default function App() {
   const handleLogout = async () => {
     await auth.logout();
     setCurrentUser(null);
+    resetCloudBusinessState();
     setNotifOpen(false);
     setToasts([]);
     toastTimers.current.forEach((t) => clearTimeout(t));
@@ -5044,13 +5109,17 @@ export default function App() {
 
   const handleSetupComplete = async (user) => {
     setNeedsSetup(false);
+    setCloudHydrated(false);
     setCurrentUser(user);
     try {
       const data = await db.fetchAllData();
       applyCloudData(data);
       setCloudSync(true);
+      setCloudError(null);
     } catch (err) {
       setCloudError(err.message);
+      setCloudSync(false);
+      resetCloudBusinessState();
     }
     setActiveTab("dashboard");
   };

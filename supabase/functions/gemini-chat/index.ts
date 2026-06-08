@@ -7,7 +7,7 @@ import {
   parseGeminiUsage,
   usageFlags,
 } from "../_shared/aiUsage.ts";
-import { sessionTokenFrom, validateSession } from "../_shared/supabase.ts";
+import { sessionTokenFrom, hasPermission, validateSession } from "../_shared/supabase.ts";
 
 const PRIMARY_MODEL = "gemini-2.5-flash";
 const FALLBACK_MODEL = "gemini-2.5-flash-lite";
@@ -122,6 +122,9 @@ Deno.serve(async (req) => {
     const token = sessionTokenFrom(req);
     const user = await validateSession(token);
     if (!user) return jsonResponse({ error: "Unauthorized — login required" }, 401);
+    if (!hasPermission(user, "chat")) {
+      return jsonResponse({ error: "Permission denied (chat)" }, 403);
+    }
 
     if (req.method === "GET") {
       const row = await getDailyRow(user.id);

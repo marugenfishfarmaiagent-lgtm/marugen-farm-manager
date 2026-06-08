@@ -31,6 +31,7 @@ import {
   adminClient,
   hasPermission,
   sessionTokenFrom,
+  type SessionUser,
   validateSession,
 } from "../_shared/supabase.ts";
 
@@ -49,8 +50,12 @@ const ENTITY_PERMS: Record<string, string> = {
   whatsapp_groups: "deliveries",
 };
 
-function normId(id: unknown): string {
-  return String(id);
+function permittedRows<T>(user: SessionUser, perm: string, rows: T[]): T[] {
+  return hasPermission(user, perm) ? rows : [];
+}
+
+function permittedObject<T extends Record<string, unknown>>(user: SessionUser, perm: string, value: T): T {
+  return hasPermission(user, perm) ? value : {} as T;
 }
 
 async function deleteFarmUsers(db: ReturnType<typeof adminClient>, userIds: (string | number)[]) {
@@ -82,8 +87,7 @@ async function upsertSync(
       await deleteFarmUsers(db, allIds);
       return;
     }
-    const { error } = await db.from(table).delete().neq(idField, textId ? "___none___" : 0);
-    if (error) throw error;
+    // Empty sync payload must not wipe cloud tables (e.g. before client hydration).
     return;
   }
 
@@ -169,24 +173,37 @@ Deno.serve(async (req) => {
         ? (users.data || [])
         : (users.data || []).filter((u) => Number(u.id) === Number(user.id));
 
+      const canExpenses = hasPermission(user, "expenses");
+      const canKoiFish = hasPermission(user, "koifish");
+      const canCustomerKoi = hasPermission(user, "customerkoi");
+      const expenseRows = permittedRows(user, "expenses", expenses.data || []);
+      const koiFishRows = permittedRows(user, "koifish", koiFish.data || []);
+      const customerKoiRows = permittedRows(user, "customerkoi", customerKoi.data || []);
+
       return jsonResponse({
         users: mapUsers(usersPayload),
-        customers: customers.data || [],
-        products: products.data || [],
-        invoices: invoices.data || [],
-        expenses: await Promise.all((expenses.data || []).map(async (e: Record<string, unknown>) => {
-          const base = e.image_url ? { ...e, image_data: null } : e;
-          if (!base.image_url) return base;
-          const signed = await signExpenseReceiptUrl(db, String(base.image_url), e.id);
-          return { ...base, image_url: signed };
-        })),
-        deliveries: deliveries.data || [],
-        events: events.data || [],
-        stockActivity: stockActivity.data || [],
-        koiFish: await Promise.all((koiFish.data || []).map((k) => signKoiFishRowPhotos(db, k))),
-        customerKoi: await Promise.all((customerKoi.data || []).map((k) => signCustomerKoiRowPhotos(db, k))),
-        pondData: pondRow.data?.data || {},
-        whatsappGroups: whatsappGroups.data || [],
+        customers: permittedRows(user, "customers", customers.data || []),
+        products: permittedRows(user, "inventory", products.data || []),
+        invoices: permittedRows(user, "invoices", invoices.data || []),
+        expenses: canExpenses
+          ? await Promise.all(expenseRows.map(async (e: Record<string, unknown>) => {
+            const base = e.image_url ? { ...e, image_data: null } : e;
+            if (!base.image_url) return base;
+            const signed = await signExpenseReceiptUrl(db, String(base.image_url), e.id);
+            return { ...base, image_url: signed };
+          }))
+          : [],
+        deliveries: permittedRows(user, "deliveries", deliveries.data || []),
+        events: permittedRows(user, "calendar", events.data || []),
+        stockActivity: permittedRows(user, "inventory", stockActivity.data || []),
+        koiFish: canKoiFish
+          ? await Promise.all(koiFishRows.map((k) => signKoiFishRowPhotos(db, k)))
+          : [],
+        customerKoi: canCustomerKoi
+          ? await Promise.all(customerKoiRows.map((k) => signCustomerKoiRowPhotos(db, k)))
+          : [],
+        pondData: permittedObject(user, "ponds", pondRow.data?.data || {}),
+        whatsappGroups: permittedRows(user, "deliveries", whatsappGroups.data || []),
       });
     }
 
@@ -300,9 +317,41 @@ Deno.serve(async (req) => {
       }
 
       if (entity === "users") {
+        if (!hasPermission(user, "users")) {
+          return jsonResponse({ error: "Permission denied (users)" }, 403);
+        }
+
         for (const u of data || []) {
+          if (!u.name?.trim()) return jsonResponse({ error: "Name is required" }, 400);
+          if (!["owner", "staff"].includes(String(u.role))) {
+            return jsonResponse({ error: "Invalid role" }, 400);
+          }
+          if (!Array.isArray(u.permissions) || !u.permissions.length) {
+            return jsonResponse({ error: "At least one permission required" }, 400);
+          }
+
+          const { data: target } = await db.from("farm_users")
+            .select("id, role, active, is_system")
+            .eq("id", u.id)
+            .maybeSingle();
+
+          if (target?.role === "owner" && target.active !== false) {
+            const { count } = await db.from("farm_users")
+              .select("*", { count: "exact", head: true })
+              .eq("role", "owner")
+              .eq("active", true);
+            if ((count || 0) <= 1) {
+              if (String(u.role) !== "owner") {
+                return jsonResponse({ error: "At least one active owner is required" }, 400);
+              }
+              if (!u.permissions?.includes("users")) {
+                return jsonResponse({ error: "Last owner must keep Team permission" }, 400);
+              }
+            }
+          }
+
           const row: Record<string, unknown> = {
-            name: u.name,
+            name: String(u.name).trim(),
             role: u.role,
             active: u.active !== false,
             permissions: u.permissions,
@@ -311,16 +360,14 @@ Deno.serve(async (req) => {
 
           let pin_hash: string | undefined;
           if (u.pin && String(u.pin).length >= 4) {
+            if (await isPinTaken(db, String(u.pin), Number(u.id))) {
+              return jsonResponse({ error: "PIN already in use" }, 400);
+            }
             pin_hash = await hashPin(String(u.pin));
             row.pin_hash = pin_hash;
           }
 
-          const { data: existing } = await db.from("farm_users")
-            .select("id")
-            .eq("id", u.id)
-            .maybeSingle();
-
-          if (existing) {
+          if (target) {
             const { error } = await db.from("farm_users").update(row).eq("id", u.id);
             if (error) throw error;
           } else if (pin_hash) {

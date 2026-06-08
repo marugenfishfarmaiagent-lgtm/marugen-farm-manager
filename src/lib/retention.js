@@ -50,6 +50,8 @@ export function isAppVisibleInvoice(inv) {
 }
 
 export function isCloudKeptInvoice(inv) {
+  const status = getInvoiceStatus(inv)
+  if (status === 'pending' || status === 'overdue') return true
   return isWithinDays(inv.date, CLOUD_RETENTION_DAYS.invoice)
 }
 
