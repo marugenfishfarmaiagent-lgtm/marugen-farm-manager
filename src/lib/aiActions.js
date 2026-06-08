@@ -245,7 +245,7 @@ function buildProductFromArgs(a, id) {
 function addProductToInventory(ctx, product, { by, note = 'AI initial stock' } = {}) {
   ctx.setProducts((prev) => [...prev, product])
   if (product.stock > 0) {
-    ctx.setStockLog((prev) => [{
+    ctx.setStockLog((prev) => [touchUpdatedAt({
       id: Date.now() + Math.floor(Math.random() * 1000),
       productId: product.id,
       productName: product.name,
@@ -254,7 +254,7 @@ function addProductToInventory(ctx, product, { by, note = 'AI initial stock' } =
       note,
       date: today(),
       by: by || 'Staff',
-    }, ...prev])
+    }), ...prev])
   }
 }
 
@@ -410,16 +410,24 @@ export function buildBusinessContext(ctx) {
     customers, invoices, expenses, products, deliveries, events, currentUser,
     koiFishList = [], customerKoiList = [], pondData = [],
   } = ctx
-  const paid = invoices.filter((i) => getInvoiceStatus(i) === 'paid')
-  const pending = invoices.filter((i) => getInvoiceStatus(i) === 'pending')
-  const overdue = invoices.filter((i) => getInvoiceStatus(i) === 'overdue')
-  const lowStock = products.filter((p) => isStockTracked(p) && p.stock <= p.minStock)
+  const can = (perm) => canDo(currentUser, perm)
+  const paid = can('invoices') ? invoices.filter((i) => getInvoiceStatus(i) === 'paid') : []
+  const pending = can('invoices') ? invoices.filter((i) => getInvoiceStatus(i) === 'pending') : []
+  const overdue = can('invoices') ? invoices.filter((i) => getInvoiceStatus(i) === 'overdue') : []
+  const lowStock = can('inventory') ? products.filter((p) => isStockTracked(p) && p.stock <= p.minStock) : []
   const now = today()
-  const koiAvailable = koiFishList.filter((k) => k.status !== KOI_STATUS.SOLD)
-  const koiSold = koiFishList.filter((k) => k.status === KOI_STATUS.SOLD)
+  const koiAvailable = can('koifish') ? koiFishList.filter((k) => k.status !== KOI_STATUS.SOLD) : []
+  const koiSold = can('koifish') ? koiFishList.filter((k) => k.status === KOI_STATUS.SOLD) : []
   const role = currentUser?.role || 'staff'
   const isOwner = role === 'owner'
   const perms = currentUser?.permissions || []
+
+  const snapshotParts = []
+  if (can('customers')) snapshotParts.push(`${customers.length} customers`)
+  if (can('inventory')) snapshotParts.push(`${products.length} products`)
+  if (can('koifish')) snapshotParts.push(`${koiAvailable.length} koi in stock · ${koiSold.length} sold`)
+  if (can('customerkoi')) snapshotParts.push(`${customerKoiList.length} customer koi`)
+  if (can('ponds')) snapshotParts.push(`${pondData?.ponds?.length || 0} ponds`)
 
   return `You are Marugen Farm Manager AI — act as the owner's capable assistant inside the full web app.
 Speak English or Burmese (Myanmar) to match the user. Use SGD ($). Be concise and action-oriented.
@@ -471,22 +479,22 @@ USER: ${currentUser?.displayName || currentUser?.name || 'User'} (${role})
 ${isOwner ? 'Owner — full access.' : `Staff permissions: ${perms.join(', ') || 'view only'}. Edit/delete/refund need Team & Permissions grants.`}
 Today: ${now}
 
-Snapshot: ${customers.length} customers · ${products.length} products · ${koiAvailable.length} koi in stock · ${koiSold.length} sold · ${customerKoiList.length} customer koi · ${pondData?.ponds?.length || 0} ponds
-Pending invoices: ${pending.length} · Overdue: ${overdue.length}
-Revenue (paid): ${formatSGD(paid.reduce((s, i) => s + (i.total || i.amount || 0), 0))} · Expense receipts: ${expenses.length}
-Low stock: ${lowStock.length ? lowStock.map((p) => p.name).join(', ') : 'none'}
+Snapshot: ${snapshotParts.join(' · ') || 'limited access — use get_business_data for permitted modules'}
+${can('invoices') ? `Pending invoices: ${pending.length} · Overdue: ${overdue.length}\nRevenue (paid): ${formatSGD(paid.reduce((s, i) => s + (i.total || i.amount || 0), 0))}` : ''}
+${can('expenses') ? `Expense receipts: ${expenses.length}` : ''}
+${can('inventory') ? `Low stock: ${lowStock.length ? lowStock.map((p) => p.name).join(', ') : 'none'}` : ''}
 
-KOI STOCK: ${koiAvailable.slice(0, 15).map((k) => `${k.id} ${k.name || k.variety} ${formatKoiSize(k.size)} ${k.status} ${k.price ? formatSGD(k.price) : ''}`).join('; ') || 'none'}
+${can('koifish') ? `KOI STOCK: ${koiAvailable.slice(0, 15).map((k) => `${k.id} ${k.name || k.variety} ${formatKoiSize(k.size)} ${k.status} ${k.price ? formatSGD(k.price) : ''}`).join('; ') || 'none'}` : ''}
 
-Customers: ${customers.slice(0, 20).map((c) => `${c.name} (${c.whatsapp || c.phone || '—'}, ${calcCustomerTier(c.totalSpent)})`).join('; ') || 'none'}
+${can('customers') ? `Customers: ${customers.slice(0, 20).map((c) => `${c.name} (${c.whatsapp || c.phone || '—'}, ${calcCustomerTier(c.totalSpent)})`).join('; ') || 'none'}` : ''}
 
-Products (${products.length}): ${products.slice(0, 50).map(formatProductCatalogEntry).join(' || ') || 'none'}
+${can('inventory') ? `Products (${products.length}): ${products.slice(0, 50).map(formatProductCatalogEntry).join(' || ') || 'none'}` : ''}
 
-Pending: ${pending.slice(0, 10).map((i) => `${i.id} ${i.customerName} ${formatSGD(i.total)}`).join('; ') || 'none'}
+${can('invoices') ? `Pending: ${pending.slice(0, 10).map((i) => `${i.id} ${i.customerName} ${formatSGD(i.total)}`).join('; ') || 'none'}` : ''}
 
-Deliveries active: ${deliveries.filter((d) => ['scheduled', 'transit'].includes(d.status)).slice(0, 8).map((d) => `${d.id} ${d.customerName}`).join('; ') || 'none'}
+${can('deliveries') ? `Deliveries active: ${deliveries.filter((d) => ['scheduled', 'transit'].includes(d.status)).slice(0, 8).map((d) => `${d.id} ${d.customerName}`).join('; ') || 'none'}` : ''}
 
-Upcoming events: ${events.filter((e) => (e.date || '') >= now).slice(0, 8).map((e) => `${e.date} ${e.time || ''} ${e.title}`).join('; ') || 'none'}
+${can('calendar') ? `Upcoming events: ${events.filter((e) => (e.date || '') >= now).slice(0, 8).map((e) => `${e.date} ${e.time || ''} ${e.title}`).join('; ') || 'none'}` : ''}
 
 NEVER claim success without calling a tool first.`
 }
@@ -508,39 +516,58 @@ export function executeAiAction(name, args, ctx) {
 
       case 'get_business_data': {
         const q = a.query || 'summary'
+        const QUERY_PERM = {
+          low_stock: 'inventory',
+          products: 'inventory',
+          pending_invoices: 'invoices',
+          overdue_invoices: 'invoices',
+          today_deliveries: 'deliveries',
+          today_events: 'calendar',
+          customers: 'customers',
+          koi_stock: 'koifish',
+          sold_koi: 'koifish',
+          customer_koi: 'customerkoi',
+          ponds: 'ponds',
+        }
+        if (q !== 'summary') {
+          const perm = QUERY_PERM[q]
+          if (perm && !canDo(currentUser, perm)) {
+            return { success: false, error: `No permission for ${perm}` }
+          }
+        }
         const data = {}
-        if (q === 'summary' || q === 'low_stock') {
+        if ((q === 'summary' || q === 'low_stock') && canDo(currentUser, 'inventory')) {
           data.lowStock = ctx.products.filter((p) => isStockTracked(p) && p.stock <= p.minStock).map((p) => ({
             name: p.name, stock: p.stock, minStock: p.minStock, unit: p.unit,
           }))
         }
-        if (q === 'summary' || q === 'pending_invoices') {
+        if ((q === 'summary' || q === 'pending_invoices') && canDo(currentUser, 'invoices')) {
           data.pendingInvoices = ctx.invoices.filter((i) => getInvoiceStatus(i) === 'pending').map((i) => ({
             id: i.id, customer: i.customerName, total: i.total, due: i.due,
           }))
         }
-        if (q === 'summary' || q === 'overdue_invoices') {
+        if ((q === 'summary' || q === 'overdue_invoices') && canDo(currentUser, 'invoices')) {
           data.overdueInvoices = ctx.invoices.filter((i) => getInvoiceStatus(i) === 'overdue').map((i) => ({
             id: i.id, customer: i.customerName, total: i.total, due: i.due,
           }))
         }
-        if (q === 'summary' || q === 'today_deliveries') {
+        if ((q === 'summary' || q === 'today_deliveries') && canDo(currentUser, 'deliveries')) {
           const d = today()
           data.todayDeliveries = ctx.deliveries.filter((x) => x.schedule?.startsWith(d))
         }
-        if (q === 'summary' || q === 'today_events') {
+        if ((q === 'summary' || q === 'today_events') && canDo(currentUser, 'calendar')) {
           const d = today()
           data.todayEvents = ctx.events
             .filter((x) => x.date === d)
             .sort((a, b) => `${a.time || ''}`.localeCompare(`${b.time || ''}`))
             .map((x) => ({ title: x.title, time: x.time, type: x.type, note: x.note }))
         }
-        if (q === 'summary' || q === 'customers') {
+        if ((q === 'summary' || q === 'customers') && canDo(currentUser, 'customers')) {
           data.customers = ctx.customers.map((c) => ({
             name: c.name, tier: calcCustomerTier(c.totalSpent), postalCode: c.postalCode, whatsapp: c.whatsapp || c.phone,
           }))
         }
-        if (q === 'summary' || q === 'products') {
+        if ((q === 'summary' || q === 'products') && canDo(currentUser, 'inventory')) {
           data.products = ctx.products.map((p) => ({
             name: p.name,
             description: p.description || '',
@@ -551,12 +578,12 @@ export function executeAiAction(name, args, ctx) {
             unit: p.unit,
           }))
         }
-        if (q === 'koi_stock') {
+        if (q === 'koi_stock' && canDo(currentUser, 'koifish')) {
           data.koiStock = (ctx.koiFishList || []).filter((k) => k.status !== KOI_STATUS.SOLD).map((k) => ({
             id: k.id, name: k.name, variety: k.variety, size: formatKoiSize(k.size), status: k.status, price: k.price, pond: k.pondName,
           }))
         }
-        if (q === 'sold_koi') {
+        if (q === 'sold_koi' && canDo(currentUser, 'koifish')) {
           data.soldKoi = (ctx.koiFishList || []).filter((k) => k.status === KOI_STATUS.SOLD).map((k) => {
             const cust = ctx.customers.find((c) => String(c.id) === String(k.soldTo))
             return {
@@ -565,24 +592,27 @@ export function executeAiAction(name, args, ctx) {
             }
           })
         }
-        if (q === 'customer_koi') {
+        if (q === 'customer_koi' && canDo(currentUser, 'customerkoi')) {
           data.customerKoi = (ctx.customerKoiList || []).map((r) => ({
             id: r.id, customer: r.customerName, koiId: r.koiId, fish: r.fishName || r.variety, pond: r.pondName, status: r.status,
           }))
         }
-        if (q === 'ponds') {
+        if (q === 'ponds' && canDo(currentUser, 'ponds')) {
           data.ponds = (ctx.pondData?.ponds || []).map((p) => ({
             name: p.name || p.id, type: p.type, volume: p.volume,
             lastpH: p.lastpH, lastAmmonia: p.lastAmmonia, lastNitrite: p.lastNitrite, lastSalt: p.lastSalt,
           }))
         }
         if (q === 'summary') {
-          data.totals = {
-            customers: ctx.customers.length,
-            koiStock: (ctx.koiFishList || []).filter((k) => k.status !== KOI_STATUS.SOLD).length,
-            revenue: ctx.invoices.filter((i) => getInvoiceStatus(i) === 'paid').reduce((s, i) => s + (i.total || 0), 0),
-            expenseReceipts: ctx.expenses.length,
+          data.totals = {}
+          if (canDo(currentUser, 'customers')) data.totals.customers = ctx.customers.length
+          if (canDo(currentUser, 'koifish')) {
+            data.totals.koiStock = (ctx.koiFishList || []).filter((k) => k.status !== KOI_STATUS.SOLD).length
           }
+          if (canDo(currentUser, 'invoices')) {
+            data.totals.revenue = ctx.invoices.filter((i) => getInvoiceStatus(i) === 'paid').reduce((s, i) => s + (i.total || 0), 0)
+          }
+          if (canDo(currentUser, 'expenses')) data.totals.expenseReceipts = ctx.expenses.length
         }
         const summaryParts = []
         if (data.lowStock?.length) summaryParts.push(`Low stock: ${data.lowStock.map((p) => p.name).join(', ')}`)
@@ -594,8 +624,13 @@ export function executeAiAction(name, args, ctx) {
         if (data.soldKoi?.length) summaryParts.push(`${data.soldKoi.length} sold koi`)
         if (data.customerKoi?.length) summaryParts.push(`${data.customerKoi.length} customer koi at farm`)
         if (data.ponds?.length) summaryParts.push(`${data.ponds.length} pond(s)`)
-        if (data.totals) {
-          summaryParts.push(`${data.totals.customers} customers, ${data.totals.koiStock ?? 0} koi, ${formatSGD(data.totals.revenue)} revenue`)
+        if (data.totals && Object.keys(data.totals).length) {
+          const totalParts = []
+          if (data.totals.customers != null) totalParts.push(`${data.totals.customers} customers`)
+          if (data.totals.koiStock != null) totalParts.push(`${data.totals.koiStock} koi`)
+          if (data.totals.revenue != null) totalParts.push(`${formatSGD(data.totals.revenue)} revenue`)
+          if (data.totals.expenseReceipts != null) totalParts.push(`${data.totals.expenseReceipts} expense receipts`)
+          if (totalParts.length) summaryParts.push(totalParts.join(', '))
         }
         return {
           success: true,
@@ -630,7 +665,7 @@ export function executeAiAction(name, args, ctx) {
         })
         if (!stockCheck.ok) return { success: false, error: stockCheck.message }
 
-        const inv = {
+        const inv = touchUpdatedAt({
           id: invId,
           customerId: customer?.id || '',
           customerName: displayName,
@@ -646,7 +681,7 @@ export function executeAiAction(name, args, ctx) {
           due: a.due || issueDate,
           notes: a.notes || '',
           createdBy: currentUser.name,
-        }
+        })
         ctx.setInvoices((prev) => [inv, ...prev])
         addNotification?.({ type: 'success', title: 'Invoice Created (AI)', message: `${inv.id} for ${displayName} — ${formatSGD(total)}` })
         onNavigate?.('invoices')
@@ -745,7 +780,7 @@ export function executeAiAction(name, args, ctx) {
           catalog.push(product)
           newProducts.push(product)
           if (product.stock > 0) {
-            newLogEntries.push({
+            newLogEntries.push(touchUpdatedAt({
               id: idBase + i + 50000,
               productId: product.id,
               productName: product.name,
@@ -754,7 +789,7 @@ export function executeAiAction(name, args, ctx) {
               note: 'AI receipt import',
               date: today(),
               by: currentUser.name,
-            })
+            }))
           }
           created.push(`${product.name} (${product.stock} ${product.unit})`)
         }
@@ -801,8 +836,8 @@ export function executeAiAction(name, args, ctx) {
         const qty = parseQuantity(a.quantity)
         if (!qty || qty <= 0) return { success: false, error: 'How much stock to add?' }
 
-        ctx.setProducts((prev) => prev.map((p) => (p.id === product.id ? { ...p, stock: p.stock + qty } : p)))
-        ctx.setStockLog((prev) => [{
+        ctx.setProducts((prev) => prev.map((p) => (p.id === product.id ? touchUpdatedAt({ ...p, stock: p.stock + qty }) : p)))
+        ctx.setStockLog((prev) => [touchUpdatedAt({
           id: Date.now(),
           productId: product.id,
           productName: product.name,
@@ -811,7 +846,7 @@ export function executeAiAction(name, args, ctx) {
           note: 'AI restock',
           date: today(),
           by: currentUser.name,
-        }, ...prev])
+        }), ...prev])
         addNotification?.({ type: 'info', title: 'Restocked (AI)', message: `${product.name} +${qty} ${product.unit}` })
         onNavigate?.('inventory')
         const matched = productMatchHint(a.productName, product)
@@ -910,7 +945,7 @@ export function executeAiAction(name, args, ctx) {
           by: currentUser?.name || 'Staff',
         })
         restoreInvoiceKoiSales(inv.items || [], ctx.setKoiFishList, ctx.setCustomerKoiList)
-        ctx.setInvoices((prev) => prev.map((i) => (i.id === inv.id ? { ...i, status: 'cancelled' } : i)))
+        ctx.setInvoices((prev) => prev.map((i) => (i.id === inv.id ? touchUpdatedAt({ ...i, status: 'cancelled' }) : i)))
         addNotification?.({ type: 'info', title: 'Invoice Cancelled (AI)', message: `${inv.id} cancelled. Stock restored.` })
         onNavigate?.('invoices')
         return { success: true, message: `Cancelled ${inv.id} for ${inv.customerName}` }
