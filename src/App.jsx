@@ -127,14 +127,19 @@ function AccountsMarkConfirmModal({ open, recordLabel, currentlyBooked, onCancel
 }
 
 function InvoiceCancelConfirmModal({ open, invoiceId, customerName, onCancel, onConfirm, loading = false }) {
+  const handleKeep = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!loading) onCancel();
+  };
   return (
-    <Modal open={open} onClose={loading ? () => {} : onCancel} title="Cancel invoice?" size="sm" priority>
+    <Modal open={open} onClose={loading ? undefined : onCancel} title="Cancel invoice?" size="sm" priority backdropClose={!loading}>
       <p className="text-slate-300 text-sm mb-4">
         Cancel <strong className="text-white">{invoiceId}</strong> for <strong className="text-white">{customerName}</strong>?
         Inventory and fish stock will be restored where applicable. This cannot be undone.
       </p>
       <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
-        <Btn variant="secondary" onClick={onCancel} disabled={loading} className="w-full sm:w-auto justify-center">Keep invoice</Btn>
+        <Btn variant="secondary" onMouseDown={handleKeep} onClick={handleKeep} disabled={loading} className="w-full sm:w-auto justify-center">Keep invoice</Btn>
         <Btn variant="danger" onClick={onConfirm} disabled={loading} className="w-full sm:w-auto justify-center">
           {loading ? <><Loader2 size={14} className="animate-spin" />Cancelling...</> : <><XCircle size={14} />Cancel invoice</>}
         </Btn>
@@ -209,11 +214,11 @@ function Card({ children, className = "" }) {
   return <div className={`bg-slate-800/60 border border-slate-700/50 rounded-xl ${className}`}>{children}</div>;
 }
 
-function Modal({ open, onClose, title, children, size = "md", priority = false, footer = null }) {
+function Modal({ open, onClose, title, children, size = "md", priority = false, footer = null, backdropClose = true }) {
   if (!open) return null;
   const sizes = { sm: "max-w-sm", md: "max-w-lg", lg: "max-w-2xl", xl: "max-w-4xl", full: "max-w-[900px]" };
   const zClass = priority ? "z-[60]" : "z-50";
-  const handleBackdropClose = onClose || (() => {});
+  const handleBackdropClose = backdropClose && onClose ? onClose : () => {};
   return (
     <div className={`fixed inset-0 ${zClass} flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm`} onClick={handleBackdropClose}>
       <div
@@ -222,7 +227,9 @@ function Modal({ open, onClose, title, children, size = "md", priority = false, 
       >
         <div className="sticky top-0 z-10 flex items-center justify-between gap-3 p-4 sm:p-5 border-b border-slate-700 shrink-0 bg-slate-800 pt-[max(1rem,env(safe-area-inset-top,0px))]">
           <h3 className="text-base sm:text-lg font-bold text-white pr-2 min-w-0 truncate">{title}</h3>
-          <button type="button" onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white p-2 -mr-1 rounded-lg hover:bg-slate-700 transition-colors touch-manipulation shrink-0"><X size={20} /></button>
+          {onClose && (
+            <button type="button" onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white p-2 -mr-1 rounded-lg hover:bg-slate-700 transition-colors touch-manipulation shrink-0"><X size={20} /></button>
+          )}
         </div>
         <div className="overflow-y-auto flex-1 p-4 sm:p-5 overscroll-contain min-w-0">{children}</div>
         {footer && (
@@ -1273,6 +1280,8 @@ function InvoiceModule({
   const [markingPaidId, setMarkingPaidId] = useState(null);
   const [cancellingId, setCancellingId] = useState(null);
   const [creatingInvoice, setCreatingInvoice] = useState(false);
+  const [highlightInvId, setHighlightInvId] = useState(null);
+  const [blockViewDismiss, setBlockViewDismiss] = useState(false);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [formError, setFormError] = useState("");
   const [showWhatsappInput, setShowWhatsappInput] = useState(false);
@@ -1296,17 +1305,28 @@ function InvoiceModule({
   const invoicePage = usePagination(filtered, LIST_PAGE_SIZE, `${filter}-${bookedFilter}-${showOlderInvoices}`);
   const activeViewInv = useMemo(() => {
     if (!viewInv) return null;
-    const fromList = invoices.find((i) => String(i.id) === String(viewInv.id));
-    if (!fromList) return viewInv;
-    const listTs = fromList.updatedAt ? new Date(fromList.updatedAt).getTime() : 0;
-    const viewTs = viewInv.updatedAt ? new Date(viewInv.updatedAt).getTime() : 0;
-    if (listTs === viewTs) {
-      const terminal = (s) => s === "paid" || s === "cancelled";
-      if (terminal(fromList.status) && !terminal(viewInv.status)) return fromList;
-      if (terminal(viewInv.status) && !terminal(fromList.status)) return viewInv;
-    }
-    return listTs >= viewTs ? fromList : viewInv;
+    return invoices.find((i) => String(i.id) === String(viewInv.id)) || viewInv;
   }, [viewInv, invoices]);
+
+  useEffect(() => {
+    if (!highlightInvId) return undefined;
+    const timer = setTimeout(() => setHighlightInvId(null), 4000);
+    const el = document.querySelector(`[data-invoice-id="${CSS.escape(highlightInvId)}"]`);
+    el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    return () => clearTimeout(timer);
+  }, [highlightInvId]);
+
+  const closeCancelConfirm = () => {
+    setBlockViewDismiss(true);
+    setCancelConfirm(null);
+    window.setTimeout(() => setBlockViewDismiss(false), 400);
+  };
+
+  const closeViewInvoice = () => {
+    if (cancelConfirm || blockViewDismiss) return;
+    setViewInv(null);
+    setShowWhatsappInput(false);
+  };
   const canCancelInvoice = (inv) => ["pending", "overdue"].includes(getInvoiceStatus(inv));
   const canMarkPaid = (inv) => ["pending", "overdue"].includes(getInvoiceStatus(inv));
 
@@ -1567,10 +1587,14 @@ function InvoiceModule({
     try {
       await onCreateInvoiceCloud?.(inv);
       setShowNew(false);
-      setViewInv(inv);
       setFormError("");
       setForm(emptyForm());
-      addNotification({ type: "success", title: "Invoice Created", message: `${inv.id} for ${inv.customerName} - ${formatSGD(inv.total)}` });
+      setHighlightInvId(inv.id);
+      addNotification({
+        type: "success",
+        title: "Invoice Created",
+        message: `${inv.id} saved as pending for ${inv.customerName} — ${formatSGD(inv.total)}. Tap the row to open when ready.`,
+      });
       if (!customerDetails.phone && !form.manualCustomer && form.customerId) {
         addNotification({ type: "info", title: "No WhatsApp Number", message: "Add a WhatsApp number to this customer, then use Send WhatsApp when ready." });
       }
@@ -1590,6 +1614,7 @@ function InvoiceModule({
   };
 
   const cancelInvoice = (id) => {
+    if (cancellingId || cancelConfirm) return;
     if (!canDeleteRecords(currentUser)) {
       notifyPermissionDenied(addNotification, "delete");
       return;
@@ -1612,11 +1637,11 @@ function InvoiceModule({
 
     setCancellingId(id);
     setInvoices((prev) => sortInvoices(prev.map((i) => (String(i.id) === invId ? optimistic : i))));
-    setViewInv((prev) => (prev && String(prev.id) === invId ? null : prev));
 
     try {
       await onCancelInvoiceCloud?.(inv);
       setCancelConfirm(null);
+      setViewInv((prev) => (prev && String(prev.id) === invId ? null : prev));
       addNotification({ type: "info", title: "Invoice Cancelled", message: `${invId} has been cancelled. Inventory and fish stock restored where applicable.` });
     } catch (err) {
       setInvoices((prev) => sortInvoices(prev.map((i) => (String(i.id) === invId ? inv : i))));
@@ -1773,7 +1798,7 @@ function InvoiceModule({
           const status = getInvoiceStatus(inv);
           const isMarking = markingPaidId === inv.id;
           return (
-          <Card key={inv.id} className="p-4 overflow-hidden max-w-full min-w-0">
+          <Card key={inv.id} data-invoice-id={inv.id} className={`p-4 overflow-hidden max-w-full min-w-0 ${highlightInvId === inv.id ? "ring-2 ring-cyan-400/80 border-cyan-500/40" : ""}`}>
             <div className="flex items-start justify-between gap-3 mb-2 min-w-0">
               <div className="min-w-0 flex-1">
                 <p className="font-mono text-cyan-400 font-bold text-xs">{inv.id}</p>
@@ -1817,7 +1842,7 @@ function InvoiceModule({
                 variant="success"
                 size="sm"
                 onClick={() => markPaid(inv.id)}
-                disabled={!!markingPaidId}
+                disabled={!!markingPaidId && markingPaidId !== inv.id}
                 className="w-full max-w-full mt-3 justify-center box-border"
               >
                 {isMarking ? <><Loader2 size={14} className="animate-spin" />Saving...</> : <><Check size={14} />Mark Paid</>}
@@ -1848,7 +1873,7 @@ function InvoiceModule({
               invoicePage.paginatedItems.map(inv => {
                 const invAmounts = calcInvoiceAmounts(inv);
                 return (
-                <tr key={inv.id} className="text-slate-300 hover:bg-slate-700/20">
+                <tr key={inv.id} data-invoice-id={inv.id} className={`text-slate-300 hover:bg-slate-700/20 ${highlightInvId === inv.id ? "bg-cyan-500/10 ring-1 ring-inset ring-cyan-500/40" : ""}`}>
                   <td className="p-3 font-mono text-cyan-400 font-bold text-xs">{inv.id}</td>
                   <td className="p-3 font-medium">{inv.customerName}</td>
                   <td className="p-3 text-slate-500 text-xs">{inv.date}</td>
@@ -2153,11 +2178,12 @@ function InvoiceModule({
       {/* View Invoice Modal */}
       <Modal
         open={!!activeViewInv}
-        onClose={() => { setViewInv(null); setShowWhatsappInput(false); }}
+        onClose={closeViewInvoice}
+        backdropClose={!cancelConfirm && !blockViewDismiss}
         title={activeViewInv ? `Invoice ${activeViewInv.id}` : "Invoice"}
         size="full"
         footer={(
-          <Btn variant="secondary" onClick={() => { setViewInv(null); setShowWhatsappInput(false); }} className="w-full justify-center">
+          <Btn variant="secondary" onClick={closeViewInvoice} className="w-full justify-center">
             <X size={14} />Close
           </Btn>
         )}
@@ -2166,9 +2192,11 @@ function InvoiceModule({
           const viewAmounts = calcInvoiceAmounts(activeViewInv);
           const canEditDiscount = ["pending", "overdue"].includes(getInvoiceStatus(activeViewInv));
           const docInv = invoiceForDisplay(activeViewInv);
+          const isMarkingView = String(markingPaidId) === String(activeViewInv.id);
+          const isCancellingView = String(cancellingId) === String(activeViewInv.id);
           return (
           <div className="space-y-4">
-            <div className="no-print flex flex-wrap items-center justify-between gap-3">
+            <div className="no-print relative z-20 flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2 text-sm">
                 <Badge className={statusColor[getInvoiceStatus(activeViewInv)]}>{getInvoiceStatus(activeViewInv)}</Badge>
                 <span className="text-slate-400">{activeViewInv.customerName}</span>
@@ -2188,13 +2216,13 @@ function InvoiceModule({
                   <Printer size={14} />{pdfLoading ? "Generating..." : "Download PDF"}
                 </Btn>
                 {canMarkPaid(activeViewInv) && (
-                  <Btn variant="success" onClick={() => markPaid(activeViewInv.id)} disabled={!!markingPaidId} className="flex-1 sm:flex-none justify-center">
-                    {markingPaidId === activeViewInv.id ? <><Loader2 size={14} className="animate-spin" />Saving...</> : <><Check size={14} />Mark Paid</>}
+                  <Btn variant="success" onClick={() => markPaid(activeViewInv.id)} disabled={isMarkingView || isCancellingView || !!cancelConfirm} className="flex-1 sm:flex-none justify-center">
+                    {isMarkingView ? <><Loader2 size={14} className="animate-spin" />Saving...</> : <><Check size={14} />Mark Paid</>}
                   </Btn>
                 )}
                 {canCancelInvoice(activeViewInv) && canDeleteRecords(currentUser) && (
-                  <Btn variant="danger" onClick={() => cancelInvoice(activeViewInv.id)} className="flex-1 sm:flex-none justify-center">
-                    <XCircle size={14} />Cancel Invoice
+                  <Btn variant="danger" onClick={() => cancelInvoice(activeViewInv.id)} disabled={isCancellingView || isMarkingView} className="flex-1 sm:flex-none justify-center">
+                    {isCancellingView ? <><Loader2 size={14} className="animate-spin" />Cancelling...</> : <><XCircle size={14} />Cancel Invoice</>}
                   </Btn>
                 )}
               </div>
@@ -2269,7 +2297,7 @@ function InvoiceModule({
                 </div>
               </Card>
             )}
-            <div className="no-print rounded-xl border border-slate-600 bg-[#d4d4d4] p-2 sm:p-6 min-w-0 max-w-full overflow-x-hidden overflow-y-auto max-h-[min(65vh,920px)]">
+            <div className="no-print rounded-xl border border-slate-600 bg-[#d4d4d4] p-2 sm:p-6 min-w-0 max-w-full overflow-x-hidden overflow-y-auto max-h-[min(65vh,920px)] relative z-0 isolate">
               <InvoicePreviewFrame resetKey={`${activeViewInv?.id || ''}-${activeViewInv?.status || ''}-${activeViewInv?.updatedAt || ''}`}>
                 <InvoiceDocument invoice={docInv} preview className="shadow-2xl" />
               </InvoicePreviewFrame>
@@ -2294,7 +2322,7 @@ function InvoiceModule({
         invoiceId={cancelConfirm?.id || ""}
         customerName={cancelConfirm?.customerName || ""}
         loading={!!cancellingId}
-        onCancel={() => setCancelConfirm(null)}
+        onCancel={closeCancelConfirm}
         onConfirm={confirmCancelInvoice}
       />
     </div>
