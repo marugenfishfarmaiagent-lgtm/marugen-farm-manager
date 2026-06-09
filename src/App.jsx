@@ -4927,7 +4927,9 @@ export default function App() {
           setDataReady(true);
           return;
         }
-        if (!auth.getSession()) {
+        const sessionUser = auth.getSession()?.user;
+        if (!sessionUser) {
+          setCurrentUser(null);
           setCloudSync(true);
           setCloudError(null);
           setDataReady(true);
@@ -4937,14 +4939,13 @@ export default function App() {
         applyCloudData(data);
         setCloudSync(true);
         setCloudError(null);
+        setCurrentUser(auth.toAppUser(sessionUser));
       } catch (err) {
         setCloudSync(false);
         setCloudError(err.message);
-        if (err.message?.includes("Session expired")) {
-          auth.clearSession();
-          setCurrentUser(null);
-          resetCloudBusinessState();
-        }
+        auth.clearSession();
+        setCurrentUser(null);
+        resetCloudBusinessState();
       } finally {
         setDataReady(true);
       }
@@ -5270,14 +5271,24 @@ export default function App() {
         applyCloudData(data);
         setCloudSync(true);
         setCloudError(null);
+        setCurrentUser(user);
+        const allowed = ALL_NAV_ITEMS.filter((item) => hasPermission(user, item.id));
+        setActiveTab(allowed[0]?.id || "dashboard");
       } catch (err) {
+        auth.clearSession();
         setCloudSync(false);
         setCloudError(err?.message || "Failed to load cloud data");
         resetCloudBusinessState();
+        setCurrentUser(null);
+        addNotification({
+          type: "error",
+          title: "Could not load farm data",
+          message: err?.message || "Please log in again. On iPhone, use Safari or your Home Screen app after updating.",
+        });
       }
-    } else {
-      setCloudHydrated(true);
+      return;
     }
+    setCloudHydrated(true);
     setCurrentUser(user);
     const allowed = ALL_NAV_ITEMS.filter((item) => hasPermission(user, item.id));
     setActiveTab(allowed[0]?.id || "dashboard");
@@ -5298,18 +5309,20 @@ export default function App() {
   const handleSetupComplete = async (user) => {
     setNeedsSetup(false);
     setCloudHydrated(false);
-    setCurrentUser(user);
     try {
       const data = await db.fetchAllData();
       applyCloudData(data);
       setCloudSync(true);
       setCloudError(null);
+      setCurrentUser(user);
+      setActiveTab("dashboard");
     } catch (err) {
+      auth.clearSession();
       setCloudError(err.message);
       setCloudSync(false);
       resetCloudBusinessState();
+      setCurrentUser(null);
     }
-    setActiveTab("dashboard");
   };
 
   const goToTab = (tabId) => {

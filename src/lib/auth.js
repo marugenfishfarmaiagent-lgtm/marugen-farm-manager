@@ -2,12 +2,25 @@ import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
 
 const SESSION_KEY = 'marugen_session'
 
-function cloudFetch(url, options = {}) {
+export function getAuthHeaders(extraHeaders = {}) {
+  const headers = {
+    apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+    ...extraHeaders,
+  }
+  const token = getSessionToken()
+  if (token) {
+    headers['x-session-token'] = token
+    headers.Authorization = `Session ${token}`
+  }
+  return headers
+}
+
+export function cloudFetch(url, options = {}) {
   return fetch(url, {
     ...options,
     credentials: 'include',
     headers: {
-      apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+      ...getAuthHeaders(),
       ...(options.headers || {}),
     },
   })
@@ -15,7 +28,16 @@ function cloudFetch(url, options = {}) {
 
 function readSessionRaw() {
   if (isSupabaseConfigured) {
-    return sessionStorage.getItem(SESSION_KEY)
+    const fromSession = sessionStorage.getItem(SESSION_KEY)
+    const fromLocal = localStorage.getItem(SESSION_KEY)
+    if (fromLocal && !fromSession) {
+      try {
+        sessionStorage.setItem(SESSION_KEY, fromLocal)
+      } catch {
+        /* private mode */
+      }
+    }
+    return fromSession || fromLocal
   }
   const fromLocal = localStorage.getItem(SESSION_KEY)
   if (fromLocal) return fromLocal
@@ -40,15 +62,13 @@ export function getSession() {
 }
 
 export function setSession({ token, user }) {
-  const payload = isSupabaseConfigured ? { user } : { token, user }
+  const payload = { user, ...(token ? { token } : {}) }
   const json = JSON.stringify(payload)
   sessionStorage.setItem(SESSION_KEY, json)
-  if (!isSupabaseConfigured) {
-    try {
-      localStorage.setItem(SESSION_KEY, json)
-    } catch {
-      /* quota or private mode */
-    }
+  try {
+    localStorage.setItem(SESSION_KEY, json)
+  } catch {
+    /* quota or private mode */
   }
 }
 
@@ -58,12 +78,12 @@ export function clearSession() {
 }
 
 export function getSessionToken() {
-  if (isSupabaseConfigured) return null
   return getSession()?.token || null
 }
 
 export function hasCloudSession() {
-  return isSupabaseConfigured ? Boolean(getSession()?.user) : Boolean(getSessionToken())
+  if (!isSupabaseConfigured) return Boolean(getSessionToken())
+  return Boolean(getSession()?.user)
 }
 
 export async function authStatus() {
@@ -83,7 +103,7 @@ export async function loginWithPin(pin) {
   })
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Login failed')
-  setSession({ user: data.user })
+  setSession({ user: data.user, token: data.sessionToken })
   return data
 }
 
@@ -105,7 +125,7 @@ export async function setupOwner({ name, pin, setupSecret }) {
   })
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Setup failed')
-  setSession({ user: data.user })
+  setSession({ user: data.user, token: data.sessionToken })
   return data
 }
 

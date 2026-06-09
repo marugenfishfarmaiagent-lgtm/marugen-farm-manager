@@ -1,4 +1,4 @@
-import { clearSession, getSessionToken } from './auth'
+import { clearSession, getAuthHeaders } from './auth'
 import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
 import { normalizeCustomerKoiRecord } from '../data/constants'
 import { emptyPondData } from './cloudData'
@@ -207,12 +207,7 @@ function mapWhatsappGroup(row) {
 }
 
 async function apiCall(body) {
-  const token = getSessionToken()
-  const headers = {
-    'Content-Type': 'application/json',
-    apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-  }
-  if (token) headers.Authorization = `Session ${token}`
+  const headers = getAuthHeaders({ 'Content-Type': 'application/json' })
 
   const res = await fetch(`${getFunctionsUrl()}/farm-api`, {
     method: 'POST',

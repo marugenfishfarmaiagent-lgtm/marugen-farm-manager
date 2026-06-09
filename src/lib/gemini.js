@@ -1,4 +1,4 @@
-import { clearSession, getSessionToken, hasCloudSession } from './auth'
+import { clearSession, getAuthHeaders, getSessionToken, hasCloudSession } from './auth'
 import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
 
 const RETRYABLE_CHAT = /high demand|overloaded|resource.?exhausted|unavailable|try again|rate limit|too many requests/i
@@ -19,13 +19,7 @@ function friendlyGeminiError(data, status) {
 }
 
 function chatHeaders() {
-  const headers = {
-    'Content-Type': 'application/json',
-    apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-  }
-  const token = getSessionToken()
-  if (token) headers.Authorization = `Session ${token}`
-  return headers
+  return getAuthHeaders({ 'Content-Type': 'application/json' })
 }
 
 async function callGeminiChat(body, { method = 'POST' } = {}) {

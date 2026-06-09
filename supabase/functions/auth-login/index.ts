@@ -73,10 +73,11 @@ async function verifyUserPin(user: Record<string, unknown>, pin: string): Promis
   return false;
 }
 
-function authJson(body: unknown, req: Request, status = 200, token?: string) {
+function authJson(body: Record<string, unknown>, req: Request, status = 200, token?: string) {
   const extra: Record<string, string> = {};
   if (token) extra["Set-Cookie"] = sessionCookieHeader(token);
-  return jsonResponse(body, status, req, extra);
+  const payload = token ? { ...body, sessionToken: token } : body;
+  return jsonResponse(payload, status, req, extra);
 }
 
 Deno.serve(async (req) => {
