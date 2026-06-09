@@ -9,6 +9,10 @@ import {
 import { Badge, Btn, Card, Input, Modal, PondNameInput, Select, Textarea } from '../components/ui'
 import Fab from '../components/Fab'
 import StoredImage from '../components/StoredImage'
+import EmptyState from '../components/ui/EmptyState'
+import PaginationControls from '../components/ui/PaginationControls'
+import { usePagination } from '../hooks/usePagination'
+import { LIST_PAGE_SIZE } from '../data/constants'
 import * as db from '../lib/database'
 import { isSupabaseConfigured } from '../lib/supabase'
 import { readKoiImageFile } from '../lib/koiImage'
@@ -127,7 +131,7 @@ export default function KoiFish({
     [koiList],
   )
 
-  const filtered = koiList.filter((k) => {
+  const filteredList = koiList.filter((k) => {
     if (!isAppVisibleKoiFarm(k)) return false
     const q = search.toLowerCase()
     const matchSearch = !q || [k.name, k.variety, k.pondName, k.id].some((x) => String(x || '').toLowerCase().includes(q))
@@ -138,6 +142,7 @@ export default function KoiFish({
     const matchPond = pondFilter === 'all' || k.pondName === pondFilter
     return matchSearch && matchStatus && matchVariety && matchPond
   })
+  const koiPage = usePagination(filteredList, LIST_PAGE_SIZE, `${search}-${statusFilter}-${varietyFilter}-${pondFilter}`)
 
   const counts = useMemo(() => ({
     available: koiList.filter((k) => k.status === KOI_STATUS.AVAILABLE).length,
@@ -422,15 +427,21 @@ export default function KoiFish({
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {filtered.length === 0 ? (
-          <Card className="p-8 text-center text-slate-500 md:col-span-2 xl:col-span-3">
-            {koiList.length === 0
-              ? 'No koi in stock — tap Add Koi to get started.'
-              : statusFilter === 'sold' && soldFish.length === 0
-                ? 'No sold fish on record.'
-                : 'No koi match your search or filters.'}
+        {filteredList.length === 0 ? (
+          <Card className="md:col-span-2 xl:col-span-3">
+            <EmptyState
+              emoji="🐠"
+              title={koiList.length === 0
+                ? 'No koi fish yet'
+                : statusFilter === 'sold' && soldFish.length === 0
+                  ? 'No sold fish on record'
+                  : 'No koi match your filters'}
+              hint={koiList.length === 0 ? 'Tap Add Koi to register stock' : 'Try a different status or search'}
+              actionLabel={koiList.length === 0 && canEdit ? 'Add Koi' : undefined}
+              onAction={koiList.length === 0 && canEdit ? () => { setForm(emptyKoiForm()); setShowAdd(true) } : undefined}
+            />
           </Card>
-        ) : filtered.map((k) => {
+        ) : koiPage.paginatedItems.map((k) => {
           const st = STATUS_STYLE[k.status] || STATUS_STYLE.available
           return (
             <Card key={k.id} className={`overflow-hidden ${st.border}`}>
@@ -510,6 +521,7 @@ export default function KoiFish({
           )
         })}
       </div>
+      <PaginationControls {...koiPage} />
 
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Koi" size="lg">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

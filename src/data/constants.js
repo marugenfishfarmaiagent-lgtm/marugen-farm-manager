@@ -1,6 +1,17 @@
+import { format as formatDateFns } from 'date-fns'
+
+/** Top-level species (customer profiles, filters). */
 export const FISH_TYPES = ['Koi', 'Arowana', 'Goldfish', 'Guppy', 'Other']
-export const AROWANA_TYPES = ['Super Red', 'Cross Back Golden', 'Malaysian Golden', 'Green Arowana', 'Silver Arowana']
-export const KOI_TYPES = ['Kohaku', 'Sanke', 'Showa', 'Butterfly Koi', 'Ghost Koi', 'Ogon']
+
+/** Variety lists per species — canonical domain values from .cursorrules. */
+export const FISH_VARIETIES = {
+  KOI: ['Kohaku', 'Sanke', 'Showa', 'Kinginrin', 'Ogon', 'Tancho', 'Asagi', 'Bekko'],
+  AROWANA: ['Super Red', 'Cross Back Golden', 'Malaysian Golden', 'Silver', 'Black'],
+  GOLDFISH: ['Tamasaba', 'Oranda', 'Ryukin'],
+}
+
+export const KOI_TYPES = FISH_VARIETIES.KOI
+export const AROWANA_TYPES = [...FISH_VARIETIES.AROWANA, 'Green Arowana', 'Silver Arowana']
 
 export const CUSTOMER_TIERS = ['Bronze', 'Silver', 'Gold', 'Platinum']
 
@@ -12,13 +23,30 @@ export const EXPENSE_CATEGORIES = [
   'Feed', 'Transport', 'Utilities', 'Rent', 'Equipment', 'Labor', 'Medicine', 'Packaging', 'Marketing', 'Other',
 ]
 
-export const SG_AREAS = [
-  'Ang Mo Kio', 'Bedok', 'Bishan', 'Bukit Batok', 'Bukit Timah', 'Changi', 'Choa Chu Kang', 'Clementi',
-  'Geylang', 'Hougang', 'Jurong East', 'Jurong West', 'Kallang', 'Marine Parade', 'Novena', 'Pasir Ris',
-  'Punggol', 'Queenstown', 'Sembawang', 'Sengkang', 'Serangoon', 'Tampines', 'Toa Payoh', 'Woodlands', 'Yishun',
+/** Default monthly budget per category (SGD) — editable in Expenses module. */
+export const DEFAULT_EXPENSE_BUDGETS = {
+  Feed: 800,
+  Transport: 300,
+  Utilities: 500,
+  Equipment: 200,
+  Labor: 1500,
+  Medicine: 150,
+}
+
+export const SINGAPORE_AREAS = [
+  'Ang Mo Kio', 'Bedok', 'Bishan', 'Bukit Batok', 'Bukit Merah', 'Bukit Panjang', 'Bukit Timah',
+  'Choa Chu Kang', 'Clementi', 'Geylang', 'Hougang', 'Jurong East', 'Jurong West', 'Kallang',
+  'Marine Parade', 'Pasir Ris', 'Punggol', 'Queenstown', 'Sembawang', 'Sengkang', 'Serangoon',
+  'Tampines', 'Toa Payoh', 'Woodlands', 'Yishun',
 ]
 
+/** 25 HDB towns + Changi (legacy deliveries). */
+export const SG_AREAS = [...SINGAPORE_AREAS, 'Changi']
+
 export const PAYNOW_UEN = '53468842B'
+
+/** Default page size for list/table pagination in modules. */
+export const LIST_PAGE_SIZE = 25
 
 export const INVOICE_COMPANY = {
   name: 'Marugen Koi Farm',
@@ -35,8 +63,32 @@ export function formatInvoiceDate(dateStr) {
   return d.toLocaleDateString('en-SG', { day: 'numeric', month: 'long', year: 'numeric' })
 }
 
+function formatMoneyAmount(v) {
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return '0.00'
+  return Number(v).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+}
+
+export function formatSGD(v) {
+  return `S$${formatMoneyAmount(v)}`
+}
+
+/** Numeric amount only (no S$ prefix) — used by invoice PDF/HTML tables. */
 export function formatInvoiceMoney(v) {
-  return Number(v).toLocaleString('en-SG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return formatMoneyAmount(v)
+}
+
+export function formatDate(dateStr) {
+  if (!dateStr) return '—'
+  const d = new Date(`${dateStr}T12:00:00`)
+  if (Number.isNaN(d.getTime())) return dateStr
+  return formatDateFns(d, 'dd MMM yyyy')
+}
+
+export function formatDateTime(dateStr) {
+  if (!dateStr) return '—'
+  const d = new Date(dateStr)
+  if (Number.isNaN(d.getTime())) return dateStr
+  return formatDateFns(d, 'dd MMM yyyy, HH:mm')
 }
 
 export const ALL_PERMISSIONS = [
@@ -90,7 +142,27 @@ export const KOI_STATUS = {
   RESERVED: 'reserved',
   SICK: 'sick',
   DECEASED: 'deceased',
+  QUARANTINE: 'quarantine',
 }
+
+export const DELIVERY_STATUS = {
+  PENDING: 'scheduled',
+  OUT_FOR_DELIVERY: 'transit',
+  DELIVERED: 'delivered',
+  FAILED: 'failed',
+  CANCELLED: 'cancelled',
+}
+
+export const INVOICE_STATUS = {
+  DRAFT: 'draft',
+  SENT: 'sent',
+  PENDING: 'pending',
+  PAID: 'paid',
+  OVERDUE: 'overdue',
+  CANCELLED: 'cancelled',
+}
+
+export const PAYMENT_METHODS = ['PayNow', 'Cash', 'Bank Transfer', 'NETS', 'Credit Card']
 
 export const KOI_DEATH_CAUSES = [
   'Unknown', 'Disease', 'Water quality', 'Age', 'Injury', 'Parasite', 'Bacterial infection', 'Other',
@@ -201,10 +273,6 @@ export const INITIAL_POND_DATA = {
   treatmentLogs: [],
   reminders: [],
   treatmentGuides: [],
-}
-
-export function formatSGD(v) {
-  return `S$${Number(v).toFixed(2)}`
 }
 
 export function today() {

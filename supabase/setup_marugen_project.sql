@@ -181,3 +181,16 @@ ON CONFLICT (id) DO UPDATE SET
   public = EXCLUDED.public,
   file_size_limit = EXCLUDED.file_size_limit,
   allowed_mime_types = EXCLUDED.allowed_mime_types;
+
+-- ── Expense budgets + RLS verification ──
+CREATE TABLE IF NOT EXISTS expense_budgets (
+  id TEXT PRIMARY KEY DEFAULT 'default',
+  data JSONB NOT NULL DEFAULT '{}',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO expense_budgets (id, data)
+VALUES ('default', '{}')
+ON CONFLICT (id) DO NOTHING;
+
+ALTER TABLE expense_budgets ENABLE ROW LEVEL SECURITY;

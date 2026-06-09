@@ -11,16 +11,27 @@ import { openWhatsAppChat } from '../lib/invoiceWhatsApp'
 import { isAppVisibleCustomerKoi } from '../lib/retention'
 import { touchUpdatedAt } from '../lib/syncMeta'
 import StoredImage from '../components/StoredImage'
+import EmptyState from '../components/ui/EmptyState'
+import PaginationControls from '../components/ui/PaginationControls'
+import { usePagination } from '../hooks/usePagination'
+import { LIST_PAGE_SIZE } from '../data/constants'
 import * as db from '../lib/database'
 import { isSupabaseConfigured } from '../lib/supabase'
 
 const tierColor = { Bronze: 'text-orange-400', Silver: 'text-slate-300', Gold: 'text-yellow-400', Platinum: 'text-cyan-400' }
 
 const STATUS_STYLE = {
-  in_pond: { badge: 'bg-emerald-500/20 text-emerald-300', border: '' },
-  collected: { badge: 'bg-blue-500/20 text-blue-300', border: '' },
-  deceased: { badge: 'bg-red-500/20 text-red-300', border: 'border-red-500/30' },
+  in_pond: { badge: 'bg-green-900/60 text-green-400', border: '' },
+  collected: { badge: 'bg-yellow-900/60 text-yellow-400', border: '' },
+  deceased: { badge: 'bg-red-900/60 text-red-400', border: 'border-red-500/30' },
 }
+
+const STATUS_FILTER_TABS = [
+  { value: 'all', label: 'All' },
+  { value: CUSTOMER_KOI_STATUS.IN_POND, label: 'Active' },
+  { value: CUSTOMER_KOI_STATUS.DECEASED, label: 'Deceased' },
+  { value: CUSTOMER_KOI_STATUS.COLLECTED, label: 'Sold' },
+]
 
 const emptyRecord = () => ({
   customerId: '', customerName: '', koiId: '', photo: null, fishName: '', variety: KOI_VARIETIES[0],
@@ -190,6 +201,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
     const q = search.toLowerCase()
     return !q || [r.fishName, r.customerName, r.pondName, r.variety, r.koiId, formatCustomerKoiStatus(r.status)].some((x) => String(x || '').toLowerCase().includes(q))
   })
+  const recordsPage = usePagination(filteredRecords, LIST_PAGE_SIZE, `${selectedCustomerId}-${statusFilter}-${search}`)
 
   const stats = useMemo(() => ({
     total: records.filter(isAppVisibleCustomerKoi).length,
@@ -461,12 +473,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
           )}
 
           <div className="flex gap-2 overflow-x-auto pb-1">
-            {[
-              ['all', 'All'],
-              [CUSTOMER_KOI_STATUS.IN_POND, 'In pond'],
-              [CUSTOMER_KOI_STATUS.COLLECTED, 'Taken away'],
-              [CUSTOMER_KOI_STATUS.DECEASED, 'Deceased'],
-            ].map(([value, label]) => (
+            {STATUS_FILTER_TABS.map(({ value, label }) => (
               <button key={value} type="button" onClick={() => setStatusFilter(value)}
                 className={`px-3 py-2 rounded-lg text-xs font-bold shrink-0 ${statusFilter === value ? 'bg-cyan-500 text-slate-900' : 'bg-slate-700 text-slate-300'}`}>
                 {label}
@@ -476,10 +483,16 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {filteredRecords.length === 0 ? (
-              <Card className="p-8 text-center text-slate-500 md:col-span-2">
-                {records.length === 0 ? 'No customer koi records — tap Add Koi Record to get started.' : 'No records match your search or filters.'}
+              <Card className="md:col-span-2">
+                <EmptyState
+                  emoji="🐟"
+                  title={records.length === 0 ? 'No customer koi yet' : 'No records match your filters'}
+                  hint={records.length === 0 ? 'Tap Add Koi Record to track customer fish' : 'Try a different status or search'}
+                  actionLabel={records.length === 0 && canEdit ? 'Add Koi Record' : undefined}
+                  onAction={records.length === 0 && canEdit ? openAdd : undefined}
+                />
               </Card>
-            ) : filteredRecords.map((r) => (
+            ) : recordsPage.paginatedItems.map((r) => (
               <Card key={r.id} className={`overflow-hidden ${STATUS_STYLE[r.status]?.border || ''}`}>
                 <div className="aspect-video bg-slate-900 relative">
                   {r.photo ? (
@@ -523,6 +536,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
               </Card>
             ))}
           </div>
+          <PaginationControls {...recordsPage} />
         </div>
       </div>
 

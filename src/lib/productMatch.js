@@ -1,5 +1,7 @@
 /** Match inventory products from short nicknames or long spoken descriptions. */
 
+import { formatSGD } from '../data/constants'
+
 const BRANDS = ['shori', 'jpd', 'akafuji', 'saki', 'hikari', 'tosai', 'yamato', 'ocean', 'saki-hikari']
 const TYPES = ['sinking', 'floating', 'growth', 'wheatgerm', 'colour', 'color', 'staple', 'baby', 'jumbo', 'pellet']
 
@@ -133,7 +135,7 @@ export function findProductCandidates(products, query, limit = 3) {
 
 export function formatProductCatalogEntry(product) {
   const stock = `${product.stock} ${product.unit || ''}`.trim()
-  const bits = [`${product.name} S$${product.price} ×${stock}`]
+  const bits = [`${product.name} ${formatSGD(product.price)} ×${stock}`]
   if (product.sku) bits.push(`sku:${product.sku}`)
   const desc = product.description?.trim()
   if (desc) bits.push(`desc:${desc.length > 100 ? `${desc.slice(0, 97)}…` : desc}`)

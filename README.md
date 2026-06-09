@@ -59,23 +59,44 @@ Set in **Vercel → Project → Settings → Environment Variables**, then redep
 
 ---
 
-## Supabase setup
+## Supabase setup (Section 5.1)
 
 **Marugen production project:** `https://iqwypobdqnrpdkgebkds.supabase.co`
 
-1. **SQL Editor** → run `supabase/setup_marugen_project.sql` (one-shot patch for this project).
-2. **CLI** (logged in as project owner): `bash scripts/deploy-marugen-supabase.sh`
-3. Or manually: run migrations from `supabase/migrations/` in order, then deploy edge functions:
+### Recommended — Supabase CLI
 
 ```bash
-supabase link --project-ref YOUR_PROJECT_REF
+supabase login
+npm run supabase:deploy
+```
+
+This runs `supabase db push` (all files in `supabase/migrations/` in timestamp order) and deploys `auth-login`, `farm-api`, and `gemini-chat`.
+
+### Manual — SQL Editor
+
+1. List migrations: `npm run verify:migrations`
+2. Run each file in `supabase/migrations/` **in filename order** (oldest first).
+3. **Critical for photo upload** (run in this sequence if patching an old DB):
+   - `20250615000000_expense_storage.sql`
+   - `20250616000000_expense_storage_private.sql`
+   - `20250617000000_koi_photos_storage.sql`
+4. Verify buckets: run `scripts/verify-storage-buckets.sql` → expect `expense-receipts` and `koi-photos`, both `public = false`.
+5. Deploy functions:
+
+```bash
 supabase functions deploy auth-login
 supabase functions deploy farm-api
 supabase functions deploy gemini-chat
 ```
 
-4. Set `GEMINI_API_KEY` in Edge Function secrets.
-5. First app login: complete owner PIN setup in the app.
+### One-shot patch (legacy)
+
+`supabase/setup_marugen_project.sql` — safe to re-run for quick patches; prefer `db push` for new environments.
+
+### After setup
+
+1. Set `GEMINI_API_KEY` in **Supabase → Edge Functions → Secrets**.
+2. First app login: complete owner PIN setup in the app.
 
 ---
 
@@ -108,9 +129,15 @@ Other GitHub users pushing to a private repo on the Hobby plan will block Vercel
 
 ---
 
-## Monitoring (Phase 2)
+## Monitoring (Section 5.2)
 
-Code is ready in the repo (`public/health.json`, `@vercel/analytics`, `src/lib/monitoring.js`). Finish setup in your dashboards:
+Code is ready in the repo (`public/health.json`, `@vercel/analytics`, `src/lib/monitoring.js`). Verify automated checks:
+
+```bash
+npm run verify:monitoring
+```
+
+Finish dashboard setup:
 
 ### 1. UptimeRobot — `/health.json`
 
@@ -139,17 +166,35 @@ Sentry only runs in production builds when `VITE_SENTRY_DSN` is set; otherwise i
 
 ---
 
-## Production smoke test
+## Production smoke test (Section 7)
 
-After deploy, verify:
+Run automated checks (health, edge functions, PWA assets, feature wiring):
 
-- [ ] PIN login / logout (browser + PWA)
-- [ ] Cloud sync between two devices
-- [ ] Invoice create, PDF, PayNow QR
-- [ ] Delivery → Google / Apple Maps
-- [ ] Expense receipt upload, date edit, date filter
-- [ ] AI Chat (text + photo)
-- [ ] Staff permissions hide restricted modules
+```bash
+npm run verify:smoke
+```
+
+Then complete the manual checklist (requires owner/staff PIN):
+
+| # | Test | How to verify |
+|---|------|----------------|
+| 1 | PIN login — desktop | Open production URL → enter PIN → dashboard loads |
+| 2 | PIN login — mobile PWA | Add to Home Screen → login → layout usable |
+| 3 | Dashboard KPIs | 6 cards: revenue, outstanding invoices, low stock, deliveries today, active koi, monthly expenses |
+| 4 | Invoice PDF | Create invoice → PDF → logo + customer name/phone/email/address visible |
+| 5 | PayNow QR | PDF preview shows scannable QR + correct amount |
+| 6 | Deliveries | Create → assign driver → mark delivered → maps link opens |
+| 7 | Expense upload | Receipt photo saves (`expense-receipts` bucket in Supabase) |
+| 8 | Signed URL refresh | Re-open expense/koi photo after 4+ hours — image still loads |
+| 9 | Koi photo | Add koi with photo → appears in stock |
+| 10 | Customer koi death | Mark deceased → death photo uploads |
+| 11 | Pond chart | Add water parameters → history chart updates |
+| 12 | AI Burmese | Ask in Myanmar → relevant farm answer |
+| 13 | AI memory | Follow-up question references earlier message |
+| 14 | Staff permissions | Staff PIN → restricted modules hidden |
+| 15 | Cloud sync | Edit on device A → appears on device B within sync cycle |
+| 16 | Health endpoint | `npm run verify:monitoring` or curl `/health.json` |
+| 17 | UptimeRobot | Pause/resume monitor → email alert received |
 
 ---
 
@@ -166,11 +211,9 @@ Farm photos use **private Supabase Storage buckets** with **signed URLs** (4-hou
 
 **One-time setup**
 
-1. Run migrations in order (SQL Editor or CLI), including:
-   - `supabase/migrations/20250615000000_expense_storage.sql`
-   - `supabase/migrations/20250616000000_expense_storage_private.sql`
-   - `supabase/migrations/20250617000000_koi_photos_storage.sql`
-2. Redeploy: `supabase functions deploy farm-api`
+1. `npm run supabase:deploy` (or run all migrations — see **Supabase setup** above).
+2. Confirm buckets with `scripts/verify-storage-buckets.sql`.
+3. `supabase functions deploy farm-api` (included in `supabase:deploy`).
 
 **Behaviour**
 
@@ -185,8 +228,10 @@ Farm photos use **private Supabase Storage buckets** with **signed URLs** (4-hou
 | Phase | Status |
 |-------|--------|
 | Phase 1 — README, Analytics, Sentry scaffold, `/health.json` | Done in repo |
-| Phase 2 — UptimeRobot monitor, Sentry DSN, enable Vercel Analytics | Code ready — enable in UptimeRobot / Vercel / Sentry dashboards (see above) |
-| Phase 3 — Private Storage + signed URLs (expenses, koi photos) | Done in repo — run migrations + redeploy `farm-api` |
+| Phase 2 — UptimeRobot, Sentry DSN, Vercel Analytics | Code ready — `npm run verify:monitoring`; enable dashboards (see above) |
+| Phase 3 — Private Storage + signed URLs | Done in repo — `npm run supabase:deploy` |
+| Phase 4 — RLS verification, pagination, AI history | Done in repo — migration `20250623000000_rls_verification.sql` |
+| Phase 5 — Quick wins (title, favicon, theme-color, auth spinner, last-sync) | Done in repo |
 
 ---
 

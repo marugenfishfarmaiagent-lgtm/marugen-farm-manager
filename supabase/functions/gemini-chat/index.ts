@@ -18,6 +18,7 @@ const MODEL_UNAVAILABLE = /no longer available|deprecated|not found|does not exi
 
 const RATE_LIMIT = 30;
 const RATE_WINDOW_MS = 60_000;
+const MAX_CHAT_HISTORY = 40;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -142,7 +143,8 @@ Deno.serve(async (req) => {
       });
     }
 
-    const contents = toGeminiContents(messages || []);
+    const history = Array.isArray(messages) ? messages.slice(-MAX_CHAT_HISTORY) : [];
+    const contents = toGeminiContents(history);
 
     const payload: Record<string, unknown> = {
       systemInstruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,

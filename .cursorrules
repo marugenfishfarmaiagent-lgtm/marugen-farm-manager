@@ -2,17 +2,20 @@
 
 ## Project: Marugen Koi & Arowana Farm — Business Management App
 ## Language: Myanmar (Burmese) & English bilingual support
-## Stack: React 18 + Vite + Tailwind CSS v4 + Zustand + Supabase + Gemini API
+## Stack: React 19 + Vite 8 + Tailwind CSS v4 + Supabase + Gemini API
 
 ## Tech Rules
-- Always use React functional components with hooks
+- Always use React functional components with hooks (ErrorBoundary is the only class component)
 - Use Tailwind CSS for all styling (dark theme: bg-slate-900/800/700)
 - Primary color palette: slate + cyan (text-cyan-400, bg-cyan-500)
 - Use lucide-react for all icons
-- State management: Zustand (useStore)
+- State management: lifted React state in App.jsx (useState) + src/lib/database.js for cloud sync — no Redux
+- React 19: no 'use client' directive needed in this Vite SPA
+- React 19: use createRoot() from react-dom/client — never ReactDOM.render()
+- React 19: Strict Mode runs effects twice in dev (normal)
 - All forms: controlled components (useState)
 - API calls: async/await with try/catch
-- Never use class components
+- Avoid class components — ErrorBoundary is the only exception
 - TypeScript not required — plain JSX only
 
 ## Code Style

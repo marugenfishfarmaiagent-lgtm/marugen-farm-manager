@@ -8,6 +8,8 @@ import {
 } from '../data/constants'
 import { Badge, Btn, Card, Input, Modal, PondNameInput, Select, Textarea } from '../components/ui'
 import Fab from '../components/Fab'
+import PondWaterChart from '../components/PondWaterChart'
+import EmptyState from '../components/ui/EmptyState'
 import { filterPondLogsForApp } from '../lib/retention'
 import { touchPondData } from '../lib/syncMeta'
 
@@ -305,8 +307,14 @@ export default function PondManagement({ pondData, setPondData, addNotification,
       {tab === 'ponds' && (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {ponds.length === 0 ? (
-            <Card className="p-8 text-center text-slate-500 md:col-span-2 xl:col-span-3">
-              No ponds yet — tap Add Pond to register A1, B2, quarantine tanks, etc.
+            <Card className="md:col-span-2 xl:col-span-3">
+              <EmptyState
+                emoji="🏊"
+                title="No ponds yet"
+                hint="Register A1, B2, quarantine tanks, etc."
+                actionLabel={canEdit ? 'Add Pond' : undefined}
+                onAction={canEdit ? () => setShowAddPond(true) : undefined}
+              />
             </Card>
           ) : ponds.map((p) => {
             const days = daysSince(p.lastChecked)
@@ -342,12 +350,26 @@ export default function PondManagement({ pondData, setPondData, addNotification,
         <>
           <Select label="Filter pond" value={pondFilter} onChange={(e) => setPondFilter(e.target.value)}
             options={[{ value: 'all', label: 'All ponds' }, ...ponds.map((p) => ({ value: p.id, label: p.name }))]} />
+          <Card className="p-4 border-slate-700/50">
+            <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
+              <Droplets size={14} className="text-cyan-400" />
+              Water parameter history
+            </h3>
+            <PondWaterChart
+              logs={visiblePond.maintenanceLogs}
+              pondId={pondFilter}
+              pondName={pondFilter !== 'all' ? ponds.find((p) => p.id === pondFilter)?.name : null}
+            />
+          </Card>
           <Card className="overflow-hidden">
             <div className="divide-y divide-slate-700/50">
               {filteredLogs.length === 0 ? (
-                <p className="p-6 text-slate-500 text-sm text-center">
-                  {visiblePond.maintenanceLogs.length === 0 ? 'No maintenance logs yet.' : 'No logs for the selected pond.'}
-                </p>
+                <EmptyState
+                  emoji="🏊"
+                  title={visiblePond.maintenanceLogs.length === 0 ? 'No maintenance logs yet' : 'No logs for this pond'}
+                  hint="Log water tests and pond maintenance"
+                  className="py-10"
+                />
               ) : filteredLogs.map((l) => (
                 <div key={l.id} className="p-3 text-sm flex flex-wrap gap-2 items-center">
                   <span className="text-slate-500">{l.date}</span>
@@ -373,17 +395,33 @@ export default function PondManagement({ pondData, setPondData, addNotification,
               ))}
             </Card>
           )}
-          <Card className="overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="block md:hidden space-y-2">
+            {visiblePond.treatmentLogs.length === 0 ? (
+              <Card><EmptyState emoji="💊" title="No treatment logs yet" hint="Log medicine and dosage per pond" className="py-10" /></Card>
+            ) : visiblePond.treatmentLogs.map((t) => (
+              <Card key={t.id} className="p-3 text-sm">
+                <div className="flex justify-between gap-2">
+                  <span className="text-white font-medium">{t.medicine}</span>
+                  <Badge className="bg-amber-500/20 text-amber-300">{t.pondName}</Badge>
+                </div>
+                <p className="text-slate-400 text-xs mt-1">{t.startDate} → {t.endDate || 'ongoing'}</p>
+                {t.performedBy && <p className="text-slate-500 text-xs mt-1">By {t.performedBy}</p>}
+              </Card>
+            ))}
+          </div>
+          <Card className="overflow-hidden hidden md:block">
+            <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[480px]">
               <thead><tr className="bg-slate-700/30 text-slate-400 text-xs"><th className="p-2 text-left">Pond</th><th className="p-2 text-left">Medicine</th><th className="p-2 text-left">Period</th><th className="p-2 text-left">By</th></tr></thead>
               <tbody className="divide-y divide-slate-700/30">
                 {visiblePond.treatmentLogs.length === 0 ? (
-                  <tr><td colSpan={4} className="p-6 text-center text-slate-500 text-sm">No treatment logs yet.</td></tr>
+                  <tr><td colSpan={4} className="p-0"><EmptyState emoji="💊" title="No treatment logs yet" className="py-10" /></td></tr>
                 ) : visiblePond.treatmentLogs.map((t) => (
                   <tr key={t.id} className="text-slate-300"><td className="p-2">{t.pondName}</td><td className="p-2">{t.medicine}</td><td className="p-2">{t.startDate} → {t.endDate || 'ongoing'}</td><td className="p-2 text-xs">{t.performedBy}</td></tr>
                 ))}
               </tbody>
             </table>
+            </div>
           </Card>
         </>
       )}

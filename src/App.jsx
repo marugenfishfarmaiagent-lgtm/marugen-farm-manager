@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { Users, Fish, FishSymbol, Contact, Droplets, FileText, TrendingUp, Truck, Calendar, MessageSquare, Bell, LogOut, Plus, Search, X, Check, AlertTriangle, Home, Menu, DollarSign, Boxes, Eye, Send, Phone, MapPin, Navigation, Star, Zap, Clock, CheckCircle, XCircle, Info, Archive, ShoppingBag, Shield, UserCog, UserPlus, Edit2, Trash2, Lock, Printer, BookCheck, ImagePlus, Images, Camera, ScanLine, RefreshCw, Download } from "lucide-react";
+import { format } from "date-fns";
+import { Users, Fish, FishSymbol, Contact, Droplets, FileText, TrendingUp, Truck, Calendar, MessageSquare, Bell, LogOut, Plus, Search, X, Check, AlertTriangle, Home, Menu, DollarSign, Boxes, Eye, Send, Phone, MapPin, Navigation, Star, Zap, Clock, CheckCircle, XCircle, Info, Archive, ShoppingBag, Shield, UserCog, UserPlus, Edit2, Trash2, Lock, Printer, BookCheck, ImagePlus, Images, Camera, ScanLine, RefreshCw, Download, Loader2 } from "lucide-react";
 import KoiFish from "./modules/KoiFish";
 import CustomerKoi from "./modules/CustomerKoi";
 import PondManagement from "./modules/PondManagement";
 import { loadKoiFish, saveKoiFish, loadCustomerKoi, saveCustomerKoi, loadPondData, savePondData } from "./lib/koiStorage";
-import { loadProducts, saveProducts, loadStockLog, saveStockLog } from "./lib/farmStorage";
+import { loadProducts, saveProducts, loadStockLog, saveStockLog, loadExpenseBudgets, saveExpenseBudgets } from "./lib/farmStorage";
 import {
   clearLocalOnlyStorage, emptyPondData, resolveCloudKoiPayload, resolveCloudWhatsappGroups,
 } from "./lib/cloudData";
@@ -46,8 +47,8 @@ import { markDeleted, clearAllDeletions, peekDeletions } from "./lib/syncDeletio
 import { mergeRecords, mergePondData } from "./lib/cloudMerge";
 import { touchUpdatedAt } from "./lib/syncMeta";
 import {
-  FISH_TYPES, PRODUCT_CATEGORIES,
-  CUSTOMER_TIERS, ALL_PERMISSIONS, DEFAULT_PERMISSIONS,
+  FISH_TYPES, PRODUCT_CATEGORIES, EXPENSE_CATEGORIES, DEFAULT_EXPENSE_BUDGETS, LIST_PAGE_SIZE,
+  CUSTOMER_TIERS, ALL_PERMISSIONS, DEFAULT_PERMISSIONS, SG_AREAS,
   formatSGD, formatInvoiceDate, today, genId, genInvoiceId, getInvoiceStatus, calcCustomerTier, KOI_STATUS, CUSTOMER_KOI_STATUS,
   INITIAL_PRODUCTS, INITIAL_CUSTOMERS, INITIAL_INVOICES, INITIAL_EXPENSES,
   INITIAL_DELIVERIES, INITIAL_EVENTS, LOCAL_DEMO_USERS, customerDeliveryFields, invoiceDeliveryFields, makeBookedPatch,
@@ -56,6 +57,12 @@ import logo from "./assets/logo.png";
 import Fab from "./components/Fab";
 import ProductSearchPicker from "./components/ProductSearchPicker";
 import ToastStack from "./components/ToastStack";
+import ErrorBoundary from "./components/ErrorBoundary";
+import StoredImage from "./components/StoredImage";
+import EmptyState from "./components/ui/EmptyState";
+import ModuleSkeleton from "./components/ui/ModuleSkeleton";
+import PaginationControls from "./components/ui/PaginationControls";
+import { usePagination } from "./hooks/usePagination";
 import { buildTeamNotification, buildToastNotification, isTeamNotification } from "./lib/notifications";
 
 function BookedBadge({ booked, bookedBy }) {
@@ -189,7 +196,7 @@ function Modal({ open, onClose, title, children, size = "md" }) {
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm" onClick={onClose}>
       <div
-        className={`bg-slate-800 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full ${sizes[size]} max-h-[92dvh] sm:max-h-[90vh] flex flex-col shadow-2xl safe-top`}
+        className={`bg-slate-800 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full ${sizes[size]} max-h-screen max-h-[92dvh] sm:max-h-[90vh] flex flex-col shadow-2xl safe-top overflow-hidden`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-700 shrink-0">
@@ -434,16 +441,27 @@ function LoginScreen({ onLogin, users, cloudMode }) {
   );
 }
 
+function monthStartStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
 function Dashboard({ invoices, expenses, customers, products, events, deliveries, koiFishList, customerKoiList, currentUser, onNavigate }) {
   const can = (perm) => hasPermission(currentUser, perm);
   const go = (tab) => { if (can(tab)) onNavigate?.(tab); };
 
-  const totalRevenue = invoices.filter((i) => i.status === "paid").reduce((s, i) => s + (Number(i.total) || 0), 0);
+  const monthStart = monthStartStr();
+  const monthlyRevenue = invoices
+    .filter((i) => i.status === "paid" && (i.date || "") >= monthStart)
+    .reduce((s, i) => s + (Number(i.total) || 0), 0);
   const openInvoices = invoices.filter((i) => {
     const status = getInvoiceStatus(i);
     return status === "pending" || status === "overdue";
   });
   const pendingRevenue = openInvoices.reduce((s, i) => s + (Number(i.total) || 0), 0);
+  const monthlyExpenses = expenses
+    .filter((e) => (e.date || "") >= monthStart && Number(e.amount) > 0)
+    .reduce((s, e) => s + (Number(e.amount) || 0), 0);
   const canInvoices = can("invoices");
   const canExpenses = can("expenses");
   const canAccounting = can("accounting");
@@ -474,12 +492,47 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
   const koiInPond = customerKoiList.filter((r) => r.status === CUSTOMER_KOI_STATUS.IN_POND).length;
   const showKoiSummary = can("koifish") || can("customerkoi");
 
+  const kpiCards = [
+    ...(canInvoices ? [{
+      label: "Revenue This Month",
+      value: formatSGD(monthlyRevenue),
+      subtitle: "Paid invoices",
+      tab: "invoices",
+    }] : []),
+    ...(canInvoices ? [{
+      label: "Outstanding Invoices",
+      value: String(openInvoices.length),
+      subtitle: formatSGD(pendingRevenue),
+      tab: "invoices",
+    }] : []),
+    ...(can("inventory") ? [{
+      label: "Low Stock Alerts",
+      value: String(lowStock.length),
+      subtitle: lowStock.length ? lowStock.slice(0, 2).map((p) => p.name).join(", ") : "All stocked",
+      tab: "inventory",
+    }] : []),
+    ...(can("deliveries") ? [{
+      label: "Deliveries Today",
+      value: String(todayDeliveries),
+      subtitle: `${scheduledDeliveries} scheduled`,
+      tab: "deliveries",
+    }] : []),
+    ...(can("koifish") ? [{
+      label: "Active Koi Fish",
+      value: String(koiAvailable),
+      subtitle: `${koiSold} sold`,
+      tab: "koifish",
+    }] : []),
+    ...(canExpenses ? [{
+      label: "Monthly Expenses",
+      value: monthlyExpenses > 0 ? formatSGD(monthlyExpenses) : `${expenses.filter((e) => (e.date || "") >= monthStart).length} receipts`,
+      subtitle: monthlyExpenses > 0 ? "Legacy amounts" : "Receipt count this month",
+      tab: "expenses",
+    }] : []),
+  ];
+
   const stats = [
-    ...(canInvoices ? [
-      { label: "Revenue (Paid)", value: formatSGD(totalRevenue), icon: DollarSign, color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20", tab: "invoices" },
-      { label: "Pending / Overdue", value: formatSGD(pendingRevenue), icon: Clock, color: "text-amber-400", bg: "bg-amber-500/10 border-amber-500/20", tab: "invoices" },
-    ] : []),
-    ...(canExpenses ? [{ label: "Expense Receipts", value: String(expenses.length), icon: ImagePlus, color: "text-purple-400", bg: "bg-purple-500/10 border-purple-500/20", tab: "expenses" }] : []),
+    ...kpiCards.map((k) => ({ ...k, icon: DollarSign, color: "text-white", bg: "bg-slate-800 border-slate-700" })),
     ...(canAccounting && (canExpenses || canInvoices) ? [{
       label: "Pending Accounts",
       value: String(pendingAccountsCount),
@@ -487,6 +540,7 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
       color: "text-cyan-400",
       bg: "bg-cyan-500/10 border-cyan-500/20",
       tab: pendingAccountsTab,
+      subtitle: "Not entered in accounts",
     }] : []),
   ];
 
@@ -503,28 +557,35 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
         </div>
         <p className="text-xs text-slate-500 shrink-0">{new Date().toLocaleDateString("en-SG", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</p>
       </div>
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.length === 0 ? (
-          <Card className="p-4 col-span-2 lg:col-span-4 border-slate-700/50">
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+        {kpiCards.length === 0 ? (
+          <Card className="p-4 col-span-2 lg:col-span-3 border-slate-700/50">
             <p className="text-slate-400 text-sm">No summary modules assigned yet. Contact the farm owner for access to invoices, expenses, or inventory.</p>
           </Card>
-        ) : stats.map((s) => {
-          const inner = (
-            <>
+        ) : kpiCards.map((k) => (
+          <button
+            key={k.label}
+            type="button"
+            onClick={() => k.tab && go(k.tab)}
+            className="text-left bg-slate-800 rounded-xl p-4 border border-slate-700 hover:border-cyan-500/30 transition-colors touch-manipulation"
+          >
+            <p className="text-slate-400 text-xs uppercase tracking-wide">{k.label}</p>
+            <p className="text-2xl font-bold text-white mt-1">{k.value}</p>
+            {k.subtitle && <p className="text-xs text-cyan-400 mt-1 truncate">{k.subtitle}</p>}
+          </button>
+        ))}
+      </div>
+      {stats.filter((s) => s.label === "Pending Accounts").length > 0 && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {stats.filter((s) => s.label === "Pending Accounts").map((s) => (
+            <button key={s.label} type="button" onClick={() => s.tab && go(s.tab)} className={`text-left p-4 border rounded-xl transition-colors hover:brightness-110 touch-manipulation ${s.bg}`}>
               <div className={`w-9 h-9 rounded-lg flex items-center justify-center mb-3 ${s.bg}`}><s.icon size={18} className={s.color} /></div>
               <p className={`text-xl font-black ${s.color}`}>{s.value}</p>
               <p className="text-slate-400 text-xs mt-1">{s.label}</p>
-            </>
-          );
-          return s.tab ? (
-            <button key={s.label} type="button" onClick={() => go(s.tab)} className={`text-left p-4 border rounded-xl transition-colors hover:brightness-110 touch-manipulation ${s.bg}`}>
-              {inner}
             </button>
-          ) : (
-            <Card key={s.label} className={`p-4 border ${s.bg}`}>{inner}</Card>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      )}
       {showKoiSummary && (
         <Card className="p-4 border-cyan-500/20 bg-cyan-500/5">
           <div className="flex items-center justify-between mb-4 gap-2">
@@ -567,7 +628,9 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
               {sectionLink("invoices", "View all →")}
             </div>
             <div className="space-y-2">
-              {recentInvoices.length === 0 ? <p className="text-slate-500 text-sm">No invoices yet</p> : recentInvoices.map((inv) => (
+              {recentInvoices.length === 0 ? (
+                <EmptyState emoji="🧾" title="No invoices yet" hint="Create your first invoice" className="py-8" />
+              ) : recentInvoices.map((inv) => (
                 <button key={inv.id} type="button" onClick={() => go("invoices")} className="w-full flex items-center justify-between text-sm py-1.5 border-b border-slate-700/40 last:border-0 hover:bg-slate-700/20 rounded-lg px-1 -mx-1 touch-manipulation text-left">
                   <div className="min-w-0">
                     <p className="text-white font-medium truncate">{inv.customerName}</p>
@@ -643,28 +706,41 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
             <h3 className="text-sm font-bold text-white flex items-center gap-2"><Users size={14} className="text-cyan-400" />Top Customers</h3>
             {sectionLink("customers", "View all →")}
           </div>
-          <div className="overflow-x-auto">
-            {recentCustomers.length === 0 ? (
-              <p className="text-slate-500 text-sm">No customers yet</p>
-            ) : (
-              <table className="w-full text-sm">
-                <thead><tr className="text-slate-500 text-xs border-b border-slate-700">
-                  <th className="text-left pb-2">Name</th><th className="text-left pb-2">Area</th><th className="text-left pb-2">Fish</th><th className="text-left pb-2">Tier</th><th className="text-right pb-2">Total Spent</th>
-                </tr></thead>
-                <tbody className="divide-y divide-slate-700/50">
-                  {recentCustomers.map((c) => (
-                    <tr key={c.id} className="text-slate-300">
-                      <td className="py-2 font-medium">{c.name}</td>
-                      <td className="py-2 text-slate-400">{c.area || "—"}</td>
-                      <td className="py-2"><div className="flex flex-wrap gap-1">{(c.fishTypes || []).slice(0, 2).map((f) => <Badge key={f} className="bg-slate-700 text-slate-300">{f}</Badge>)}</div></td>
-                      <td className="py-2"><span className={`font-bold ${tierColor[c.tier] || "text-slate-300"}`}>{c.tier || "—"}</span></td>
-                      <td className="py-2 text-right font-bold text-emerald-400">{formatSGD(c.totalSpent)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
+          {recentCustomers.length === 0 ? (
+            <p className="text-slate-500 text-sm">No customers yet</p>
+          ) : (
+            <>
+              <div className="block md:hidden space-y-2">
+                {recentCustomers.map((c) => (
+                  <button key={c.id} type="button" onClick={() => go("customers")} className="w-full text-left bg-slate-800 rounded-lg p-3 border border-slate-700 touch-manipulation">
+                    <div className="flex justify-between gap-2">
+                      <span className="font-medium text-white truncate">{c.name}</span>
+                      <span className="text-emerald-400 font-bold shrink-0">{formatSGD(c.totalSpent)}</span>
+                    </div>
+                    <p className="text-slate-500 text-xs mt-1">{c.area || "—"} · {c.tier || "Bronze"}</p>
+                  </button>
+                ))}
+              </div>
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full text-sm min-w-[480px]">
+                  <thead><tr className="text-slate-500 text-xs border-b border-slate-700">
+                    <th className="text-left pb-2">Name</th><th className="text-left pb-2">Area</th><th className="text-left pb-2">Fish</th><th className="text-left pb-2">Tier</th><th className="text-right pb-2">Total Spent</th>
+                  </tr></thead>
+                  <tbody className="divide-y divide-slate-700/50">
+                    {recentCustomers.map((c) => (
+                      <tr key={c.id} className="text-slate-300">
+                        <td className="py-2 font-medium">{c.name}</td>
+                        <td className="py-2 text-slate-400">{c.area || "—"}</td>
+                        <td className="py-2"><div className="flex flex-wrap gap-1">{(c.fishTypes || []).slice(0, 2).map((f) => <Badge key={f} className="bg-slate-700 text-slate-300">{f}</Badge>)}</div></td>
+                        <td className="py-2"><span className={`font-bold ${tierColor[c.tier] || "text-slate-300"}`}>{c.tier || "—"}</span></td>
+                        <td className="py-2 text-right font-bold text-emerald-400">{formatSGD(c.totalSpent)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </Card>
       )}
     </div>
@@ -713,6 +789,8 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       || (p.description || "").toLowerCase().includes(searchLower)
     )
   );
+  const productPage = usePagination(filtered, LIST_PAGE_SIZE, `${tab}-${search}-${catFilter}`);
+  const stockLogPage = usePagination(visibleStockLog, LIST_PAGE_SIZE, String(showOlderStockLog));
 
   const stockLogEntry = (product, type, extra = {}) => touchUpdatedAt({
     id: Date.now(),
@@ -909,12 +987,18 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
 
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {filtered.length === 0 ? (
-              <Card className="p-8 text-center text-slate-500 md:col-span-2 xl:col-span-3">
-                {tabProducts.length === 0
-                  ? (tab === "pricelist" ? "No price list items yet — tap Add Price Item." : "No products yet — tap Add Product.")
-                  : "No products match your search or filter."}
+              <Card className="md:col-span-2 xl:col-span-3">
+                <EmptyState
+                  emoji="📦"
+                  title={tabProducts.length === 0
+                    ? (tab === "pricelist" ? "No price list items yet" : "No products yet")
+                    : "No products match your filters"}
+                  hint={tabProducts.length === 0 ? (tab === "pricelist" ? "Tap Add Price Item to get started" : "Tap Add Product to get started") : "Try a different search or category"}
+                  actionLabel={tabProducts.length === 0 && canEdit ? (tab === "pricelist" ? "Add Price Item" : "Add Product") : undefined}
+                  onAction={tabProducts.length === 0 && canEdit ? () => openAddProduct(tab === "pricelist") : undefined}
+                />
               </Card>
-            ) : filtered.map((p) => {
+            ) : productPage.paginatedItems.map((p) => {
               const isCatalog = !isStockTracked(p);
               const isLow = !isCatalog && p.minStock > 0 && p.stock <= p.minStock;
               return (
@@ -960,6 +1044,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
               );
             })}
           </div>
+          <PaginationControls {...productPage} />
         </>
       )}
 
@@ -976,7 +1061,24 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
               </button>
             </div>
           )}
-          <div className="overflow-x-auto">
+          <div className="md:hidden space-y-2 p-3">
+            {visibleStockLog.length === 0 ? (
+              <EmptyState emoji="📦" title="No stock activity yet" hint="Sell, use, or restock products to see entries here" className="py-10" />
+            ) : stockLogPage.paginatedItems.map((l) => (
+              <div key={l.id} className="bg-slate-800 rounded-lg p-3 mb-2 border border-slate-700">
+                <div className="flex justify-between gap-2">
+                  <span className="font-medium text-white truncate">{l.productName}</span>
+                  <Badge className={l.type === "sell" ? "bg-emerald-500/20 text-emerald-300" : l.type === "use" ? "bg-blue-500/20 text-blue-300" : "bg-purple-500/20 text-purple-300"}>{l.type}</Badge>
+                </div>
+                <div className="text-slate-400 text-sm mt-1 flex justify-between">
+                  <span>{l.date}</span>
+                  <span className="text-white font-bold">×{l.qty}</span>
+                </div>
+                {l.note && <p className="text-slate-500 text-xs mt-1">{l.note}</p>}
+              </div>
+            ))}
+          </div>
+          <div className="overflow-x-auto hidden md:block">
           <table className="w-full text-sm min-w-[520px]">
             <thead><tr className="bg-slate-700/30 text-slate-400 text-xs">
               <th className="text-left p-3">Date</th><th className="text-left p-3">Product</th><th className="text-left p-3">Type</th>
@@ -984,8 +1086,8 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
             </tr></thead>
             <tbody className="divide-y divide-slate-700/30">
               {visibleStockLog.length === 0 ? (
-                <tr><td colSpan={7} className="text-center py-8 text-slate-500">No activity yet</td></tr>
-              ) : visibleStockLog.map(l => (
+                <tr><td colSpan={7} className="p-0"><EmptyState emoji="📦" title="No stock activity yet" hint="Sell, use, or restock products to see entries here" className="py-10" /></td></tr>
+              ) : stockLogPage.paginatedItems.map(l => (
                 <tr key={l.id} className="text-slate-300 hover:bg-slate-700/20">
                   <td className="p-3 text-slate-500 text-xs">{l.date}</td>
                   <td className="p-3 font-medium">{l.productName}</td>
@@ -999,6 +1101,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
             </tbody>
           </table>
           </div>
+          <PaginationControls {...stockLogPage} className="px-3 pb-3" />
         </Card>
       )}
 
@@ -1160,6 +1263,7 @@ function InvoiceModule({
   });
   const hiddenInvoiceCount = invoices.filter((i) => !isAppVisibleInvoice(i)).length;
   const unbookedInvoiceCount = invoices.filter((i) => !i.booked && getInvoiceStatus(i) !== "cancelled").length;
+  const invoicePage = usePagination(filtered, LIST_PAGE_SIZE, `${filter}-${bookedFilter}-${showOlderInvoices}`);
   const activeViewInv = viewInv ? invoices.find((i) => i.id === viewInv.id) || viewInv : null;
   const canCancelInvoice = (inv) => ["pending", "overdue"].includes(getInvoiceStatus(inv));
   const canMarkPaid = (inv) => ["pending", "overdue"].includes(getInvoiceStatus(inv));
@@ -1548,10 +1652,14 @@ function InvoiceModule({
 
       <div className="md:hidden space-y-3">
         {filtered.length === 0 ? (
-          <Card className="p-8 text-center text-slate-500">
-            {invoices.length === 0 ? "No invoices yet — tap New Invoice to create one." : "No invoices match your filters."}
+          <Card>
+            <EmptyState
+              emoji="🧾"
+              title={invoices.length === 0 ? "No invoices yet" : "No invoices match your filters"}
+              hint={invoices.length === 0 ? "Tap New Invoice to create one" : "Try a different status filter"}
+            />
           </Card>
-        ) : filtered.map(inv => {
+        ) : invoicePage.paginatedItems.map(inv => {
           const invAmounts = calcInvoiceAmounts(inv);
           return (
           <Card key={inv.id} className="p-4">
@@ -1591,6 +1699,7 @@ function InvoiceModule({
           </Card>
         );})}
       </div>
+      <PaginationControls {...invoicePage} className="md:hidden" />
 
       <Card className="overflow-hidden hidden md:block">
         <div className="overflow-x-auto">
@@ -1601,11 +1710,15 @@ function InvoiceModule({
           </tr></thead>
           <tbody className="divide-y divide-slate-700/30">
             {filtered.length === 0 ? (
-              <tr><td colSpan={6} className="text-center py-8 text-slate-500">
-                {invoices.length === 0 ? "No invoices yet." : "No invoices match your filters."}
+              <tr><td colSpan={6} className="p-0">
+                <EmptyState
+                  emoji="🧾"
+                  title={invoices.length === 0 ? "No invoices yet" : "No invoices match your filters"}
+                  className="py-10"
+                />
               </td></tr>
             ) :
-              filtered.map(inv => {
+              invoicePage.paginatedItems.map(inv => {
                 const invAmounts = calcInvoiceAmounts(inv);
                 return (
                 <tr key={inv.id} className="text-slate-300 hover:bg-slate-700/20">
@@ -1646,6 +1759,7 @@ function InvoiceModule({
           </tbody>
         </table>
         </div>
+        <PaginationControls {...invoicePage} className="px-3 pb-3" />
       </Card>
 
       {/* New Invoice Modal */}
@@ -2062,6 +2176,7 @@ function CustomerModule({ customers, setCustomers, addNotification, currentUser 
       (x) => String(x || "").toLowerCase().includes(q),
     );
   });
+  const customerPage = usePagination(filtered, LIST_PAGE_SIZE, `${search}-${tierFilter}`);
 
   const toggleFishType = (target, ft) => {
     target((f) => {
@@ -2215,10 +2330,16 @@ function CustomerModule({ customers, setCustomers, addNotification, currentUser 
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {filtered.length === 0 ? (
-          <Card className="p-8 text-center text-slate-500 md:col-span-2 xl:col-span-3">
-            {customers.length === 0 ? "No customers yet — tap Add Customer to get started." : "No customers match your search or filters."}
+          <Card className="md:col-span-2 xl:col-span-3">
+            <EmptyState
+              emoji="👤"
+              title={customers.length === 0 ? "No customers yet" : "No customers match your filters"}
+              hint={customers.length === 0 ? "Tap Add Customer to get started" : "Try a different search or tier"}
+              actionLabel={customers.length === 0 && canEdit ? "Add Customer" : undefined}
+              onAction={customers.length === 0 && canEdit ? () => setShowAdd(true) : undefined}
+            />
           </Card>
-        ) : filtered.map((c) => (
+        ) : customerPage.paginatedItems.map((c) => (
           <Card key={c.id} className="p-4 hover:border-slate-600 transition-colors">
             <div className="flex items-start justify-between mb-3">
               <div>
@@ -2244,6 +2365,7 @@ function CustomerModule({ customers, setCustomers, addNotification, currentUser 
           </Card>
         ))}
       </div>
+      <PaginationControls {...customerPage} />
 
       {/* Add Customer */}
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Customer" size="lg">
@@ -2355,6 +2477,8 @@ function CustomerModule({ customers, setCustomers, addNotification, currentUser 
 // EXPENSE RECEIPTS (image records for external accounting)
 // ─────────────────────────────────────────────
 function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) {
+  const [budgets, setBudgets] = useState(() => loadExpenseBudgets());
+  const [editingBudgets, setEditingBudgets] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [viewExpenseId, setViewExpenseId] = useState(null);
   const [bookedFilter, setBookedFilter] = useState("all");
@@ -2428,6 +2552,33 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
     .filter((e) => matchesBookedAndAge(e) && matchesDateFilter(e))
     .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (Number(b.id) || 0) - (Number(a.id) || 0));
   const hiddenExpenseCount = expenses.filter((e) => !isAppVisibleExpense(e)).length;
+  const expensePage = usePagination(visibleExpenses, LIST_PAGE_SIZE, `${bookedFilter}-${dateFrom}-${dateTo}-${showOlderExpenses}`);
+
+  const monthStart = monthStartStr();
+  const monthlySpentByCategory = useMemo(() => {
+    const totals = {};
+    expenses.forEach((e) => {
+      if ((e.date || "") < monthStart) return;
+      const cat = e.category;
+      const amt = Number(e.amount);
+      if (!cat || !(amt > 0)) return;
+      totals[cat] = (totals[cat] || 0) + amt;
+    });
+    return totals;
+  }, [expenses, monthStart]);
+
+  const budgetCategories = Object.keys(budgets).filter((c) => budgets[c] > 0);
+
+  const handleBudgetChange = (category, value) => {
+    const n = Math.max(0, Number(value) || 0);
+    setBudgets((prev) => ({ ...prev, [category]: n }));
+  };
+
+  const saveBudgets = () => {
+    saveExpenseBudgets(budgets);
+    setEditingBudgets(false);
+    addNotification({ type: "success", title: "Budgets Saved", message: "Monthly expense budgets updated." });
+  };
 
   const resetUpload = () => {
     setUploadPreview(null);
@@ -2567,7 +2718,62 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
           <Download size={14} /> Export CSV
         </Btn>
       </div>
-      <Fab onClick={() => { resetUpload(); setShowAdd(true); }} label="Upload Receipt" icon={ImagePlus} hidden={showAdd || viewExpenseId != null} />
+      <Fab onClick={() => { resetUpload(); setShowAdd(true); }} label="Upload Receipt" icon={ImagePlus} hidden={showAdd || viewExpenseId != null || editingBudgets} />
+
+      <Card className="p-4 border-slate-700/50">
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <h3 className="text-sm font-bold text-white">Monthly Budget vs Actual</h3>
+          <Btn variant="ghost" size="sm" onClick={() => (editingBudgets ? saveBudgets() : setEditingBudgets(true))}>
+            {editingBudgets ? "Save budgets" : "Edit budgets"}
+          </Btn>
+        </div>
+        {budgetCategories.length === 0 ? (
+          <p className="text-slate-500 text-sm">No budgets set — tap Edit budgets to configure.</p>
+        ) : budgetCategories.map((category) => {
+          const spent = monthlySpentByCategory[category] || 0;
+          const budget = budgets[category] || 0;
+          const pct = budget > 0 ? (spent / budget) * 100 : 0;
+          return (
+            <div key={category} className="mb-3 last:mb-0">
+              <div className="flex justify-between text-xs text-slate-400 mb-1 gap-2">
+                <span>{category}</span>
+                {editingBudgets ? (
+                  <input
+                    type="number"
+                    min="0"
+                    step="50"
+                    value={budget}
+                    onChange={(e) => handleBudgetChange(category, e.target.value)}
+                    className="w-24 bg-slate-900 border border-slate-600 rounded px-2 py-0.5 text-white text-right text-xs"
+                  />
+                ) : (
+                  <span>{formatSGD(spent)} / {formatSGD(budget)}</span>
+                )}
+              </div>
+              {!editingBudgets && (
+                <div className="w-full bg-slate-700 rounded-full h-2">
+                  <div
+                    className={`h-2 rounded-full ${pct > 90 ? "bg-red-500" : pct > 70 ? "bg-yellow-500" : "bg-cyan-500"}`}
+                    style={{ width: `${Math.min(pct, 100)}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {!editingBudgets && Object.keys(monthlySpentByCategory).length === 0 && (
+          <p className="text-slate-600 text-xs mt-2">Spending tracked from legacy expense records with category + amount.</p>
+        )}
+        {editingBudgets && (
+          <div className="flex flex-wrap gap-2 mt-3">
+            {EXPENSE_CATEGORIES.filter((c) => !(c in budgets)).map((c) => (
+              <Btn key={c} variant="secondary" size="sm" onClick={() => setBudgets((prev) => ({ ...prev, [c]: DEFAULT_EXPENSE_BUDGETS[c] || 100 }))}>
+                + {c}
+              </Btn>
+            ))}
+          </div>
+        )}
+      </Card>
 
       <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
         {[
@@ -2623,30 +2829,43 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
       )}
 
       {visibleExpenses.length === 0 ? (
-        <Card className="p-10 text-center">
-          <ImagePlus size={40} className="mx-auto text-slate-600 mb-3" />
-          <p className="text-slate-400 text-sm">
-            {expenses.length === 0
-              ? "No expense receipts yet — upload supplier invoice photos here."
+        <Card>
+          <EmptyState
+            emoji="💰"
+            title={expenses.length === 0
+              ? "No expense receipts yet"
               : dateRangeInvalid
-                ? "Fix the date range above — From must be on or before To."
+                ? "Invalid date range"
                 : dateFilterActive
-                  ? "No receipts for this date range."
-                  : "No receipts match this filter."}
-          </p>
-          {expenses.length === 0 && (
-            <Btn className="mt-4 mx-auto" onClick={() => { resetUpload(); setShowAdd(true); }}><ImagePlus size={14} />Upload first receipt</Btn>
-          )}
+                  ? "No receipts for this date range"
+                  : "No receipts match this filter"}
+            hint={expenses.length === 0
+              ? "Upload supplier invoice photos here"
+              : dateRangeInvalid
+                ? "From must be on or before To"
+                : "Adjust filters above"}
+            actionLabel={expenses.length === 0 ? "Upload first receipt" : undefined}
+            onAction={expenses.length === 0 ? () => { resetUpload(); setShowAdd(true); } : undefined}
+          />
         </Card>
       ) : (
+        <>
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
-          {visibleExpenses.map((e) => {
+          {expensePage.paginatedItems.map((e) => {
             const src = expenseImageSrc(e);
             return (
               <Card key={e.id} className="overflow-hidden hover:border-slate-600 transition-colors cursor-pointer" onClick={() => { setViewEditDate(e.date || ""); setViewExpenseId(e.id); }}>
                 <div className="aspect-[3/4] bg-slate-900 relative">
                   {src ? (
-                    <img src={src} alt={e.imageName || "Expense receipt"} className="w-full h-full object-cover" />
+                    <StoredImage
+                      src={src}
+                      alt={e.imageName || "Expense receipt"}
+                      className="w-full h-full object-cover"
+                      entity="expense"
+                      recordId={e.id}
+                      field="image"
+                      onRefresh={() => refreshReceiptUrl(e.id)}
+                    />
                   ) : (
                     <div className="w-full h-full flex flex-col items-center justify-center p-3 text-center text-slate-500 text-xs">
                       <FileText size={28} className="mb-2 opacity-50" />
@@ -2700,6 +2919,8 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
             );
           })}
         </div>
+        <PaginationControls {...expensePage} />
+        </>
       )}
 
       <Modal open={showAdd} onClose={() => { setShowAdd(false); resetUpload(); }} title="Upload Expense Receipt" size="md">
@@ -2823,11 +3044,14 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
             )}
             {expenseImageSrc(viewExpense) ? (
               <div className="rounded-xl overflow-hidden border border-slate-600 bg-[#d4d4d4] p-2">
-                <img
+                <StoredImage
                   src={expenseImageSrc(viewExpense)}
                   alt={viewExpense.imageName || "Receipt"}
                   className="w-full max-h-[70vh] object-contain mx-auto"
-                  onError={() => refreshReceiptUrl(viewExpense.id)}
+                  entity="expense"
+                  recordId={viewExpense.id}
+                  field="image"
+                  onRefresh={() => refreshReceiptUrl(viewExpense.id)}
                 />
               </div>
             ) : (
@@ -2864,6 +3088,14 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
   );
 }
 
+function deliveryArea(delivery, customers = []) {
+  const customer = customers.find((c) => String(c.id) === String(delivery?.customerId));
+  if (customer?.area) return customer.area;
+  const addr = `${delivery?.address || ""} ${delivery?.postalCode || ""}`.toLowerCase();
+  const matched = SG_AREAS.find((area) => addr.includes(area.toLowerCase()));
+  return matched || "Other";
+}
+
 // ─────────────────────────────────────────────
 // DELIVERY MODULE
 // ─────────────────────────────────────────────
@@ -2890,6 +3122,7 @@ function DeliveryModule({
   const [showAdd, setShowAdd] = useState(false);
   const [editDeliveryId, setEditDeliveryId] = useState(null);
   const [filter, setFilter] = useState("all");
+  const [viewMode, setViewMode] = useState("list");
   const [form, setForm] = useState(emptyDeliveryForm());
   const isEditing = editDeliveryId != null;
   const formOpen = showAdd || isEditing;
@@ -2926,10 +3159,29 @@ function DeliveryModule({
     ? deliveries.find((d) => String(d.id) === String(whatsappDeliveryId))
     : null;
 
+  const todayStr = today();
   const filtered = deliveries
     .filter((d) => (filter === "all" || d.status === filter) && isAppVisibleDelivery(d))
     .sort((a, b) => (a.schedule || "").localeCompare(b.schedule || ""));
   const hiddenDeliveryCount = deliveries.filter((d) => !isAppVisibleDelivery(d)).length;
+  const deliveryPage = usePagination(filtered, LIST_PAGE_SIZE, `${filter}-${viewMode}`);
+
+  const todaysRoute = useMemo(() => {
+    const pending = deliveries
+      .filter((d) => isAppVisibleDelivery(d) && (d.schedule || "").startsWith(todayStr) && ["scheduled", "transit"].includes(d.status))
+      .sort((a, b) => (a.schedule || "").localeCompare(b.schedule || ""));
+    const grouped = {};
+    pending.forEach((d) => {
+      const area = deliveryArea(d, customers);
+      if (!grouped[area]) grouped[area] = [];
+      grouped[area].push(d);
+    });
+    return Object.entries(grouped).sort(([a], [b]) => {
+      if (a === "Other") return 1;
+      if (b === "Other") return -1;
+      return a.localeCompare(b);
+    });
+  }, [deliveries, customers, todayStr]);
   const linkedInvoice = form.invoiceId ? invoices.find((i) => i.id === form.invoiceId) : null;
   const linkedInvoiceDoc = linkedInvoice ? enrichInvoiceCustomer(linkedInvoice, customers) : null;
   const linkableInvoices = [...invoices]
@@ -3072,7 +3324,13 @@ function DeliveryModule({
   };
 
   const updateStatus = (id, status) => {
-    setDeliveries((prev) => prev.map((d) => (String(d.id) === String(id) ? touchUpdatedAt({ ...d, status }) : d)));
+    const deliveredAt = status === "delivered" ? new Date().toISOString() : undefined;
+    setDeliveries((prev) => prev.map((d) => {
+      if (String(d.id) !== String(id)) return d;
+      const patch = { status };
+      if (deliveredAt) patch.deliveredAt = deliveredAt;
+      return touchUpdatedAt({ ...d, ...patch });
+    }));
     if (status === "delivered") {
       addNotification({ type: "success", title: "Delivery Completed", message: `${id} delivered successfully!` });
     } else if (status === "transit") {
@@ -3177,30 +3435,85 @@ function DeliveryModule({
       <Fab onClick={openAddDelivery} label="Schedule Delivery" hidden={formOpen || !!invoicePreviewId || showManageGroups || !!whatsappDelivery} />
 
       <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
-        {["all", "scheduled", "transit", "delivered", "cancelled"].map(s => (
+        {[
+          { id: "list", label: "All deliveries" },
+          { id: "route", label: "Today's route" },
+        ].map((v) => (
+          <button key={v.id} type="button" onClick={() => setViewMode(v.id)}
+            className={`px-3 py-2 rounded-lg text-xs font-bold transition-all shrink-0 touch-manipulation ${viewMode === v.id ? "bg-emerald-500 text-slate-900" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>
+            {v.label}
+          </button>
+        ))}
+        {viewMode === "list" && ["all", "scheduled", "transit", "delivered", "cancelled"].map((s) => (
           <button key={s} onClick={() => setFilter(s)}
             className={`px-3 py-2 rounded-lg text-xs font-bold capitalize transition-all shrink-0 touch-manipulation ${filter === s ? "bg-cyan-500 text-slate-900" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>{s}</button>
         ))}
       </div>
-      {hiddenDeliveryCount > 0 && filter === "all" && (
+
+      {viewMode === "route" && (
+        <Card className="p-4 border-emerald-500/20 bg-emerald-500/5">
+          <h3 className="text-sm font-bold text-white mb-1 flex items-center gap-2">
+            <Navigation size={14} className="text-emerald-400" />
+            Today&apos;s route — {todayStr}
+          </h3>
+          <p className="text-slate-500 text-xs mb-4">Pending deliveries grouped by area</p>
+          {todaysRoute.length === 0 ? (
+            <p className="text-slate-400 text-sm text-center py-6">No scheduled or in-transit deliveries for today.</p>
+          ) : todaysRoute.map(([area, stops]) => (
+            <div key={area} className="mb-4 last:mb-0">
+              <p className="text-cyan-400 text-xs font-bold uppercase tracking-wide mb-2">{area} ({stops.length})</p>
+              <div className="space-y-2">
+                {stops.map((d) => (
+                  <div key={d.id} className="bg-slate-800/80 rounded-lg p-3 border border-slate-700/50 text-sm">
+                    <div className="flex justify-between gap-2">
+                      <p className="text-white font-medium">{d.customerName}</p>
+                      <Badge className={statusColor[d.status]}>{d.status}</Badge>
+                    </div>
+                    <p className="text-slate-400 text-xs mt-1 flex items-start gap-1">
+                      <MapPin size={10} className="mt-0.5 shrink-0" />
+                      {formatDeliveryLocation(d) || "No address"}
+                    </p>
+                    <div className="flex flex-wrap gap-3 mt-2 text-xs text-slate-500">
+                      <span><Clock size={10} className="inline mr-1" />{formatDeliverySchedule(d.schedule)}</span>
+                      {d.items && <span>{d.items}</span>}
+                      {d.driver && <span>Driver: {d.driver}</span>}
+                    </div>
+                    {canEdit && ["scheduled", "transit"].includes(d.status) && (
+                      <div className="flex gap-2 mt-2">
+                        {d.status === "scheduled" && (
+                          <Btn variant="secondary" size="sm" className="flex-1 justify-center" onClick={() => updateStatus(d.id, "transit")}>
+                            <Truck size={12} /> Out for delivery
+                          </Btn>
+                        )}
+                        <Btn variant="success" size="sm" className="flex-1 justify-center" onClick={() => updateStatus(d.id, "delivered")}>
+                          <CheckCircle size={12} /> Mark as Delivered
+                        </Btn>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </Card>
+      )}
+      {viewMode === "list" && hiddenDeliveryCount > 0 && filter === "all" && (
         <p className="text-xs text-slate-500">{hiddenDeliveryCount} completed delivery{hiddenDeliveryCount === 1 ? "" : "ies"} older than 6 months hidden</p>
       )}
 
-      <div className="space-y-3">
+      {viewMode === "list" && <div className="space-y-3">
         {filtered.length === 0 ? (
-          <Card className="p-10 text-center">
-            <Truck size={40} className="mx-auto text-slate-600 mb-3" />
-            <p className="text-slate-400 text-sm">
-              {deliveries.length === 0
-                ? "No deliveries scheduled yet."
-                : "No deliveries match this status filter."}
-            </p>
-            {deliveries.length === 0 && (
-              <Btn className="mt-4 mx-auto" onClick={openAddDelivery}><Plus size={14} />Schedule first delivery</Btn>
-            )}
+          <Card>
+            <EmptyState
+              emoji="🚚"
+              title={deliveries.length === 0 ? "No deliveries yet" : "No deliveries match this filter"}
+              hint={deliveries.length === 0 ? "Schedule fish deliveries to customers" : "Try a different status tab"}
+              actionLabel={deliveries.length === 0 ? "Schedule first delivery" : undefined}
+              onAction={deliveries.length === 0 ? openAddDelivery : undefined}
+            />
           </Card>
         ) :
-          filtered.map(d => (
+          deliveryPage.paginatedItems.map(d => (
             <Card key={d.id} className="p-4">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1">
@@ -3279,7 +3592,8 @@ function DeliveryModule({
             </Card>
           ))
         }
-      </div>
+        <PaginationControls {...deliveryPage} />
+      </div>}
 
       <Modal
         open={formOpen}
@@ -3592,10 +3906,14 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
       <Fab onClick={openAddEvent} label="Add Event" hidden={formOpen} />
 
       {events.length === 0 ? (
-        <Card className="p-10 text-center">
-          <Calendar size={40} className="mx-auto text-slate-600 mb-3" />
-          <p className="text-slate-400 text-sm">No events yet — add pond maintenance, feeding, or customer visits.</p>
-          <Btn className="mt-4 mx-auto" onClick={openAddEvent}><Plus size={14} />Add first event</Btn>
+        <Card>
+          <EmptyState
+            emoji="📅"
+            title="No events yet"
+            hint="Add pond maintenance, feeding, or customer visits"
+            actionLabel="Add first event"
+            onAction={openAddEvent}
+          />
         </Card>
       ) : (
         <>
@@ -4256,6 +4574,15 @@ function sanitizeChatMessages(parsed) {
   return clean.length ? clean.slice(-CHAT_HISTORY_MAX) : null;
 }
 
+function buildChatThread(messages, userMsg) {
+  const prior = messages.filter((m) =>
+    (m.role === "user" || m.role === "assistant")
+    && !m.retryable
+    && (String(m.content || "").trim() || m.images?.length),
+  );
+  return [...prior, userMsg].slice(-CHAT_HISTORY_MAX);
+}
+
 function loadChatHistory() {
   try {
     const raw = sessionStorage.getItem(CHAT_STORAGE_KEY);
@@ -4463,7 +4790,7 @@ function ChatModule({ aiContext, messages, setMessages }) {
       content: text || (images.length ? "Please look at this photo." : ""),
       ...(images.length ? { images } : {}),
     };
-    const thread = [...messages.filter((m) => m.role === "user" || m.role === "assistant"), userMsg].slice(-CHAT_HISTORY_MAX);
+    const thread = buildChatThread(messages, userMsg);
     setMessages((prev) => [...prev.slice(-CHAT_HISTORY_MAX - 1), userMsg]);
     setInput("");
     setPendingImages([]);
@@ -4723,9 +5050,10 @@ const ALL_NAV_ITEMS = [
 
 function LoadingScreen({ message }) {
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center gap-4">
-      <AppLogo size="lg" className="ring-2 ring-slate-700 animate-pulse" />
-      <p className="text-slate-400 text-sm">{message}</p>
+    <div className="min-h-screen min-h-[100dvh] bg-slate-950 flex flex-col items-center justify-center p-8 safe-top safe-bottom">
+      <AppLogo size="lg" className="ring-2 ring-slate-700 shadow-2xl shadow-black/40 mb-6" />
+      <Loader2 size={32} className="text-cyan-400 animate-spin mb-4" aria-hidden />
+      <p className="text-slate-400 text-sm text-center max-w-xs">{message}</p>
     </div>
   );
 }
@@ -4747,6 +5075,7 @@ export default function App() {
   const [cloudError, setCloudError] = useState(null);
   const [cloudRetrying, setCloudRetrying] = useState(false);
   const [cloudPulling, setCloudPulling] = useState(false);
+  const [lastSyncAt, setLastSyncAt] = useState(null);
   const lowStockNotified = useRef(false);
   const lastSyncWarnRef = useRef(0);
   const lastCloudPullAt = useRef(0);
@@ -4793,6 +5122,10 @@ export default function App() {
       toastTimers.current.set(id, timer);
     }
   }, [dismissToast]);
+
+  const touchLastSync = useCallback(() => {
+    setLastSyncAt(new Date());
+  }, []);
 
   const warnCloudSaveFailed = useCallback((detail, { force = false } = {}) => {
     const now = Date.now();
@@ -4898,7 +5231,8 @@ export default function App() {
       });
     }
     setCloudHydrated(true);
-  }, [addNotification]);
+    touchLastSync();
+  }, [addNotification, touchLastSync]);
 
   const resetCloudBusinessState = useCallback(() => {
     setCustomers(INITIAL_CUSTOMERS);
@@ -5006,12 +5340,13 @@ export default function App() {
       await Promise.all(tasks.map((e) => e.sync(syncStateRef.current[e.key])));
       setCloudSync(true);
       setCloudError(null);
+      touchLastSync();
     } catch (err) {
       handleSyncFailure(err);
     } finally {
       syncInFlightRef.current -= 1;
     }
-  }, [cloudHydrated, currentUser, handleSyncFailure]);
+  }, [cloudHydrated, currentUser, handleSyncFailure, touchLastSync]);
 
   const syncDebounced = useCallback((perm, label, fn, data) => {
     if (!dataReady || !cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
@@ -5025,6 +5360,7 @@ export default function App() {
         .then(() => {
           setCloudSync(true);
           setCloudError(null);
+          touchLastSync();
         })
         .catch((err) => {
           const msg = err?.message || "Sync failed";
@@ -5038,7 +5374,7 @@ export default function App() {
       if (syncTimersRef.current[key]) clearTimeout(syncTimersRef.current[key]);
       delete syncTimersRef.current[key];
     };
-  }, [dataReady, cloudHydrated, currentUser, handleSyncFailure]);
+  }, [dataReady, cloudHydrated, currentUser, handleSyncFailure, touchLastSync]);
 
   const retryCloudSync = useCallback(async () => {
     if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser || !cloudHydrated) return;
@@ -5057,6 +5393,7 @@ export default function App() {
       }
       setCloudSync(true);
       setCloudError(null);
+      touchLastSync();
       dismissToast("cloud-sync-warn");
       const skipped = SYNC_ENTITIES.length - tasks.length;
       showProminentToast({
@@ -5074,7 +5411,7 @@ export default function App() {
       setCloudRetrying(false);
     }
   }, [
-    currentUser, cloudHydrated, syncState, handleSyncFailure, dismissToast, showProminentToast,
+    currentUser, cloudHydrated, syncState, handleSyncFailure, dismissToast, showProminentToast, touchLastSync,
   ]);
 
   const refreshFromCloud = useCallback(async ({ force = false, quiet = false } = {}) => {
@@ -5099,6 +5436,7 @@ export default function App() {
       applyCloudData(data, { mode: cloudHydrated ? "merge" : "replace" });
       setCloudSync(true);
       setCloudError(null);
+      touchLastSync();
       dismissToast("cloud-sync-warn");
       if (!quiet) {
         showProminentToast({
@@ -5114,7 +5452,7 @@ export default function App() {
     } finally {
       setCloudPulling(false);
     }
-  }, [currentUser, cloudHydrated, applyCloudData, handleSyncFailure, dismissToast, showProminentToast, flushPendingCloudSync]);
+  }, [currentUser, cloudHydrated, applyCloudData, handleSyncFailure, dismissToast, showProminentToast, flushPendingCloudSync, touchLastSync]);
 
   useEffect(() => {
     if (!isSupabaseConfigured || !currentUser) return;
@@ -5385,7 +5723,7 @@ export default function App() {
 
   const guard = (permission, label, content) => {
     if (!hasPermission(currentUser, permission)) return <AccessDenied moduleName={label} />;
-    return content;
+    return <ErrorBoundary>{content}</ErrorBoundary>;
   };
 
   const aiContext = {
@@ -5413,7 +5751,7 @@ export default function App() {
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} />);
       case "calendar": return guard("calendar", "Calendar", <CalendarModule events={events} setEvents={setEvents} addNotification={addNotification} currentUser={currentUser} />);
       case "chat": return guard("chat", "AI Chat", <ChatModule aiContext={aiContext} messages={chatMessages} setMessages={setChatMessages} />);
-      case "users": return <TeamModule users={users} setUsers={setUsers} currentUser={currentUser} addNotification={addNotification} onCurrentUserUpdate={handleUserUpdate} cloudMode={isSupabaseConfigured && cloudSync} apiEnabled={isSupabaseConfigured} onOpenChangePin={() => setShowChangePin(true)} getBackupData={getBackupData} />;
+      case "users": return <ErrorBoundary><TeamModule users={users} setUsers={setUsers} currentUser={currentUser} addNotification={addNotification} onCurrentUserUpdate={handleUserUpdate} cloudMode={isSupabaseConfigured && cloudSync} apiEnabled={isSupabaseConfigured} onOpenChangePin={() => setShowChangePin(true)} getBackupData={getBackupData} /></ErrorBoundary>;
       default: return null;
     }
   };
@@ -5466,19 +5804,34 @@ export default function App() {
 
         <div className="p-3 border-t border-slate-800 safe-bottom">
           {(sidebarOpen || isMobile) ? (
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-black">
-                {currentUser.name[0].toUpperCase()}
+            <div>
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-black">
+                  {currentUser.name[0].toUpperCase()}
+                </div>
+                <div className="flex-1 overflow-hidden min-w-0">
+                  <p className="text-white text-xs font-bold truncate">{currentUser.name}</p>
+                  <p className="text-slate-500 text-xs capitalize">{currentUser.role}</p>
+                </div>
+                <button onClick={() => setShowChangePin(true)} title="Change My PIN" className="text-slate-500 hover:text-cyan-400 transition-colors p-2 touch-manipulation"><Lock size={14} /></button>
+                <button onClick={handleLogout} className="text-slate-500 hover:text-red-400 transition-colors p-2 touch-manipulation"><LogOut size={14} /></button>
               </div>
-              <div className="flex-1 overflow-hidden min-w-0">
-                <p className="text-white text-xs font-bold truncate">{currentUser.name}</p>
-                <p className="text-slate-500 text-xs capitalize">{currentUser.role}</p>
-              </div>
-              <button onClick={() => setShowChangePin(true)} title="Change My PIN" className="text-slate-500 hover:text-cyan-400 transition-colors p-2 touch-manipulation"><Lock size={14} /></button>
-              <button onClick={handleLogout} className="text-slate-500 hover:text-red-400 transition-colors p-2 touch-manipulation"><LogOut size={14} /></button>
+              {isSupabaseConfigured && lastSyncAt && (
+                <p className="text-slate-500 text-[10px] mt-2 flex items-center gap-1 pl-0.5" title={format(lastSyncAt, "dd MMM yyyy, HH:mm")}>
+                  <Clock size={10} className="shrink-0" />
+                  Last synced {format(lastSyncAt, "HH:mm")}
+                </p>
+              )}
             </div>
           ) : (
-            <button onClick={handleLogout} className="w-full flex justify-center text-slate-500 hover:text-red-400 p-2 touch-manipulation"><LogOut size={16} /></button>
+            <div className="flex flex-col items-center gap-1">
+              <button onClick={handleLogout} className="w-full flex justify-center text-slate-500 hover:text-red-400 p-2 touch-manipulation"><LogOut size={16} /></button>
+              {isSupabaseConfigured && lastSyncAt && (
+                <span className="text-slate-600 text-[9px]" title={format(lastSyncAt, "dd MMM yyyy, HH:mm")}>
+                  {format(lastSyncAt, "HH:mm")}
+                </span>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -5497,6 +5850,12 @@ export default function App() {
             <p className="text-white text-sm font-bold truncate lg:hidden">{activeNav?.label || "Marugen"}</p>
             {cloudSync && !cloudError && (
               <Badge className="bg-emerald-500/20 text-emerald-300 text-[10px] sm:text-xs shrink-0">☁️ Supabase</Badge>
+            )}
+            {isSupabaseConfigured && lastSyncAt && (
+              <span className="hidden md:inline text-slate-500 text-[10px] shrink-0" title={format(lastSyncAt, "dd MMM yyyy, HH:mm")}>
+                <Clock size={10} className="inline mr-0.5 -mt-px" />
+                Last synced {format(lastSyncAt, "HH:mm")}
+              </span>
             )}
             {cloudError && (
               <Badge className="bg-amber-500/25 text-amber-200 text-[10px] sm:text-xs animate-pulse shrink-0" title={cloudError}>⚠️ Local mode</Badge>
@@ -5556,7 +5915,7 @@ export default function App() {
         )}
 
         <main className={`flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6 ${isMobile ? "pb-[calc(4.5rem+env(safe-area-inset-bottom))]" : ""}`}>
-          {renderModule()}
+          {cloudPulling ? <ModuleSkeleton tab={effectiveTab} /> : renderModule()}
         </main>
       </div>
 

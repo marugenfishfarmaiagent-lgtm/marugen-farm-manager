@@ -5,9 +5,9 @@
  */
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
-import logoUrl from '../assets/logo.png'
+import logoBase64 from '../assets/marugen-logo-base64.js'
 import paynowQrUrl from '../assets/paynow-qr.png'
-import { PAYNOW_UEN } from '../data/constants'
+import { PAYNOW_UEN, formatSGD } from '../data/constants'
 import { PAGE_MM, THEME, computeInvoiceTotals } from './invoiceDesign'
 
 const imageCache = new Map()
@@ -27,12 +27,7 @@ async function loadImageDataUrl(url) {
   return imageCache.get(url)
 }
 
-const loadLogo = () => loadImageDataUrl(logoUrl)
 const loadPayNowQr = () => loadImageDataUrl(paynowQrUrl)
-
-function moneySGD(v) {
-  return `S$${v}`
-}
 
 export async function generateInvoicePdf(invoice) {
   const data = computeInvoiceTotals(invoice)
@@ -47,8 +42,7 @@ export async function generateInvoicePdf(invoice) {
   doc.rect(0, 0, w, 2.5, 'F')
 
   // Logo + company (left)
-  const logo = await loadLogo()
-  if (logo) doc.addImage(logo, 'PNG', M, y, 20, 20)
+  doc.addImage(logoBase64, 'PNG', M, y, 20, 20)
 
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(12)
@@ -102,20 +96,22 @@ export async function generateInvoicePdf(invoice) {
   const customerLines = [
     `Customer Name - ${data.customerName || '—'}`,
     `Phone - ${data.customerPhone || '—'}`,
+    ...(data.customerEmail ? [`Email - ${data.customerEmail}`] : []),
     `Address - ${data.customerAddress || '—'}`,
   ]
-  const addressWrapped = doc.splitTextToSize(customerLines[2], w - M * 2 - 8)
-  const customerBlockH = 10 + customerLines.slice(0, 2).length * 5 + addressWrapped.length * 5
+  const addressLine = customerLines[customerLines.length - 1]
+  const addressWrapped = doc.splitTextToSize(addressLine, w - M * 2 - 8)
+  const customerBlockH = 10 + (customerLines.length - 1) * 5 + addressWrapped.length * 5
   doc.setFillColor(248, 247, 246)
   doc.roundedRect(M, y, w - M * 2, customerBlockH, 2, 2, 'F')
   doc.setFont('helvetica', 'normal')
   doc.setFontSize(9)
   doc.setTextColor(26, 26, 26)
   let customerY = y + 6
-  doc.text(customerLines[0], M + 4, customerY)
-  customerY += 5
-  doc.text(customerLines[1], M + 4, customerY)
-  customerY += 5
+  customerLines.slice(0, -1).forEach((line) => {
+    doc.text(line, M + 4, customerY)
+    customerY += 5
+  })
   doc.text(addressWrapped, M + 4, customerY)
 
   y += customerBlockH + 8
@@ -188,7 +184,7 @@ export async function generateInvoicePdf(invoice) {
   doc.setFontSize(10)
   doc.setTextColor(255, 255, 255)
   doc.text('Amount due', boxX, dueY + 2)
-  doc.text(moneySGD(data.totalFmt), R - 2, dueY + 2, { align: 'right' })
+  doc.text(formatSGD(data.total), R - 2, dueY + 2, { align: 'right' })
 
   y = dueY + 18
 
@@ -220,7 +216,7 @@ export async function generateInvoicePdf(invoice) {
   doc.setTextColor(60, 60, 60)
   doc.text('Pay via PayNow using the QR code or enter the UEN in your banking app.', M, payY + 14)
   doc.text(`UEN: ${PAYNOW_UEN}`, M, payY + 20)
-  doc.text(`Amount: ${moneySGD(data.totalFmt)}`, M, payY + 26)
+  doc.text(`Amount: ${formatSGD(data.total)}`, M, payY + 26)
   doc.text(`Reference: ${data.invoiceId}`, M, payY + 32)
 
   const paynowQr = await loadPayNowQr()

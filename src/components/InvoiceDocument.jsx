@@ -1,6 +1,6 @@
 import logo from '../assets/logo.png'
 import paynowQr from '../assets/paynow-qr.png'
-import { PAYNOW_UEN } from '../data/constants'
+import { PAYNOW_UEN, formatSGD } from '../data/constants'
 import { THEME, computeInvoiceTotals } from '../lib/invoiceDesign'
 
 const statusLabel = {
@@ -144,7 +144,7 @@ export default function InvoiceDocument({ invoice, className = '' }) {
               style={{ backgroundColor: THEME.maroon }}
             >
               <span>Amount due</span>
-              <span>S${data.totalFmt}</span>
+              <span>{formatSGD(data.total)}</span>
             </div>
           </div>
         </div>
@@ -163,7 +163,7 @@ export default function InvoiceDocument({ invoice, className = '' }) {
               <p className="font-bold text-[12px]" style={{ color: THEME.maroon }}>Payment instructions</p>
               <p>Pay via PayNow using the QR code or enter the UEN in your banking app.</p>
               <p><span className="font-semibold text-gray-800">UEN:</span> {PAYNOW_UEN}</p>
-              <p><span className="font-semibold text-gray-800">Amount:</span> S${data.totalFmt}</p>
+              <p><span className="font-semibold text-gray-800">Amount:</span> {formatSGD(data.total)}</p>
               <p><span className="font-semibold text-gray-800">Reference:</span> {data.invoiceId}</p>
             </div>
             <div className="text-center shrink-0">

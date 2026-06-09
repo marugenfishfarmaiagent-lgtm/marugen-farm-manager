@@ -178,7 +178,17 @@ CREATE TABLE IF NOT EXISTS whatsapp_groups (
   link TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS expense_budgets (
+  id TEXT PRIMARY KEY DEFAULT 'default',
+  data JSONB NOT NULL DEFAULT '{}',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 INSERT INTO farm_pond_data (id, data)
+VALUES ('default', '{}')
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO expense_budgets (id, data)
 VALUES ('default', '{}')
 ON CONFLICT (id) DO NOTHING;
 
@@ -196,8 +206,10 @@ ALTER TABLE koi_fish ENABLE ROW LEVEL SECURITY;
 ALTER TABLE customer_koi ENABLE ROW LEVEL SECURITY;
 ALTER TABLE farm_pond_data ENABLE ROW LEVEL SECURITY;
 ALTER TABLE whatsapp_groups ENABLE ROW LEVEL SECURITY;
+ALTER TABLE expense_budgets ENABLE ROW LEVEL SECURITY;
 
 -- No policies = anon role cannot read/write (service role bypasses RLS)
+-- Pond water parameters live in farm_pond_data JSON (maintenanceLogs), not a separate table.
 
 CREATE TABLE IF NOT EXISTS ai_usage_daily (
   user_id BIGINT NOT NULL REFERENCES farm_users(id) ON DELETE CASCADE,

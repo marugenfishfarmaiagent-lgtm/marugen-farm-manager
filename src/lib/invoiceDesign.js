@@ -82,6 +82,7 @@ export function computeInvoiceTotals(invoice) {
     dueDate: invoice?.due ? formatInvoiceDate(invoice.due) : '',
     customerName: invoice?.customerName || '',
     customerPhone: invoice?.customerPhone || invoice?.customerWhatsapp || '',
+    customerEmail: invoice?.customerEmail || '',
     customerAddress: invoice?.customerAddress || '',
     notes: invoice?.notes || '',
     status: invoice?.status || 'pending',

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" fill="none">
+  <rect width="120" height="80" rx="8" fill="#1e293b"/>
+  <ellipse cx="55" cy="40" rx="32" ry="18" fill="#334155"/>
+  <polygon points="88,40 108,28 108,52" fill="#475569"/>
+  <circle cx="38" cy="36" r="4" fill="#94a3b8"/>
+  <text x="60" y="72" text-anchor="middle" fill="#64748b" font-size="8" font-family="system-ui,sans-serif">No image</text>
+</svg>
