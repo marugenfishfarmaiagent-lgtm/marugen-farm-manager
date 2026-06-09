@@ -7,7 +7,9 @@ import {
   monthStart,
 } from '../data/constants'
 import { calcInvoiceAmounts } from './invoiceDesign'
-import { isStockTracked } from './productCatalog'
+import { customerSpentForDashboard } from './customerOps'
+import { countDeliveriesOnDate } from './deliveryOps'
+import { getLowStockProducts } from './inventoryOps'
 import { isAppVisibleInvoice } from './retention'
 import { filterTodayEvents } from './calendarOps'
 
@@ -45,6 +47,8 @@ export function computeDashboardMetrics({
   const monthlyExpenses = monthlyExpenseReceipts
     .filter((e) => Number(e.amount) > 0)
     .reduce((s, e) => s + (Number(e.amount) || 0), 0)
+  const monthlyReceiptsWithAmount = monthlyExpenseReceipts.filter((e) => Number(e.amount) > 0).length
+  const monthlyReceiptsMissingAmount = monthlyExpenseReceipts.length - monthlyReceiptsWithAmount
 
   const canInvoices = canFn('invoices')
   const canExpenses = canFn('expenses')
@@ -71,14 +75,12 @@ export function computeDashboardMetrics({
     else if (unbookedExpenses > 0 && canExpenses) pendingAccountsTab = 'expenses'
   }
 
-  const lowStock = products.filter(
-    (p) => isStockTracked(p) && p.minStock > 0 && p.stock <= p.minStock,
-  )
+  const lowStock = getLowStockProducts(products)
 
   const todayEvents = filterTodayEvents(events, todayStr)
 
   const scheduledDeliveries = deliveries.filter((d) => d.status === 'scheduled').length
-  const todayDeliveries = deliveries.filter((d) => (d.schedule || '').startsWith(todayStr)).length
+  const todayDeliveries = countDeliveriesOnDate(deliveries, todayStr)
 
   const recentInvoices = [...invoices]
     .filter(isAppVisibleInvoice)
@@ -86,7 +88,11 @@ export function computeDashboardMetrics({
     .slice(0, 5)
 
   const recentCustomers = [...customers]
-    .sort((a, b) => (Number(b.totalSpent) || 0) - (Number(a.totalSpent) || 0))
+    .map((c) => ({
+      ...c,
+      dashboardSpent: customerSpentForDashboard(c, invoices),
+    }))
+    .sort((a, b) => b.dashboardSpent - a.dashboardSpent)
     .slice(0, 5)
 
   const koiAvailable = koiFishList.filter((k) => k.status === KOI_STATUS.AVAILABLE).length
@@ -128,8 +134,14 @@ export function computeDashboardMetrics({
       label: 'Monthly Expenses',
       value: monthlyExpenses > 0
         ? formatSGD(monthlyExpenses)
-        : `${monthlyExpenseReceipts.length} receipts`,
-      subtitle: monthlyExpenses > 0 ? 'Legacy amounts' : 'Receipt count this month',
+        : `${monthlyExpenseReceipts.length} receipt${monthlyExpenseReceipts.length === 1 ? '' : 's'}`,
+      subtitle: monthlyExpenses > 0
+        ? (monthlyReceiptsMissingAmount > 0
+          ? `${monthlyReceiptsMissingAmount} receipt(s) need amounts`
+          : 'This month')
+        : (monthlyExpenseReceipts.length > 0
+          ? 'Add amounts in Expenses'
+          : 'No receipts this month'),
       tab: 'expenses',
     }] : []),
   ]
@@ -142,6 +154,7 @@ export function computeDashboardMetrics({
     pendingRevenue,
     monthlyExpenses,
     monthlyExpenseReceiptCount: monthlyExpenseReceipts.length,
+    monthlyReceiptsMissingAmount,
     lowStock,
     todayEvents,
     scheduledDeliveries,

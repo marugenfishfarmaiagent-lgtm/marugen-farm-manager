@@ -1,4 +1,5 @@
 import { today, getInvoiceStatus } from '../data/constants'
+import { isStockTracked } from './productCatalog'
 import { touchUpdatedAt } from './syncMeta'
 
 /** Numeric id for stock_activity (Postgres BIGINT). */
@@ -86,6 +87,13 @@ export function isProductOnActiveInvoice(productId, invoices = []) {
     if (getInvoiceStatus(inv) === 'cancelled') return false
     return (inv.items || []).some((it) => sameProductId(it.productId ?? it.product_id, productId))
   })
+}
+
+/** Products at or below minimum stock (tracked inventory only). */
+export function getLowStockProducts(products = []) {
+  return products.filter(
+    (p) => isStockTracked(p) && Number(p.minStock) > 0 && Number(p.stock) <= Number(p.minStock),
+  )
 }
 
 export function adjustProductStockInList(products, productId, delta) {

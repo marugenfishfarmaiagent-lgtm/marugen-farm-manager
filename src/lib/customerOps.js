@@ -1,10 +1,39 @@
 import { calcCustomerTier, FISH_TYPES, genId, getInvoiceStatus } from '../data/constants'
+import { calcInvoiceAmounts } from './invoiceDesign'
 import { formatCustomerAddress, normalizeWhatsAppNumber } from './invoiceWhatsApp'
 import { touchUpdatedAt } from './syncMeta'
 
 export function sameCustomerId(a, b) {
   if (a == null || b == null || a === '' || b === '') return false
   return String(a) === String(b)
+}
+
+/** Sum paid invoice totals linked to a customer (source of truth for dashboard ranking). */
+export function customerSpentFromInvoices(customer, invoices = []) {
+  return (invoices || [])
+    .filter((inv) => getInvoiceStatus(inv) === 'paid' && sameCustomerId(inv.customerId, customer?.id))
+    .reduce((sum, inv) => sum + calcInvoiceAmounts(inv).total, 0)
+}
+
+/**
+ * Dashboard display spend: prefer paid-invoice totals when present, else stored totalSpent.
+ */
+export function customerSpentForDashboard(customer, invoices = []) {
+  const fromInvoices = customerSpentFromInvoices(customer, invoices)
+  if (fromInvoices > 0) return fromInvoices
+  return Number(customer?.totalSpent) || 0
+}
+
+/** Apply paid-invoice total to a registered customer's totalSpent + tier. */
+export function applyCustomerPaidDelta(customers, customerId, paidTotal) {
+  if (customerId == null || customerId === '') return customers
+  const delta = Number(paidTotal) || 0
+  if (delta <= 0) return customers
+  return customers.map((c) => {
+    if (!sameCustomerId(c.id, customerId)) return c
+    const totalSpent = (Number(c.totalSpent) || 0) + delta
+    return touchUpdatedAt({ ...c, totalSpent, tier: calcCustomerTier(totalSpent) })
+  })
 }
 
 export function normalizeCustomerPhone(value) {

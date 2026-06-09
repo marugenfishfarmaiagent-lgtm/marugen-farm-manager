@@ -11,7 +11,7 @@ import {
 } from "./lib/cloudData";
 import { deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem, validateStockForItems } from "./lib/inventoryStock";
 import {
-  adjustProductStockInList, buildStockLogEntry, isProductOnActiveInvoice,
+  adjustProductStockInList, buildStockLogEntry, getLowStockProducts, isProductOnActiveInvoice,
   normalizeProductRecord, parseStockQty, sameProductId, validateProductFields,
 } from "./lib/inventoryOps";
 import { isStockTracked, priceListProducts, stockProducts } from "./lib/productCatalog";
@@ -67,7 +67,7 @@ import { mergeRecords, mergePondData, mergeInvoices } from "./lib/cloudMerge";
 import { applyInvoicePins, pinInvoice, unpinInvoice } from "./lib/invoicePins";
 import { touchUpdatedAt } from "./lib/syncMeta";
 import {
-  buildNewCustomerRecord, buildUpdatedCustomerRecord, getCustomerDeleteWarnings,
+  applyCustomerPaidDelta, buildNewCustomerRecord, buildUpdatedCustomerRecord, getCustomerDeleteWarnings,
   isDuplicateCustomerName, propagateCustomerProfileChange, sameCustomerId,
 } from "./lib/customerOps";
 import {
@@ -526,32 +526,23 @@ function LoginScreen({ onLogin, users, cloudMode }) {
   );
 }
 
-/** Apply paid-invoice total to a registered customer's totalSpent + tier (local-only path). */
-function applyCustomerPaidDelta(customers, customerId, paidTotal) {
-  if (customerId == null || customerId === "") return customers;
-  const delta = Number(paidTotal) || 0;
-  if (delta <= 0) return customers;
-  return customers.map((c) => {
-    if (String(c.id) !== String(customerId)) return c;
-    const totalSpent = (Number(c.totalSpent) || 0) + delta;
-    return touchUpdatedAt({ ...c, totalSpent, tier: calcCustomerTier(totalSpent) });
-  });
-}
-
-function Dashboard({ invoices, expenses, customers, products, events, deliveries, koiFishList, customerKoiList, currentUser, onNavigate }) {
+function Dashboard({
+  invoices, expenses, customers, products, events, deliveries, koiFishList, customerKoiList,
+  currentUser, onNavigate, onOpenInvoice, cloudStale,
+}) {
   const can = useCallback((perm) => hasPermission(currentUser, perm), [currentUser]);
   const go = useCallback((tab) => { if (hasPermission(currentUser, tab)) onNavigate?.(tab); }, [currentUser, onNavigate]);
 
   const metrics = useMemo(
     () => computeDashboardMetrics({
-      invoices,
-      expenses,
-      customers,
-      products,
-      events,
-      deliveries,
-      koiFishList,
-      customerKoiList,
+      invoices: can("invoices") ? invoices : [],
+      expenses: can("expenses") ? expenses : [],
+      customers: can("customers") ? customers : [],
+      products: can("inventory") ? products : [],
+      events: can("calendar") ? events : [],
+      deliveries: can("deliveries") ? deliveries : [],
+      koiFishList: can("koifish") ? koiFishList : [],
+      customerKoiList: can("customerkoi") ? customerKoiList : [],
       can,
     }),
     [invoices, expenses, customers, products, events, deliveries, koiFishList, customerKoiList, can],
@@ -587,6 +578,12 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
     <button type="button" onClick={() => go(tab)} className="text-xs text-cyan-400 hover:text-cyan-300 font-semibold touch-manipulation">{label}</button>
   ) : null;
 
+  const openInvoice = (invoiceId) => {
+    if (!can("invoices") || !invoiceId) return;
+    if (onOpenInvoice) onOpenInvoice(invoiceId);
+    else go("invoices");
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
@@ -596,6 +593,14 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
         </div>
         <p className="text-xs text-slate-500 shrink-0">{displayDate}</p>
       </div>
+      {cloudStale && (
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 flex items-start gap-2">
+          <AlertTriangle size={16} className="text-amber-400 shrink-0 mt-0.5" />
+          <p className="text-amber-100 text-xs leading-relaxed">
+            Cloud sync paused — figures reflect this device only until sync resumes.
+          </p>
+        </div>
+      )}
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
         {kpiCards.length === 0 ? (
           <Card className="p-4 col-span-2 lg:col-span-3 border-slate-700/50">
@@ -676,7 +681,7 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
               {recentInvoices.length === 0 ? (
                 <EmptyState emoji="🧾" title="No invoices yet" hint="Create your first invoice" className="py-8" />
               ) : recentInvoices.map((inv) => (
-                <button key={inv.id} type="button" onClick={() => go("invoices")} className="w-full flex items-center justify-between text-sm py-1.5 border-b border-slate-700/40 last:border-0 hover:bg-slate-700/20 rounded-lg px-1 -mx-1 touch-manipulation text-left">
+                <button key={inv.id} type="button" onClick={() => openInvoice(inv.id)} className="w-full flex items-center justify-between text-sm py-1.5 border-b border-slate-700/40 last:border-0 hover:bg-slate-700/20 rounded-lg px-1 -mx-1 touch-manipulation text-left">
                   <div className="min-w-0">
                     <p className="text-white font-medium truncate">{inv.customerName}</p>
                     <p className="text-slate-500 text-xs font-mono">{inv.id} · {inv.date || "—"}</p>
@@ -760,7 +765,7 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
                   <button key={c.id} type="button" onClick={() => go("customers")} className="w-full text-left bg-slate-800 rounded-lg p-3 border border-slate-700 touch-manipulation">
                     <div className="flex justify-between gap-2">
                       <span className="font-medium text-white truncate">{c.name}</span>
-                      <span className="text-emerald-400 font-bold shrink-0">{formatSGD(c.totalSpent)}</span>
+                      <span className="text-emerald-400 font-bold shrink-0">{formatSGD(c.dashboardSpent ?? c.totalSpent)}</span>
                     </div>
                     <p className="text-slate-500 text-xs mt-1">{c.area || "—"} · {c.tier || "Bronze"}</p>
                   </button>
@@ -778,7 +783,7 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
                         <td className="py-2 text-slate-400">{c.area || "—"}</td>
                         <td className="py-2"><div className="flex flex-wrap gap-1">{(c.fishTypes || []).slice(0, 2).map((f) => <Badge key={f} className="bg-slate-700 text-slate-300">{f}</Badge>)}</div></td>
                         <td className="py-2"><span className={`font-bold ${tierColor[c.tier] || "text-slate-300"}`}>{c.tier || "—"}</span></td>
-                        <td className="py-2 text-right font-bold text-emerald-400">{formatSGD(c.totalSpent)}</td>
+                        <td className="py-2 text-right font-bold text-emerald-400">{formatSGD(c.dashboardSpent ?? c.totalSpent)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1320,7 +1325,8 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
 function InvoiceModule({
   invoices, setInvoices, setCustomers, setProducts, setStockLog, customers, products,
   koiFishList, setKoiFishList, onKoiSold, setCustomerKoiList,
-  addNotification, currentUser, openDraft, onDraftApplied, onMarkInvoicePaid, onCancelInvoiceCloud, onCreateInvoiceCloud, onInventorySideEffect,
+  addNotification, currentUser, openDraft, onDraftApplied, openViewId, onViewOpened,
+  onMarkInvoicePaid, onCancelInvoiceCloud, onCreateInvoiceCloud, onInventorySideEffect,
 }) {
   const emptyItem = () => ({ name: "", qty: 1, price: "", productId: "", manual: true });
   const buildFormFromDraft = (draft) => ({
@@ -1363,6 +1369,18 @@ function InvoiceModule({
     setFormError("");
     onDraftApplied?.();
   }, [openDraft, onDraftApplied]);
+
+  useEffect(() => {
+    if (!openViewId) return;
+    const inv = invoices.find((i) => String(i.id) === String(openViewId));
+    if (inv) {
+      setViewInv(inv);
+      setHighlightInvId(inv.id);
+      setShowNew(false);
+      setFormError("");
+    }
+    onViewOpened?.();
+  }, [openViewId, invoices, onViewOpened]);
 
   const filtered = useMemo(() => sortInvoices(invoices.filter((i) => {
     if (!showOlderInvoices && !isAppVisibleInvoice(i)) return false;
@@ -5367,6 +5385,7 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const toastTimers = useRef(new Map());
   const [invoiceOpenDraft, setInvoiceOpenDraft] = useState(null);
+  const [invoiceViewRequest, setInvoiceViewRequest] = useState(null);
   const [invoiceDraftSignal, setInvoiceDraftSignal] = useState(0);
 
   const dismissToast = useCallback((id) => {
@@ -6169,9 +6188,15 @@ export default function App() {
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
+  const handleOpenInvoiceFromDashboard = useCallback((invoiceId) => {
+    if (!invoiceId) return;
+    setInvoiceViewRequest({ id: String(invoiceId) });
+    setActiveTab("invoices");
+  }, []);
+
   useEffect(() => {
     if (!currentUser || !hasPermission(currentUser, "inventory")) return;
-    const lowStock = products.filter((p) => isStockTracked(p) && p.minStock > 0 && p.stock <= p.minStock);
+    const lowStock = getLowStockProducts(products);
     if (lowStock.length > 0 && !lowStockNotified.current) {
       lowStockNotified.current = true;
       addNotification({
@@ -6350,13 +6375,20 @@ export default function App() {
 
   const renderModule = () => {
     const props = { customers, invoices, expenses, products, deliveries, events, koiFishList, customerKoiList, currentUser, addNotification, onNavigate: goToTab };
+    const dashboardCloudStale = isSupabaseConfigured && Boolean(cloudError);
     switch (effectiveTab) {
-      case "dashboard": return guard("dashboard", "Dashboard", <Dashboard {...props} />);
+      case "dashboard": return guard("dashboard", "Dashboard", (
+        <Dashboard
+          {...props}
+          onOpenInvoice={handleOpenInvoiceFromDashboard}
+          cloudStale={dashboardCloudStale}
+        />
+      ));
       case "inventory": return guard("inventory", "Inventory", <InventoryModule products={products} setProducts={setProducts} stockLog={stockLog} setStockLog={setStockLog} invoices={invoices} addNotification={addNotification} currentUser={currentUser} />);
       case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} />);
       case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondData} addNotification={addNotification} currentUser={currentUser} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} />);
-      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} />);
+      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} openViewId={invoiceViewRequest?.id} onViewOpened={() => setInvoiceViewRequest(null)} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} />);
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} invoices={invoices} setInvoices={setInvoices} deliveries={deliveries} setDeliveries={setDeliveries} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpenses} addNotification={addNotification} currentUser={currentUser} />);
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} />);

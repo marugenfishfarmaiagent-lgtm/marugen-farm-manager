@@ -1,6 +1,29 @@
-import { DELIVERY_STATUS, SG_AREAS, genId, getInvoiceStatus } from '../data/constants'
+import { DELIVERY_STATUS, SG_AREAS, genId, getInvoiceStatus, today } from '../data/constants'
 import { sameCustomerId, validateSingaporePostal } from './customerOps'
 import { touchUpdatedAt } from './syncMeta'
+
+const APP_TIMEZONE = 'Asia/Singapore'
+
+/** Normalize delivery schedule to YYYY-MM-DD (Singapore) for date comparisons. */
+export function deliveryScheduleDatePart(schedule) {
+  const raw = String(schedule ?? '').trim()
+  if (!raw) return ''
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10)
+  const parsed = new Date(raw)
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toLocaleDateString('en-CA', { timeZone: APP_TIMEZONE })
+  }
+  return ''
+}
+
+export function isDeliveryScheduledOnDate(schedule, dateStr = today()) {
+  const day = deliveryScheduleDatePart(schedule)
+  return Boolean(day && day === dateStr)
+}
+
+export function countDeliveriesOnDate(deliveries = [], dateStr = today()) {
+  return deliveries.filter((d) => isDeliveryScheduledOnDate(d.schedule, dateStr)).length
+}
 
 const DELIVERY_STATUSES = new Set([
   DELIVERY_STATUS.PENDING,
