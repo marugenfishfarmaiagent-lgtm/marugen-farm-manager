@@ -3,7 +3,7 @@ import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
 import { normalizeCustomerKoiRecord } from '../data/constants'
 import { emptyPondData } from './cloudData'
 import { normalizeImageFieldForSync, storagePaths } from './farmImage'
-import { consumeDeletions } from './syncDeletions'
+import { confirmDeletions, peekDeletions } from './syncDeletions'
 import { touchPondData, withUpdatedAt } from './syncMeta'
 
 function mapUser(row) {
@@ -230,14 +230,16 @@ async function apiCall(body) {
 }
 
 async function syncCall(entity, data, { prune = false } = {}) {
+  const deletedIds = peekDeletions(entity)
   const payload = stampOutgoing(data)
   await apiCall({
     action: 'sync',
     entity,
     data: payload,
-    deletedIds: consumeDeletions(entity),
+    deletedIds,
     prune,
   })
+  if (deletedIds.length) confirmDeletions(entity, deletedIds)
 }
 
 function stampOutgoing(data) {

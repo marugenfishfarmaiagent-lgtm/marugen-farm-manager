@@ -40,7 +40,8 @@ import {
 } from "./lib/retention";
 import { isSupabaseConfigured } from "./lib/supabase";
 import * as auth from "./lib/auth";
-import { markDeleted, clearAllDeletions } from "./lib/syncDeletions";
+import { markDeleted, clearAllDeletions, peekDeletions } from "./lib/syncDeletions";
+import { mergeRecords, mergePondData } from "./lib/cloudMerge";
 import { touchUpdatedAt } from "./lib/syncMeta";
 import {
   FISH_TYPES, PRODUCT_CATEGORIES,
@@ -4706,8 +4707,13 @@ export default function App() {
   const [cloudSync, setCloudSync] = useState(isSupabaseConfigured);
   const [cloudError, setCloudError] = useState(null);
   const [cloudRetrying, setCloudRetrying] = useState(false);
+  const [cloudPulling, setCloudPulling] = useState(false);
   const lowStockNotified = useRef(false);
   const lastSyncWarnRef = useRef(0);
+  const lastCloudPullAt = useRef(0);
+  const syncTimersRef = useRef({});
+  const syncInFlightRef = useRef(0);
+  const syncStateRef = useRef({});
 
   const [users, setUsers] = useState(isSupabaseConfigured ? [] : LOCAL_DEMO_USERS);
   const [customers, setCustomers] = useState(INITIAL_CUSTOMERS);
@@ -4785,7 +4791,7 @@ export default function App() {
   useEffect(() => { if (!isSupabaseConfigured) saveProducts(products) }, [products]);
   useEffect(() => { if (!isSupabaseConfigured) saveStockLog(stockLog) }, [stockLog]);
 
-  const applyCloudData = useCallback((data) => {
+  const applyCloudData = useCallback((data, { mode = "replace" } = {}) => {
     if (!data) return;
 
     const koi = resolveCloudKoiPayload(data);
@@ -4805,18 +4811,33 @@ export default function App() {
       whatsappGroups: whatsapp.groups,
     });
 
+    const merge = mode === "merge";
     setUsers(cleaned.users || data.users);
-    setCustomers(cleaned.customers);
-    setProducts(cleaned.products);
-    setInvoices(cleaned.invoices);
-    setExpenses(cleaned.expenses);
-    setDeliveries(cleaned.deliveries);
-    setEvents(cleaned.events);
-    setStockLog(cleaned.stockLog);
-    setKoiFishList(cleaned.koiFishList);
-    setCustomerKoiList(cleaned.customerKoiList);
-    setPondData(cleaned.pondData);
-    setWhatsappGroups(cleaned.whatsappGroups || whatsapp.groups);
+    if (merge) {
+      setCustomers((prev) => mergeRecords(prev, cleaned.customers, peekDeletions("customers")));
+      setProducts((prev) => mergeRecords(prev, cleaned.products, peekDeletions("products")));
+      setInvoices((prev) => mergeRecords(prev, cleaned.invoices, peekDeletions("invoices")));
+      setExpenses((prev) => mergeRecords(prev, cleaned.expenses, peekDeletions("expenses")));
+      setDeliveries((prev) => mergeRecords(prev, cleaned.deliveries, peekDeletions("deliveries")));
+      setEvents((prev) => mergeRecords(prev, cleaned.events, peekDeletions("events")));
+      setStockLog((prev) => mergeRecords(prev, cleaned.stockLog, peekDeletions("stock_activity")));
+      setKoiFishList((prev) => mergeRecords(prev, cleaned.koiFishList, peekDeletions("koi_fish")));
+      setCustomerKoiList((prev) => mergeRecords(prev, cleaned.customerKoiList, peekDeletions("customer_koi")));
+      setPondData((prev) => mergePondData(prev, cleaned.pondData));
+      setWhatsappGroups((prev) => mergeRecords(prev, cleaned.whatsappGroups || whatsapp.groups, peekDeletions("whatsapp_groups")));
+    } else {
+      setCustomers(cleaned.customers);
+      setProducts(cleaned.products);
+      setInvoices(cleaned.invoices);
+      setExpenses(cleaned.expenses);
+      setDeliveries(cleaned.deliveries);
+      setEvents(cleaned.events);
+      setStockLog(cleaned.stockLog);
+      setKoiFishList(cleaned.koiFishList);
+      setCustomerKoiList(cleaned.customerKoiList);
+      setPondData(cleaned.pondData);
+      setWhatsappGroups(cleaned.whatsappGroups || whatsapp.groups);
+    }
 
     if (koi.migratedFromLocal || whatsapp.migratedFromLocal) {
       clearLocalOnlyStorage();
@@ -4908,10 +4929,41 @@ export default function App() {
     }
   }, [warnCloudSaveFailed, resetCloudBusinessState]);
 
+  const syncState = useMemo(() => ({
+    customers, products, invoices, expenses, deliveries, events, stockLog,
+    koiFishList, customerKoiList, pondData, whatsappGroups,
+  }), [customers, products, invoices, expenses, deliveries, events, stockLog, koiFishList, customerKoiList, pondData, whatsappGroups]);
+
+  useEffect(() => {
+    syncStateRef.current = syncState;
+  }, [syncState]);
+
+  const flushPendingCloudSync = useCallback(async () => {
+    if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
+    Object.values(syncTimersRef.current).forEach((t) => clearTimeout(t));
+    syncTimersRef.current = {};
+    const tasks = SYNC_ENTITIES.filter((e) => hasPermission(currentUser, e.perm));
+    if (!tasks.length) return;
+    syncInFlightRef.current += 1;
+    try {
+      await Promise.all(tasks.map((e) => e.sync(syncStateRef.current[e.key])));
+      setCloudSync(true);
+      setCloudError(null);
+    } catch (err) {
+      handleSyncFailure(err);
+    } finally {
+      syncInFlightRef.current -= 1;
+    }
+  }, [cloudHydrated, currentUser, handleSyncFailure]);
+
   const syncDebounced = useCallback((perm, label, fn, data) => {
     if (!dataReady || !cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
     if (!hasPermission(currentUser, perm)) return;
-    const timer = setTimeout(() => {
+    const key = `${perm}:${label}`;
+    if (syncTimersRef.current[key]) clearTimeout(syncTimersRef.current[key]);
+    syncTimersRef.current[key] = setTimeout(() => {
+      delete syncTimersRef.current[key];
+      syncInFlightRef.current += 1;
       fn(data)
         .then(() => {
           setCloudSync(true);
@@ -4920,15 +4972,16 @@ export default function App() {
         .catch((err) => {
           const msg = err?.message || "Sync failed";
           handleSyncFailure(new Error(`${label}: ${msg}`));
+        })
+        .finally(() => {
+          syncInFlightRef.current -= 1;
         });
     }, 800);
-    return () => clearTimeout(timer);
+    return () => {
+      if (syncTimersRef.current[key]) clearTimeout(syncTimersRef.current[key]);
+      delete syncTimersRef.current[key];
+    };
   }, [dataReady, cloudHydrated, currentUser, handleSyncFailure]);
-
-  const syncState = useMemo(() => ({
-    customers, products, invoices, expenses, deliveries, events, stockLog,
-    koiFishList, customerKoiList, pondData, whatsappGroups,
-  }), [customers, products, invoices, expenses, deliveries, events, stockLog, koiFishList, customerKoiList, pondData, whatsappGroups]);
 
   const retryCloudSync = useCallback(async () => {
     if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser || !cloudHydrated) return;
@@ -4936,7 +4989,7 @@ export default function App() {
     try {
       const tasks = SYNC_ENTITIES.filter((e) => hasPermission(currentUser, e.perm));
       const results = await Promise.allSettled(
-        tasks.map((e) => e.sync(syncState[e.key], { prune: true })),
+        tasks.map((e) => e.sync(syncState[e.key])),
       );
       const failed = results
         .map((r, i) => (r.status === "rejected" ? tasks[i].label : null))
@@ -4966,6 +5019,63 @@ export default function App() {
   }, [
     currentUser, cloudHydrated, syncState, handleSyncFailure, dismissToast, showProminentToast,
   ]);
+
+  const refreshFromCloud = useCallback(async ({ force = false, quiet = false } = {}) => {
+    if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
+    const now = Date.now();
+    if (!force && now - lastCloudPullAt.current < 15_000) return;
+    setCloudPulling(true);
+    try {
+      let waited = 0;
+      while (syncInFlightRef.current > 0 && waited < 3000) {
+        await new Promise((r) => setTimeout(r, 200));
+        waited += 200;
+      }
+      if (syncInFlightRef.current > 0) return;
+
+      if (Object.keys(syncTimersRef.current).length > 0) {
+        await flushPendingCloudSync();
+      }
+
+      const data = await db.fetchAllData();
+      lastCloudPullAt.current = Date.now();
+      applyCloudData(data, { mode: cloudHydrated ? "merge" : "replace" });
+      setCloudSync(true);
+      setCloudError(null);
+      dismissToast("cloud-sync-warn");
+      if (!quiet) {
+        showProminentToast({
+          id: "cloud-pull-ok",
+          type: "success",
+          title: "Loaded from cloud",
+          message: `${(data.products || []).length} products · ${(data.customers || []).length} customers synced to this device.`,
+          duration: 4000,
+        });
+      }
+    } catch (err) {
+      handleSyncFailure(err);
+    } finally {
+      setCloudPulling(false);
+    }
+  }, [currentUser, cloudHydrated, applyCloudData, handleSyncFailure, dismissToast, showProminentToast, flushPendingCloudSync]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !currentUser) return;
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        refreshFromCloud({ quiet: true });
+      } else if (document.visibilityState === "hidden") {
+        flushPendingCloudSync();
+      }
+    };
+    const onOnline = () => refreshFromCloud({ quiet: true });
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("online", onOnline);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("online", onOnline);
+    };
+  }, [currentUser, refreshFromCloud, flushPendingCloudSync]);
 
   useEffect(() => syncDebounced("customers", "Customers", db.syncCustomers, customers), [customers, syncDebounced]);
   useEffect(() => syncDebounced("inventory", "Inventory", db.syncProducts, products), [products, syncDebounced]);
@@ -5177,9 +5287,9 @@ export default function App() {
         displayName: role === "owner" ? `🐟 ${name}` : `👤 ${name}`,
       };
       const session = auth.getSession();
-      if (session?.token && session.user) {
+      if (session?.user) {
         auth.setSession({
-          token: session.token,
+          ...(session.token ? { token: session.token } : {}),
           user: {
             ...session.user,
             name: next.name,
@@ -5309,13 +5419,25 @@ export default function App() {
             <Menu size={20} />
           </button>
 
-          <div className="min-w-0 flex-1 lg:flex-none">
+          <div className="min-w-0 flex-1 lg:flex-none flex items-center gap-2">
             <p className="text-white text-sm font-bold truncate lg:hidden">{activeNav?.label || "Marugen"}</p>
             {cloudSync && !cloudError && (
-              <Badge className="bg-emerald-500/20 text-emerald-300 text-[10px] sm:text-xs">☁️ Supabase</Badge>
+              <Badge className="bg-emerald-500/20 text-emerald-300 text-[10px] sm:text-xs shrink-0">☁️ Supabase</Badge>
             )}
             {cloudError && (
-              <Badge className="bg-amber-500/25 text-amber-200 text-[10px] sm:text-xs animate-pulse" title={cloudError}>⚠️ Local mode</Badge>
+              <Badge className="bg-amber-500/25 text-amber-200 text-[10px] sm:text-xs animate-pulse shrink-0" title={cloudError}>⚠️ Local mode</Badge>
+            )}
+            {isSupabaseConfigured && currentUser && (
+              <button
+                type="button"
+                onClick={() => refreshFromCloud({ force: true })}
+                disabled={cloudPulling}
+                title="Load latest data from cloud (use after changes on another device)"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-400 hover:bg-slate-800 transition-colors touch-manipulation disabled:opacity-40 shrink-0"
+                aria-label="Refresh from cloud"
+              >
+                <RefreshCw size={16} className={cloudPulling ? "animate-spin" : ""} />
+              </button>
             )}
           </div>
 

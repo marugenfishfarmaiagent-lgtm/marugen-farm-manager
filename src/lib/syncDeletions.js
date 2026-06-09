@@ -16,11 +16,20 @@ export function markDeleted(entity, id) {
   pending[entity]?.add(String(id))
 }
 
-export function consumeDeletions(entity) {
+export function peekDeletions(entity) {
   const set = pending[entity]
-  if (!set?.size) return []
-  const ids = [...set]
-  set.clear()
+  return set?.size ? [...set] : []
+}
+
+export function confirmDeletions(entity, ids) {
+  const set = pending[entity]
+  if (!set?.size || !ids?.length) return
+  for (const id of ids) set.delete(String(id))
+}
+
+export function consumeDeletions(entity) {
+  const ids = peekDeletions(entity)
+  if (ids.length) confirmDeletions(entity, ids)
   return ids
 }
 
