@@ -743,9 +743,20 @@ Deno.serve(async (req) => {
           items: d.items ?? "", driver: d.driver ?? "", notes: d.notes ?? "", created_by: d.createdBy ?? "",
         }, d)), "id", syncOpts);
       } else if (entity === "events") {
-        await upsertSync("events", (data || []).map((e: Record<string, unknown>) => withTs({
-          id: e.id, title: e.title, date: e.date, time: e.time, type: e.type, note: e.note,
-          created_by: e.createdBy ?? "",
+        const incoming = (data || []) as Record<string, unknown>[];
+        const EVENT_TYPES = new Set(["maintenance", "feeding", "purchase", "customer", "other"]);
+        for (const e of incoming) {
+          if (e.id == null || String(e.id).trim() === "") {
+            return J({ error: "Event id is required" }, 400);
+          }
+          if (!String(e.title ?? "").trim()) return J({ error: "Event title is required" }, 400);
+          if (!String(e.date ?? "").trim()) return J({ error: "Event date is required" }, 400);
+          const type = String(e.type ?? "other");
+          if (!EVENT_TYPES.has(type)) return J({ error: `Invalid event type: ${e.type}` }, 400);
+        }
+        await upsertSync("events", incoming.map((e: Record<string, unknown>) => withTs({
+          id: e.id, title: e.title, date: e.date, time: e.time ?? "09:00", type: e.type ?? "other",
+          note: e.note ?? "", created_by: e.createdBy ?? "",
         }, e)), "id", syncOpts);
       } else if (entity === "stock_activity") {
         const incoming = (data || []) as Record<string, unknown>[];

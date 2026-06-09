@@ -9,6 +9,7 @@ import {
 import { calcInvoiceAmounts } from './invoiceDesign'
 import { isStockTracked } from './productCatalog'
 import { isAppVisibleInvoice } from './retention'
+import { filterTodayEvents } from './calendarOps'
 
 /**
  * Pure dashboard KPI + widget metrics (shared by Dashboard UI and tests).
@@ -74,9 +75,7 @@ export function computeDashboardMetrics({
     (p) => isStockTracked(p) && p.minStock > 0 && p.stock <= p.minStock,
   )
 
-  const todayEvents = events
-    .filter((e) => e.date === todayStr)
-    .sort((a, b) => `${a.time || ''}`.localeCompare(`${b.time || ''}`))
+  const todayEvents = filterTodayEvents(events, todayStr)
 
   const scheduledDeliveries = deliveries.filter((d) => d.status === 'scheduled').length
   const todayDeliveries = deliveries.filter((d) => (d.schedule || '').startsWith(todayStr)).length

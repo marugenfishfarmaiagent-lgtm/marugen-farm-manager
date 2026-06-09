@@ -4,6 +4,7 @@ import { normalizeCustomerKoiRecord } from '../data/constants'
 import { normalizeCustomerRecord } from './customerOps'
 import { normalizeExpenseRecord } from './expenseOps'
 import { normalizeDeliveryRecord } from './deliveryOps'
+import { normalizeEventRecord } from './calendarOps'
 import { emptyPondData } from './cloudData'
 import { normalizeImageFieldForSync, storagePaths } from './farmImage'
 import { confirmDeletions, peekDeletions } from './syncDeletions'
@@ -181,15 +182,15 @@ function mapDelivery(row) {
 }
 
 function mapEvent(row) {
-  return withUpdatedAt({
+  return withUpdatedAt(normalizeEventRecord({
     id: row.id,
-    title: row.title,
-    date: row.date,
-    time: row.time,
-    type: row.type,
-    note: row.note || '',
+    title: row.title ?? '',
+    date: row.date ?? '',
+    time: row.time ?? '09:00',
+    type: row.type ?? 'other',
+    note: row.note ?? '',
     createdBy: row.created_by ?? row.createdBy ?? '',
-  })
+  }))
 }
 
 function mapStockLog(row) {
@@ -465,7 +466,8 @@ export async function syncDeliveries(deliveries, options) {
 
 export async function syncEvents(events, options) {
   if (!isSupabaseConfigured) return
-  await syncCall('events', events, options)
+  const payload = (events || []).map((e) => normalizeEventRecord(e))
+  await syncCall('events', payload, options)
 }
 
 export async function syncStockActivity(logs, options) {

@@ -66,6 +66,10 @@ import {
   resolveDeliveryArea, sameDeliveryId,
 } from "./lib/deliveryOps";
 import {
+  buildNewEventRecord, buildUpdatedEventRecord, EVENT_TYPE_OPTIONS,
+  sameEventId, sortEventsBySchedule,
+} from "./lib/calendarOps";
+import {
   FISH_TYPES, PRODUCT_CATEGORIES, LIST_PAGE_SIZE,
   CUSTOMER_TIERS, ALL_PERMISSIONS, DEFAULT_PERMISSIONS, SG_AREAS,
   formatSGD, formatInvoiceDate, today, genId, genInvoiceId, getInvoiceStatus, calcCustomerTier, KOI_STATUS, CUSTOMER_KOI_STATUS,
@@ -3963,14 +3967,6 @@ function DeliveryModule({
 // ─────────────────────────────────────────────
 // CALENDAR MODULE
 // ─────────────────────────────────────────────
-const EVENT_TYPE_OPTIONS = [
-  { value: "maintenance", label: "Maintenance" },
-  { value: "feeding", label: "Feeding" },
-  { value: "purchase", label: "Purchase" },
-  { value: "customer", label: "Customer visit" },
-  { value: "other", label: "Other" },
-];
-
 function CalendarModule({ events, setEvents, addNotification, currentUser }) {
   const emptyEventForm = () => ({ title: "", date: today(), time: "09:00", type: "other", note: "" });
   const eventToForm = (e) => ({
@@ -3985,6 +3981,7 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
   const [editEventId, setEditEventId] = useState(null);
   const [form, setForm] = useState(emptyEventForm());
   const [showAllPast, setShowAllPast] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
 
   if (!hasPermission(currentUser, "calendar")) return <AccessDenied moduleName="Calendar" />;
 
@@ -4001,6 +3998,10 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
   };
 
   const openAddEvent = () => {
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
     setEditEventId(null);
     setForm(emptyEventForm());
     setShowAdd(true);
@@ -4017,57 +4018,65 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
   };
 
   const saveEvent = () => {
-    const title = form.title?.trim();
-    const date = form.date?.trim();
-    if (!title) {
-      addNotification({ type: "error", title: "Title Required", message: "Enter an event title." });
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
       return;
     }
-    if (!date) {
-      addNotification({ type: "error", title: "Date Required", message: "Choose an event date." });
-      return;
-    }
-    const payload = {
-      title,
-      date,
-      time: form.time || "09:00",
-      type: form.type || "other",
-      note: form.note?.trim() || "",
-    };
-
     if (isEditing) {
-      if (!canEdit) {
-        notifyPermissionDenied(addNotification, "edit");
+      const existing = events.find((e) => sameEventId(e.id, editEventId));
+      if (!existing) {
+        addNotification({ type: "error", title: "Not Found", message: "Event no longer exists." });
+        closeEventForm();
+        return;
+      }
+      const built = buildUpdatedEventRecord(form, existing);
+      if (!built.ok) {
+        addNotification({ type: "error", title: "Cannot Save Event", message: built.message });
         return;
       }
       setEvents((prev) => prev.map((e) => (
-        String(e.id) === String(editEventId)
-          ? touchUpdatedAt({ ...e, ...payload, createdBy: e.createdBy || currentUser?.name || "Staff" })
-          : e
+        sameEventId(e.id, editEventId) ? built.event : e
       )));
-      addNotification({ type: "success", title: "Event Updated", message: `"${title}" saved.` });
+      addNotification({ type: "success", title: "Event Updated", message: `"${built.event.title}" saved.` });
     } else {
-      const ev = touchUpdatedAt({ ...payload, id: Date.now(), createdBy: currentUser?.name || "Staff" });
-      setEvents((prev) => [...prev, ev]);
-      addNotification({ type: "info", title: "Event Added", message: `${ev.title} on ${ev.date}` });
+      const built = buildNewEventRecord(form, {
+        createdBy: currentUser?.name || "Staff",
+        existingEvents: events,
+      });
+      if (!built.ok) {
+        addNotification({ type: "error", title: "Cannot Add Event", message: built.message });
+        return;
+      }
+      setEvents((prev) => [...prev, built.event]);
+      addNotification({ type: "info", title: "Event Added", message: `${built.event.title} on ${built.event.date}` });
     }
     closeEventForm();
   };
 
-  const deleteEvent = (e) => {
+  const requestDeleteEvent = (e) => {
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
       return;
     }
-    const label = e.title || "this event";
-    if (!confirm(`Delete "${label}" on ${e.date}? This cannot be undone.`)) return;
-    setEvents((prev) => prev.filter((x) => String(x.id) !== String(e.id)));
-    markDeleted("events", e.id);
-    if (String(editEventId) === String(e.id)) closeEventForm();
-    addNotification({ type: "info", title: "Event Deleted", message: `"${label}" removed.` });
+    setDeleteConfirm(e);
   };
 
-  const sorted = [...events].sort((a, b) => `${a.date}${a.time || ""}`.localeCompare(`${b.date}${b.time || ""}`));
+  const confirmDeleteEvent = () => {
+    if (!deleteConfirm) return;
+    if (!canDelete) {
+      notifyPermissionDenied(addNotification, "delete");
+      return;
+    }
+    const e = deleteConfirm;
+    const label = e.title || "this event";
+    setEvents((prev) => prev.filter((x) => !sameEventId(x.id, e.id)));
+    markDeleted("events", e.id);
+    if (sameEventId(editEventId, e.id)) closeEventForm();
+    addNotification({ type: "info", title: "Event Deleted", message: `"${label}" removed.` });
+    setDeleteConfirm(null);
+  };
+
+  const sorted = sortEventsBySchedule(events);
   const todayStr = today();
   const todayEvents = sorted.filter((e) => e.date === todayStr);
   const upcoming = sorted.filter((e) => e.date > todayStr);
@@ -4089,7 +4098,7 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
           </button>
         )}
         {canDelete && (
-          <button type="button" onClick={() => deleteEvent(e)} className="opacity-60 hover:opacity-100 touch-manipulation" title="Delete event">
+          <button type="button" onClick={() => requestDeleteEvent(e)} className="opacity-60 hover:opacity-100 touch-manipulation" title="Delete event">
             <Trash2 size={12} className="text-red-400" />
           </button>
         )}
@@ -4103,7 +4112,9 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
         <h2 className="text-xl sm:text-2xl font-black text-white">Calendar</h2>
         <p className="text-slate-400 text-sm">Events & reminders</p>
       </div>
-      <Fab onClick={openAddEvent} label="Add Event" hidden={formOpen} />
+      {canEdit && (
+        <Fab onClick={openAddEvent} label="Add Event" hidden={formOpen || !!deleteConfirm} />
+      )}
 
       {events.length === 0 ? (
         <Card>
@@ -4111,8 +4122,8 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
             emoji="📅"
             title="No events yet"
             hint="Add pond maintenance, feeding, or customer visits"
-            actionLabel="Add first event"
-            onAction={openAddEvent}
+            actionLabel={canEdit ? "Add first event" : undefined}
+            onAction={canEdit ? openAddEvent : undefined}
           />
         </Card>
       ) : (
@@ -4171,8 +4182,8 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
             <Btn
               variant="danger"
               onClick={() => {
-                const e = events.find((x) => String(x.id) === String(editEventId));
-                if (e) deleteEvent(e);
+                const e = events.find((x) => sameEventId(x.id, editEventId));
+                if (e) requestDeleteEvent(e);
               }}
               className="mr-auto"
             >
@@ -4180,8 +4191,27 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
             </Btn>
           )}
           <Btn variant="secondary" onClick={closeEventForm}>Cancel</Btn>
-          <Btn onClick={saveEvent}><Plus size={14} />{isEditing ? "Save Changes" : "Add Event"}</Btn>
+          <Btn onClick={saveEvent} disabled={!canEdit}><Plus size={14} />{isEditing ? "Save Changes" : "Add Event"}</Btn>
         </div>
+      </Modal>
+
+      <Modal open={!!deleteConfirm} onClose={() => setDeleteConfirm(null)} title="Delete Event" size="sm">
+        {deleteConfirm && (
+          <div className="space-y-4">
+            <p className="text-slate-300 text-sm">
+              Delete <strong className="text-white">&quot;{deleteConfirm.title}&quot;</strong> on {deleteConfirm.date}? This cannot be undone.
+            </p>
+            {deleteConfirm.date >= todayStr && (
+              <p className="text-amber-300 text-xs bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+                This event is scheduled for today or in the future.
+              </p>
+            )}
+            <div className="modal-actions flex justify-end gap-2">
+              <Btn variant="secondary" onClick={() => setDeleteConfirm(null)}>Cancel</Btn>
+              <Btn variant="danger" onClick={confirmDeleteEvent}><Trash2 size={14} />Delete</Btn>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

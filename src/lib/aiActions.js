@@ -23,6 +23,9 @@ import { buildExpenseReceiptRecord } from './expenseOps'
 import {
   buildDeliveryStatusPatch, buildNewDeliveryRecord, buildUpdatedDeliveryRecord, sameDeliveryId,
 } from './deliveryOps'
+import {
+  buildNewEventRecord, buildUpdatedEventRecord, sameEventId,
+} from './calendarOps'
 
 const EXPENSE_ALIASES = {
   feed: 'Feed', food: 'Feed', pellets: 'Feed', fishfood: 'Feed',
@@ -145,7 +148,7 @@ function findSoldKoi(ctx, query) {
 
 function findCalendarEvent(ctx, { title, date, eventId }) {
   if (eventId != null) {
-    return ctx.events.find((e) => String(e.id) === String(eventId)) || null
+    return ctx.events.find((e) => sameEventId(e.id, eventId)) || null
   }
   const t = normalizeText(title)
   const d = date || ''
@@ -963,21 +966,23 @@ export function executeAiAction(name, args, ctx) {
 
       case 'create_calendar_event': {
         if (!canDo(currentUser, 'calendar')) return { success: false, error: 'No permission for calendar' }
-        const title = a.title?.trim()
-        if (!title || !a.date) return { success: false, error: 'Need event title and date' }
-        const ev = touchUpdatedAt({
-          id: Date.now(),
-          title,
-          date: a.date,
-          time: a.time || '09:00',
-          type: a.type || 'other',
-          note: a.note || '',
+        if (!canEdit(currentUser)) return { success: false, error: 'No edit permission' }
+        const built = buildNewEventRecord({
+          title: a.title,
+          date: a.date || today(),
+          time: a.time,
+          type: a.type,
+          note: a.note,
+        }, {
           createdBy: currentUser.name,
+          existingEvents: ctx.events,
         })
+        if (!built.ok) return { success: false, error: built.message }
+        const ev = built.event
         ctx.setEvents((prev) => [...prev, ev])
-        addNotification?.({ type: 'info', title: 'Event Added (AI)', message: title })
+        addNotification?.({ type: 'info', title: 'Event Added (AI)', message: ev.title })
         onNavigate?.('calendar')
-        return { success: true, message: `Added "${title}" on ${a.date}` }
+        return { success: true, message: `Added "${ev.title}" on ${ev.date}` }
       }
 
       case 'cancel_invoice': {
@@ -1166,18 +1171,20 @@ export function executeAiAction(name, args, ctx) {
         if (!canEdit(currentUser)) return { success: false, error: 'No edit permission' }
         const ev = findCalendarEvent(ctx, a)
         if (!ev) return { success: false, error: 'Event not found' }
-        const updated = touchUpdatedAt({
-          ...ev,
+        const built = buildUpdatedEventRecord({
           title: a.newTitle ?? ev.title,
           date: a.newDate ?? ev.date,
           time: a.newTime ?? ev.time,
           type: a.newType ?? ev.type,
           note: a.note ?? ev.note,
-        })
-        ctx.setEvents((prev) => prev.map((e) => (e.id === ev.id ? updated : e)))
-        addNotification?.({ type: 'success', title: 'Event Updated (AI)', message: updated.title })
+        }, ev)
+        if (!built.ok) return { success: false, error: built.message }
+        ctx.setEvents((prev) => prev.map((e) => (
+          sameEventId(e.id, ev.id) ? built.event : e
+        )))
+        addNotification?.({ type: 'success', title: 'Event Updated (AI)', message: built.event.title })
         onNavigate?.('calendar')
-        return { success: true, message: `Updated event "${updated.title}"` }
+        return { success: true, message: `Updated event "${built.event.title}"` }
       }
 
       case 'delete_calendar_event': {
@@ -1185,7 +1192,7 @@ export function executeAiAction(name, args, ctx) {
         if (!canDelete(currentUser)) return { success: false, error: 'No delete permission' }
         const ev = findCalendarEvent(ctx, a)
         if (!ev) return { success: false, error: 'Event not found' }
-        ctx.setEvents((prev) => prev.filter((e) => e.id !== ev.id))
+        ctx.setEvents((prev) => prev.filter((e) => !sameEventId(e.id, ev.id)))
         markDeleted('events', ev.id)
         addNotification?.({ type: 'info', title: 'Event Deleted (AI)', message: ev.title })
         onNavigate?.('calendar')
