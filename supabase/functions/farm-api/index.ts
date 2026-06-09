@@ -35,6 +35,13 @@ import {
   validateSession,
 } from "../_shared/supabase.ts";
 
+/** Postgres BIGINT columns reject ""; coerce empty/invalid values to null. */
+function nullableBigint(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
 const ENTITY_PERMS: Record<string, string> = {
   users: "users",
   customers: "customers",
@@ -447,7 +454,7 @@ Deno.serve(async (req) => {
         const incoming = (data || []) as Record<string, unknown>[];
         await upsertSync("invoices", incoming.map((i) => withTs({
           id: i.id,
-          customer_id: i.customerId,
+          customer_id: nullableBigint(i.customerId),
           customer_name: i.customerName,
           customer_phone: i.customerPhone ?? "",
           customer_whatsapp: i.customerWhatsapp ?? "",
@@ -493,7 +500,7 @@ Deno.serve(async (req) => {
       } else if (entity === "deliveries") {
         await upsertSync("deliveries", (data || []).map((d: Record<string, unknown>) => withTs({
           id: d.id, invoice_id: d.invoiceId ?? "",
-          customer_id: d.customerId != null && d.customerId !== "" ? d.customerId : null,
+          customer_id: nullableBigint(d.customerId),
           customer_name: d.customerName, area: d.area,
           postal_code: d.postalCode, address: d.address, schedule: d.schedule, status: d.status, items: d.items,
           driver: d.driver, notes: d.notes, created_by: d.createdBy ?? "",
@@ -505,7 +512,7 @@ Deno.serve(async (req) => {
         }, e)), "id", syncOpts);
       } else if (entity === "stock_activity") {
         await upsertSync("stock_activity", (data || []).map((l: Record<string, unknown>) => withTs({
-          id: l.id, product_id: l.productId, product_name: l.productName, type: l.type,
+          id: l.id, product_id: nullableBigint(l.productId), product_name: l.productName, type: l.type,
           qty: l.qty, value: l.value ?? l.total ?? null, note: l.note || "", date: l.date, added_by: l.by || "",
         }, l)), "id", syncOpts);
       } else if (entity === "koi_fish") {
@@ -522,7 +529,7 @@ Deno.serve(async (req) => {
           notes: k.notes ?? "",
           status: k.status ?? "available",
           date_added: k.dateAdded ?? null,
-          sold_to: k.soldTo ?? null,
+          sold_to: nullableBigint(k.soldTo),
           sold_date: k.soldDate ?? null,
           sold_price: k.soldPrice ?? null,
           sell_disposition: k.sellDisposition ?? null,
@@ -539,7 +546,7 @@ Deno.serve(async (req) => {
         const incoming = (data || []) as Record<string, unknown>[];
         const rows = await Promise.all(incoming.map(async (r) => withTs({
           id: r.id,
-          customer_id: r.customerId ?? null,
+          customer_id: nullableBigint(r.customerId),
           customer_name: r.customerName ?? "",
           koi_id: r.koiId ?? "",
           photo: await resolveCustomerKoiPhoto(db, r.id, r.photo),

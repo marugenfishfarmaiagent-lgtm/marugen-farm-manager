@@ -1489,7 +1489,9 @@ function InvoiceModule({
       return;
     }
     const inv = {
-      id: invId, customerId: form.customerId, customerName: form.customerName,
+      id: invId,
+      customerId: form.manualCustomer || !form.customerId ? null : form.customerId,
+      customerName: form.customerName,
       customerWhatsapp: customerDetails.phone,
       customerPhone: customerDetails.phone,
       customerAddress: customerDetails.address || formatCustomerAddress(customerRecord),

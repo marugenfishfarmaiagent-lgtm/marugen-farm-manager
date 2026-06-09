@@ -49,10 +49,15 @@ function mapProduct(row) {
   })
 }
 
+function normalizeBigintId(value) {
+  if (value == null || value === '') return null
+  return value
+}
+
 function mapInvoice(row) {
   return withUpdatedAt({
     id: row.id,
-    customerId: row.customer_id ?? row.customerId,
+    customerId: normalizeBigintId(row.customer_id ?? row.customerId),
     customerName: row.customer_name ?? row.customerName,
     customerPhone: row.customer_phone ?? row.customerPhone ?? '',
     customerWhatsapp: row.customer_whatsapp ?? row.customerWhatsapp ?? '',

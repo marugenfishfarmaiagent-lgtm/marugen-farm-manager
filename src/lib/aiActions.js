@@ -667,7 +667,7 @@ export function executeAiAction(name, args, ctx) {
 
         const inv = touchUpdatedAt({
           id: invId,
-          customerId: customer?.id || '',
+          customerId: customer?.id ?? null,
           customerName: displayName,
           customerWhatsapp: customerDetails.phone,
           customerPhone: customerDetails.phone,
