@@ -5,7 +5,7 @@ import KoiFish from "./modules/KoiFish";
 import CustomerKoi from "./modules/CustomerKoi";
 import PondManagement from "./modules/PondManagement";
 import { loadKoiFish, saveKoiFish, loadCustomerKoi, saveCustomerKoi, loadPondData, savePondData } from "./lib/koiStorage";
-import { loadProducts, saveProducts, loadStockLog, saveStockLog, loadExpenseBudgets, saveExpenseBudgets } from "./lib/farmStorage";
+import { loadProducts, saveProducts, loadStockLog, saveStockLog } from "./lib/farmStorage";
 import {
   clearLocalOnlyStorage, emptyPondData, resolveCloudKoiPayload, resolveCloudWhatsappGroups,
 } from "./lib/cloudData";
@@ -47,7 +47,7 @@ import { markDeleted, clearAllDeletions, peekDeletions } from "./lib/syncDeletio
 import { mergeRecords, mergePondData } from "./lib/cloudMerge";
 import { touchUpdatedAt } from "./lib/syncMeta";
 import {
-  FISH_TYPES, PRODUCT_CATEGORIES, EXPENSE_CATEGORIES, DEFAULT_EXPENSE_BUDGETS, LIST_PAGE_SIZE,
+  FISH_TYPES, PRODUCT_CATEGORIES, LIST_PAGE_SIZE,
   CUSTOMER_TIERS, ALL_PERMISSIONS, DEFAULT_PERMISSIONS, SG_AREAS,
   formatSGD, formatInvoiceDate, today, genId, genInvoiceId, getInvoiceStatus, calcCustomerTier, KOI_STATUS, CUSTOMER_KOI_STATUS,
   INITIAL_PRODUCTS, INITIAL_CUSTOMERS, INITIAL_INVOICES, INITIAL_EXPENSES,
@@ -2477,8 +2477,6 @@ function CustomerModule({ customers, setCustomers, addNotification, currentUser 
 // EXPENSE RECEIPTS (image records for external accounting)
 // ─────────────────────────────────────────────
 function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) {
-  const [budgets, setBudgets] = useState(() => loadExpenseBudgets());
-  const [editingBudgets, setEditingBudgets] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [viewExpenseId, setViewExpenseId] = useState(null);
   const [bookedFilter, setBookedFilter] = useState("all");
@@ -2553,32 +2551,6 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
     .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (Number(b.id) || 0) - (Number(a.id) || 0));
   const hiddenExpenseCount = expenses.filter((e) => !isAppVisibleExpense(e)).length;
   const expensePage = usePagination(visibleExpenses, LIST_PAGE_SIZE, `${bookedFilter}-${dateFrom}-${dateTo}-${showOlderExpenses}`);
-
-  const monthStart = monthStartStr();
-  const monthlySpentByCategory = useMemo(() => {
-    const totals = {};
-    expenses.forEach((e) => {
-      if ((e.date || "") < monthStart) return;
-      const cat = e.category;
-      const amt = Number(e.amount);
-      if (!cat || !(amt > 0)) return;
-      totals[cat] = (totals[cat] || 0) + amt;
-    });
-    return totals;
-  }, [expenses, monthStart]);
-
-  const budgetCategories = Object.keys(budgets).filter((c) => budgets[c] > 0);
-
-  const handleBudgetChange = (category, value) => {
-    const n = Math.max(0, Number(value) || 0);
-    setBudgets((prev) => ({ ...prev, [category]: n }));
-  };
-
-  const saveBudgets = () => {
-    saveExpenseBudgets(budgets);
-    setEditingBudgets(false);
-    addNotification({ type: "success", title: "Budgets Saved", message: "Monthly expense budgets updated." });
-  };
 
   const resetUpload = () => {
     setUploadPreview(null);
@@ -2718,62 +2690,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
           <Download size={14} /> Export CSV
         </Btn>
       </div>
-      <Fab onClick={() => { resetUpload(); setShowAdd(true); }} label="Upload Receipt" icon={ImagePlus} hidden={showAdd || viewExpenseId != null || editingBudgets} />
-
-      <Card className="p-4 border-slate-700/50">
-        <div className="flex items-center justify-between gap-2 mb-3">
-          <h3 className="text-sm font-bold text-white">Monthly Budget vs Actual</h3>
-          <Btn variant="ghost" size="sm" onClick={() => (editingBudgets ? saveBudgets() : setEditingBudgets(true))}>
-            {editingBudgets ? "Save budgets" : "Edit budgets"}
-          </Btn>
-        </div>
-        {budgetCategories.length === 0 ? (
-          <p className="text-slate-500 text-sm">No budgets set — tap Edit budgets to configure.</p>
-        ) : budgetCategories.map((category) => {
-          const spent = monthlySpentByCategory[category] || 0;
-          const budget = budgets[category] || 0;
-          const pct = budget > 0 ? (spent / budget) * 100 : 0;
-          return (
-            <div key={category} className="mb-3 last:mb-0">
-              <div className="flex justify-between text-xs text-slate-400 mb-1 gap-2">
-                <span>{category}</span>
-                {editingBudgets ? (
-                  <input
-                    type="number"
-                    min="0"
-                    step="50"
-                    value={budget}
-                    onChange={(e) => handleBudgetChange(category, e.target.value)}
-                    className="w-24 bg-slate-900 border border-slate-600 rounded px-2 py-0.5 text-white text-right text-xs"
-                  />
-                ) : (
-                  <span>{formatSGD(spent)} / {formatSGD(budget)}</span>
-                )}
-              </div>
-              {!editingBudgets && (
-                <div className="w-full bg-slate-700 rounded-full h-2">
-                  <div
-                    className={`h-2 rounded-full ${pct > 90 ? "bg-red-500" : pct > 70 ? "bg-yellow-500" : "bg-cyan-500"}`}
-                    style={{ width: `${Math.min(pct, 100)}%` }}
-                  />
-                </div>
-              )}
-            </div>
-          );
-        })}
-        {!editingBudgets && Object.keys(monthlySpentByCategory).length === 0 && (
-          <p className="text-slate-600 text-xs mt-2">Spending tracked from legacy expense records with category + amount.</p>
-        )}
-        {editingBudgets && (
-          <div className="flex flex-wrap gap-2 mt-3">
-            {EXPENSE_CATEGORIES.filter((c) => !(c in budgets)).map((c) => (
-              <Btn key={c} variant="secondary" size="sm" onClick={() => setBudgets((prev) => ({ ...prev, [c]: DEFAULT_EXPENSE_BUDGETS[c] || 100 }))}>
-                + {c}
-              </Btn>
-            ))}
-          </div>
-        )}
-      </Card>
+      <Fab onClick={() => { resetUpload(); setShowAdd(true); }} label="Upload Receipt" icon={ImagePlus} hidden={showAdd || viewExpenseId != null} />
 
       <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
         {[

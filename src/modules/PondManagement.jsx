@@ -309,7 +309,7 @@ export default function PondManagement({ pondData, setPondData, addNotification,
           {ponds.length === 0 ? (
             <Card className="md:col-span-2 xl:col-span-3">
               <EmptyState
-                emoji="🏊"
+                emoji="💧"
                 title="No ponds yet"
                 hint="Register A1, B2, quarantine tanks, etc."
                 actionLabel={canEdit ? 'Add Pond' : undefined}
@@ -365,7 +365,7 @@ export default function PondManagement({ pondData, setPondData, addNotification,
             <div className="divide-y divide-slate-700/50">
               {filteredLogs.length === 0 ? (
                 <EmptyState
-                  emoji="🏊"
+                  emoji="💧"
                   title={visiblePond.maintenanceLogs.length === 0 ? 'No maintenance logs yet' : 'No logs for this pond'}
                   hint="Log water tests and pond maintenance"
                   className="py-10"
