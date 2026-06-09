@@ -21,20 +21,31 @@ export function getAuthHeaders(extraHeaders = {}) {
   }
   const token = getSessionToken()
   if (token) {
-    headers['x-session-token'] = token
+    // Supabase gateway reliably forwards Authorization; custom x-session-token does not.
     headers.Authorization = `Session ${token}`
   }
   return headers
 }
 
+function formatFetchError(err, fallback = 'Network request failed') {
+  const msg = err?.message || fallback
+  if (/load failed|failed to fetch|networkerror/i.test(msg)) {
+    return 'Cannot reach Supabase. Check internet connection, then refresh and try again.'
+  }
+  return msg
+}
+
 export function cloudFetch(url, options = {}) {
+  const useCookies = options.credentials === 'include'
   return fetch(url, {
     ...options,
-    credentials: 'include',
+    credentials: useCookies ? 'include' : 'omit',
     headers: {
       ...getAuthHeaders(),
       ...(options.headers || {}),
     },
+  }).catch((err) => {
+    throw new Error(formatFetchError(err))
   })
 }
 
@@ -121,7 +132,7 @@ function applyAuthBootstrap(data) {
 
 export async function bootstrapCloudSession() {
   if (!isSupabaseConfigured) return false
-  const res = await cloudFetch(`${getFunctionsUrl()}/auth-login`)
+  const res = await cloudFetch(`${getFunctionsUrl()}/auth-login`, { credentials: 'include' })
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Auth status failed')
   return applyAuthBootstrap(data)
@@ -129,7 +140,7 @@ export async function bootstrapCloudSession() {
 
 export async function authStatus() {
   if (!isSupabaseConfigured) return { needsSetup: false, hasUsers: true, cloud: false }
-  const res = await cloudFetch(`${getFunctionsUrl()}/auth-login`)
+  const res = await cloudFetch(`${getFunctionsUrl()}/auth-login`, { credentials: 'include' })
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Auth status failed')
   applyAuthBootstrap(data)

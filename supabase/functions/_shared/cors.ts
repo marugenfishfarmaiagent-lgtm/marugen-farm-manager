@@ -13,10 +13,24 @@ export function getAllowedOrigins(): string[] {
   return [...new Set([...DEFAULT_ORIGINS, ...extra])];
 }
 
+function isAllowedOrigin(origin: string, allowed: string[]): boolean {
+  if (!origin) return false;
+  if (allowed.includes(origin)) return true;
+  try {
+    const { hostname, protocol } = new URL(origin);
+    if (protocol !== "http:" && protocol !== "https:") return false;
+    if (hostname === "localhost" || hostname === "127.0.0.1") return true;
+    if (hostname.endsWith(".vercel.app")) return true;
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 function resolveOrigin(req: Request): string {
   const origin = req.headers.get("origin");
   const allowed = getAllowedOrigins();
-  if (origin && allowed.includes(origin)) return origin;
+  if (origin && isAllowedOrigin(origin, allowed)) return origin;
   return allowed[0] || "https://marugen-farm-manager.vercel.app";
 }
 

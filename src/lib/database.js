@@ -281,7 +281,7 @@ async function apiCall(body) {
 
   const res = await fetch(`${getFunctionsUrl()}/farm-api`, {
     method: 'POST',
-    credentials: 'include',
+    credentials: 'omit',
     headers,
     body: JSON.stringify(body),
   })

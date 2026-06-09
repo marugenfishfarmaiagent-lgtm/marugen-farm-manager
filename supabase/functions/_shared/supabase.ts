@@ -47,11 +47,15 @@ export async function validateSession(token: string | null): Promise<SessionUser
 }
 
 export function sessionTokenFrom(req: Request): string | null {
+  const authHeader = req.headers.get("authorization") || "";
+  if (authHeader.startsWith("Session ")) return authHeader.slice(8).trim();
+  if (authHeader.startsWith("Bearer ") && !authHeader.includes("eyJ")) {
+    return authHeader.slice(7).trim();
+  }
   const fromCookie = sessionTokenFromCookie(req);
   if (fromCookie) return fromCookie;
-  const header = req.headers.get("x-session-token") || req.headers.get("authorization") || "";
-  if (header.startsWith("Session ")) return header.slice(8).trim();
-  if (header.startsWith("Bearer ") && !header.includes("eyJ")) return header.slice(7).trim();
+  const custom = req.headers.get("x-session-token");
+  if (custom) return custom.trim();
   return null;
 }
 
