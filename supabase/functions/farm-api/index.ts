@@ -719,12 +719,28 @@ Deno.serve(async (req) => {
           beforeDelete: async (ids) => { await deleteExpenseReceiptImages(db, ids); },
         });
       } else if (entity === "deliveries") {
-        await upsertSync("deliveries", (data || []).map((d: Record<string, unknown>) => withTs({
+        const incoming = (data || []) as Record<string, unknown>[];
+        const DELIVERY_STATUSES = new Set(["scheduled", "transit", "delivered", "cancelled"]);
+        for (const d of incoming) {
+          if (d.id == null || String(d.id).trim() === "") {
+            return J({ error: "Delivery id is required" }, 400);
+          }
+          if (!String(d.customerName ?? d.customer_name ?? "").trim()) {
+            return J({ error: "Delivery customer name is required" }, 400);
+          }
+          if (!String(d.address ?? "").trim()) return J({ error: "Delivery address is required" }, 400);
+          if (!String(d.schedule ?? "").trim()) return J({ error: "Delivery schedule is required" }, 400);
+          const status = String(d.status ?? "scheduled");
+          if (!DELIVERY_STATUSES.has(status)) {
+            return J({ error: `Invalid delivery status: ${d.status}` }, 400);
+          }
+        }
+        await upsertSync("deliveries", incoming.map((d: Record<string, unknown>) => withTs({
           id: d.id, invoice_id: d.invoiceId ?? "",
           customer_id: nullableBigint(d.customerId),
-          customer_name: d.customerName, area: d.area,
-          postal_code: d.postalCode, address: d.address, schedule: d.schedule, status: d.status, items: d.items,
-          driver: d.driver, notes: d.notes, created_by: d.createdBy ?? "",
+          customer_name: d.customerName, area: d.area ?? "",
+          postal_code: d.postalCode ?? "", address: d.address, schedule: d.schedule, status: d.status ?? "scheduled",
+          items: d.items ?? "", driver: d.driver ?? "", notes: d.notes ?? "", created_by: d.createdBy ?? "",
         }, d)), "id", syncOpts);
       } else if (entity === "events") {
         await upsertSync("events", (data || []).map((e: Record<string, unknown>) => withTs({

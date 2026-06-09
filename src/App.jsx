@@ -62,6 +62,10 @@ import {
   buildExpenseReceiptRecord, sameExpenseId, validateExpenseDateUpdate,
 } from "./lib/expenseOps";
 import {
+  buildDeliveryStatusPatch, buildNewDeliveryRecord, buildUpdatedDeliveryRecord,
+  resolveDeliveryArea, sameDeliveryId,
+} from "./lib/deliveryOps";
+import {
   FISH_TYPES, PRODUCT_CATEGORIES, LIST_PAGE_SIZE,
   CUSTOMER_TIERS, ALL_PERMISSIONS, DEFAULT_PERMISSIONS, SG_AREAS,
   formatSGD, formatInvoiceDate, today, genId, genInvoiceId, getInvoiceStatus, calcCustomerTier, KOI_STATUS, CUSTOMER_KOI_STATUS,
@@ -3262,14 +3266,6 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
   );
 }
 
-function deliveryArea(delivery, customers = []) {
-  const customer = customers.find((c) => String(c.id) === String(delivery?.customerId));
-  if (customer?.area) return customer.area;
-  const addr = `${delivery?.address || ""} ${delivery?.postalCode || ""}`.toLowerCase();
-  const matched = SG_AREAS.find((area) => addr.includes(area.toLowerCase()));
-  return matched || "Other";
-}
-
 // ─────────────────────────────────────────────
 // DELIVERY MODULE
 // ─────────────────────────────────────────────
@@ -3308,6 +3304,7 @@ function DeliveryModule({
   const [showManageGroups, setShowManageGroups] = useState(false);
   const [groupForm, setGroupForm] = useState({ name: "", link: "" });
   const [postalLookupDelivery, setPostalLookupDelivery] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
   const deliveryAddressManual = useRef(false);
 
   if (!hasPermission(currentUser, "deliveries")) return <AccessDenied moduleName="Deliveries" />;
@@ -3330,7 +3327,7 @@ function DeliveryModule({
   };
 
   const whatsappDelivery = whatsappDeliveryId != null
-    ? deliveries.find((d) => String(d.id) === String(whatsappDeliveryId))
+    ? deliveries.find((d) => sameDeliveryId(d.id, whatsappDeliveryId))
     : null;
 
   const todayStr = today();
@@ -3346,7 +3343,7 @@ function DeliveryModule({
       .sort((a, b) => (a.schedule || "").localeCompare(b.schedule || ""));
     const grouped = {};
     pending.forEach((d) => {
-      const area = deliveryArea(d, customers);
+      const area = resolveDeliveryArea(d, customers);
       if (!grouped[area]) grouped[area] = [];
       grouped[area].push(d);
     });
@@ -3359,7 +3356,7 @@ function DeliveryModule({
   const linkedInvoice = form.invoiceId ? invoices.find((i) => i.id === form.invoiceId) : null;
   const linkedInvoiceDoc = linkedInvoice ? enrichInvoiceCustomer(linkedInvoice, customers) : null;
   const linkableInvoices = [...invoices]
-    .filter((i) => i.status !== "cancelled")
+    .filter((i) => getInvoiceStatus(i) !== "cancelled")
     .sort((a, b) => `${b.date || ""}${b.id}`.localeCompare(`${a.date || ""}${a.id}`));
 
   const closeDeliveryForm = () => {
@@ -3372,6 +3369,10 @@ function DeliveryModule({
   };
 
   const openAddDelivery = () => {
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
     setEditDeliveryId(null);
     setForm(emptyDeliveryForm());
     setShowLinkedInvoicePreview(true);
@@ -3393,55 +3394,36 @@ function DeliveryModule({
     setPostalLookupDelivery(false);
   };
 
-  const validateDeliveryForm = () => {
-    const customerName = form.customerName?.trim();
-    const address = form.address?.trim();
-    const schedule = form.schedule?.trim();
-    if (!customerName) {
-      addNotification({ type: "error", title: "Customer Required", message: "Select a customer or link an invoice with customer details." });
-      return null;
-    }
-    if (!address) {
-      addNotification({ type: "error", title: "Address Required", message: "Enter the delivery address (Blk / Unit / Street)." });
-      return null;
-    }
-    if (!schedule) {
-      addNotification({ type: "error", title: "Schedule Required", message: "Choose date and time for the delivery." });
-      return null;
-    }
-    return { customerName, address, schedule };
-  };
-
   const saveDelivery = () => {
-    if (isEditing && !canEdit) {
+    if (!canEdit) {
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
-    const validated = validateDeliveryForm();
-    if (!validated) return;
-    const { customerName, address, schedule } = validated;
-    const payload = {
-      ...form,
-      customerId: form.customerId || null,
-      customerName,
-      address,
-      schedule,
-      status: isEditing ? (form.status || "scheduled") : "scheduled",
-    };
-
     if (isEditing) {
+      const existing = deliveries.find((d) => sameDeliveryId(d.id, editDeliveryId));
+      if (!existing) {
+        addNotification({ type: "error", title: "Not Found", message: "Delivery record no longer exists." });
+        closeDeliveryForm();
+        return;
+      }
+      const built = buildUpdatedDeliveryRecord(form, existing, { customers, invoices, deliveries });
+      if (!built.ok) {
+        addNotification({ type: "error", title: "Cannot Save Delivery", message: built.message });
+        return;
+      }
       setDeliveries((prev) => prev.map((d) => (
-        String(d.id) === String(editDeliveryId)
-          ? touchUpdatedAt({ ...d, ...payload, createdBy: d.createdBy || currentUser?.name || "Staff" })
-          : d
+        sameDeliveryId(d.id, editDeliveryId) ? built.delivery : d
       )));
       addNotification({ type: "success", title: "Delivery Updated", message: `${editDeliveryId} saved.` });
     } else {
-      const d = touchUpdatedAt({
-        ...payload,
-        id: genId("DEL"),
-        createdBy: currentUser?.name || "Staff",
+      const built = buildNewDeliveryRecord(form, {
+        customers, invoices, createdBy: currentUser?.name || "Staff",
       });
+      if (!built.ok) {
+        addNotification({ type: "error", title: "Cannot Schedule Delivery", message: built.message });
+        return;
+      }
+      const d = built.delivery;
       setDeliveries((prev) => [...prev, d]);
       addNotification({
         type: "info",
@@ -3452,18 +3434,27 @@ function DeliveryModule({
     closeDeliveryForm();
   };
 
-  const deleteDelivery = (d) => {
+  const requestDeleteDelivery = (d) => {
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
       return;
     }
-    const label = `${d.id} → ${d.customerName}`;
-    if (!confirm(`Delete ${label}? This cannot be undone.`)) return;
-    setDeliveries((prev) => prev.filter((x) => String(x.id) !== String(d.id)));
+    setDeleteConfirm(d);
+  };
+
+  const confirmDeleteDelivery = () => {
+    if (!deleteConfirm) return;
+    if (!canDelete) {
+      notifyPermissionDenied(addNotification, "delete");
+      return;
+    }
+    const d = deleteConfirm;
+    setDeliveries((prev) => prev.filter((x) => !sameDeliveryId(x.id, d.id)));
     markDeleted("deliveries", d.id);
-    if (String(editDeliveryId) === String(d.id)) closeDeliveryForm();
-    if (String(whatsappDeliveryId) === String(d.id)) closeWhatsappPicker();
+    if (sameDeliveryId(editDeliveryId, d.id)) closeDeliveryForm();
+    if (sameDeliveryId(whatsappDeliveryId, d.id)) closeWhatsappPicker();
     addNotification({ type: "info", title: "Delivery Deleted", message: `${d.id} removed.` });
+    setDeleteConfirm(null);
   };
 
   const selectDeliveryInvoice = (invoiceId) => {
@@ -3492,19 +3483,26 @@ function DeliveryModule({
       setForm((f) => ({ ...f, invoiceId: "", customerId: "", customerName: "", postalCode: "", address: "" }));
       return;
     }
-    const c = customers.find((x) => String(x.id) === String(customerId));
+    const c = customers.find((x) => sameCustomerId(x.id, customerId));
     deliveryAddressManual.current = false;
     setForm((f) => ({ ...f, invoiceId: "", ...customerDeliveryFields(c), schedule: f.schedule, items: f.items, driver: f.driver, notes: f.notes, status: f.status }));
   };
 
   const updateStatus = (id, status) => {
-    const deliveredAt = status === "delivered" ? new Date().toISOString() : undefined;
-    setDeliveries((prev) => prev.map((d) => {
-      if (String(d.id) !== String(id)) return d;
-      const patch = { status };
-      if (deliveredAt) patch.deliveredAt = deliveredAt;
-      return touchUpdatedAt({ ...d, ...patch });
-    }));
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
+    const current = deliveries.find((d) => sameDeliveryId(d.id, id));
+    if (!current) return;
+    const built = buildDeliveryStatusPatch(status, current);
+    if (!built.ok) {
+      addNotification({ type: "error", title: "Invalid Status", message: built.message });
+      return;
+    }
+    setDeliveries((prev) => prev.map((d) => (
+      sameDeliveryId(d.id, id) ? touchUpdatedAt({ ...d, ...built.patch }) : d
+    )));
     if (status === "delivered") {
       addNotification({ type: "success", title: "Delivery Completed", message: `${id} delivered successfully!` });
     } else if (status === "transit") {
@@ -3606,7 +3604,9 @@ function DeliveryModule({
           <Users size={16} />WhatsApp Groups
         </Btn>
       </div>
-      <Fab onClick={openAddDelivery} label="Schedule Delivery" hidden={formOpen || !!invoicePreviewId || showManageGroups || !!whatsappDelivery} />
+      {canEdit && (
+        <Fab onClick={openAddDelivery} label="Schedule Delivery" hidden={formOpen || !!invoicePreviewId || showManageGroups || !!whatsappDelivery || !!deleteConfirm} />
+      )}
 
       <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
         {[
@@ -3682,8 +3682,8 @@ function DeliveryModule({
               emoji="🚚"
               title={deliveries.length === 0 ? "No deliveries yet" : "No deliveries match this filter"}
               hint={deliveries.length === 0 ? "Schedule fish deliveries to customers" : "Try a different status tab"}
-              actionLabel={deliveries.length === 0 ? "Schedule first delivery" : undefined}
-              onAction={deliveries.length === 0 ? openAddDelivery : undefined}
+              actionLabel={deliveries.length === 0 && canEdit ? "Schedule first delivery" : undefined}
+              onAction={deliveries.length === 0 && canEdit ? openAddDelivery : undefined}
             />
           </Card>
         ) :
@@ -3740,7 +3740,7 @@ function DeliveryModule({
                     </Btn>
                   )}
                   {canDelete && (
-                    <Btn variant="ghost" size="sm" onClick={() => deleteDelivery(d)} title="Delete delivery">
+                    <Btn variant="ghost" size="sm" onClick={() => requestDeleteDelivery(d)} title="Delete delivery">
                       <Trash2 size={14} className="text-red-400" />
                     </Btn>
                   )}
@@ -3843,12 +3843,12 @@ function DeliveryModule({
         <div className="modal-actions">
           {isEditing && canDelete && (
             <Btn variant="danger" onClick={() => {
-              const d = deliveries.find((x) => String(x.id) === String(editDeliveryId));
-              if (d) deleteDelivery(d);
+              const d = deliveries.find((x) => sameDeliveryId(x.id, editDeliveryId));
+              if (d) requestDeleteDelivery(d);
             }} className="mr-auto"><Trash2 size={14} />Delete</Btn>
           )}
           <Btn variant="secondary" onClick={closeDeliveryForm}>Cancel</Btn>
-          <Btn onClick={saveDelivery}><Truck size={14} />{isEditing ? "Save Changes" : "Schedule"}</Btn>
+          <Btn onClick={saveDelivery} disabled={!canEdit}><Truck size={14} />{isEditing ? "Save Changes" : "Schedule"}</Btn>
         </div>
       </Modal>
 
@@ -3928,6 +3928,30 @@ function DeliveryModule({
             <div className="modal-actions !mt-0">
               <Btn variant="secondary" onClick={closeWhatsappPicker}>Cancel</Btn>
               <Btn variant="success" onClick={confirmSendDeliveryWhatsapp}><Send size={14} />Open WhatsApp</Btn>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!deleteConfirm} onClose={() => setDeleteConfirm(null)} title="Delete Delivery" size="sm">
+        {deleteConfirm && (
+          <div className="space-y-4">
+            <p className="text-slate-300 text-sm">
+              Delete <strong className="text-white font-mono">{deleteConfirm.id}</strong> for {deleteConfirm.customerName}? This cannot be undone.
+            </p>
+            {deleteConfirm.invoiceId && (
+              <p className="text-amber-300 text-xs bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+                Linked to invoice {deleteConfirm.invoiceId}. The invoice will remain — only this delivery record is removed.
+              </p>
+            )}
+            {["scheduled", "transit"].includes(deleteConfirm.status) && (
+              <p className="text-amber-300 text-xs bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+                This delivery is still {deleteConfirm.status === "transit" ? "in transit" : "scheduled"}.
+              </p>
+            )}
+            <div className="modal-actions flex justify-end gap-2">
+              <Btn variant="secondary" onClick={() => setDeleteConfirm(null)}>Cancel</Btn>
+              <Btn variant="danger" onClick={confirmDeleteDelivery}><Trash2 size={14} />Delete</Btn>
             </div>
           </div>
         )}

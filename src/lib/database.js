@@ -3,6 +3,7 @@ import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
 import { normalizeCustomerKoiRecord } from '../data/constants'
 import { normalizeCustomerRecord } from './customerOps'
 import { normalizeExpenseRecord } from './expenseOps'
+import { normalizeDeliveryRecord } from './deliveryOps'
 import { emptyPondData } from './cloudData'
 import { normalizeImageFieldForSync, storagePaths } from './farmImage'
 import { confirmDeletions, peekDeletions } from './syncDeletions'
@@ -162,21 +163,21 @@ function mapExpense(row) {
 }
 
 function mapDelivery(row) {
-  return withUpdatedAt({
+  return withUpdatedAt(normalizeDeliveryRecord({
     id: row.id,
     invoiceId: row.invoice_id ?? row.invoiceId ?? '',
     customerId: row.customer_id ?? row.customerId ?? null,
     customerName: row.customer_name ?? row.customerName,
-    area: row.area,
+    area: row.area ?? '',
     postalCode: row.postal_code ?? row.postalCode ?? '',
-    address: row.address,
-    schedule: row.schedule,
-    status: row.status,
-    items: row.items || '',
-    driver: row.driver || '',
-    notes: row.notes || '',
+    address: row.address ?? '',
+    schedule: row.schedule ?? '',
+    status: row.status ?? 'scheduled',
+    items: row.items ?? '',
+    driver: row.driver ?? '',
+    notes: row.notes ?? '',
     createdBy: row.created_by ?? row.createdBy ?? '',
-  })
+  }))
 }
 
 function mapEvent(row) {
@@ -458,7 +459,8 @@ export async function refreshExpenseReceiptUrl(expenseId) {
 
 export async function syncDeliveries(deliveries, options) {
   if (!isSupabaseConfigured) return
-  await syncCall('deliveries', deliveries, options)
+  const payload = (deliveries || []).map((d) => normalizeDeliveryRecord(d))
+  await syncCall('deliveries', payload, options)
 }
 
 export async function syncEvents(events, options) {

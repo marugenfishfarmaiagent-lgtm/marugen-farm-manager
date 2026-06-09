@@ -20,6 +20,9 @@ import {
   buildNewCustomerRecord, buildUpdatedCustomerRecord, isDuplicateCustomerName, sameCustomerId,
 } from './customerOps'
 import { buildExpenseReceiptRecord } from './expenseOps'
+import {
+  buildDeliveryStatusPatch, buildNewDeliveryRecord, buildUpdatedDeliveryRecord, sameDeliveryId,
+} from './deliveryOps'
 
 const EXPENSE_ALIASES = {
   feed: 'Feed', food: 'Feed', pellets: 'Feed', fishfood: 'Feed',
@@ -339,6 +342,7 @@ function normalizeArgs(name, args, ctx) {
   if (name === 'schedule_delivery' || name === 'update_delivery') {
     a.customerName = a.customerName || a.customer || a.name
     a.deliveryId = a.deliveryId || a.id || a.delivery
+    a.invoiceId = a.invoiceId || a.invoice || ''
     if (!a.address && a.customerName) {
       const c = findCustomer(ctx, a.customerName)
       if (c) {
@@ -898,48 +902,58 @@ export function executeAiAction(name, args, ctx) {
 
       case 'schedule_delivery': {
         if (!canDo(currentUser, 'deliveries')) return { success: false, error: 'No permission for deliveries' }
-        const customerName = a.customerName?.trim()
-        if (!customerName || !a.schedule) {
-          return { success: false, error: 'Need customer and when to deliver' }
-        }
-        const customer = findCustomer(ctx, customerName)
-        const displayName = customer?.name || customerName
+        if (!canEdit(currentUser)) return { success: false, error: 'No edit permission' }
+        const customer = findCustomer(ctx, a.customerName)
         const fromCustomer = customerDeliveryFields(customer)
-        const address = (a.address || fromCustomer.address || '').trim()
-        if (!address) {
-          return {
-            success: false,
-            error: 'Need a delivery address — add it to the customer profile or include it in your message.',
+        const displayName = customer?.name || a.customerName?.trim()
+        let invoiceFields = {}
+        if (a.invoiceId) {
+          const inv = ctx.invoices.find((i) => String(i.id) === String(a.invoiceId))
+          if (inv) {
+            invoiceFields = {
+              invoiceId: inv.id,
+              customerId: inv.customerId != null ? String(inv.customerId) : fromCustomer.customerId,
+              customerName: inv.customerName || displayName,
+              postalCode: a.postalCode || fromCustomer.postalCode || '',
+              address: a.address || inv.customerAddress || fromCustomer.address || '',
+              items: a.items || '',
+            }
           }
         }
-        const d = touchUpdatedAt({
-          id: genId('DEL'),
-          customerId: fromCustomer.customerId || null,
-          customerName: displayName,
-          postalCode: a.postalCode || fromCustomer.postalCode || '',
-          address,
+        const built = buildNewDeliveryRecord({
+          invoiceId: invoiceFields.invoiceId || a.invoiceId || '',
+          customerId: invoiceFields.customerId || fromCustomer.customerId || null,
+          customerName: invoiceFields.customerName || displayName,
+          postalCode: invoiceFields.postalCode || a.postalCode || fromCustomer.postalCode || '',
+          address: invoiceFields.address || a.address || fromCustomer.address || '',
           schedule: a.schedule,
-          status: 'scheduled',
-          items: a.items || '',
+          items: invoiceFields.items || a.items || '',
           driver: a.driver || '',
           notes: a.notes || '',
+        }, {
+          customers: ctx.customers,
+          invoices: ctx.invoices,
           createdBy: currentUser.name,
         })
+        if (!built.ok) return { success: false, error: built.message }
+        const d = built.delivery
         ctx.setDeliveries((prev) => [...prev, d])
-        addNotification?.({ type: 'info', title: 'Delivery Scheduled (AI)', message: `${d.id} → ${displayName}` })
+        addNotification?.({ type: 'info', title: 'Delivery Scheduled (AI)', message: `${d.id} → ${d.customerName}` })
         onNavigate?.('deliveries')
-        return { success: true, message: `Scheduled ${d.id} for ${displayName} at ${a.schedule}` }
+        return { success: true, message: `Scheduled ${d.id} for ${d.customerName} at ${d.schedule}` }
       }
 
       case 'update_delivery_status': {
         if (!canDo(currentUser, 'deliveries')) return { success: false, error: 'No permission for deliveries' }
+        if (!canEdit(currentUser)) return { success: false, error: 'No edit permission' }
         const del = findDelivery(ctx, a)
         if (!del) return { success: false, error: 'No matching delivery found' }
         const status = resolveStatus(a.status)
-        if (!['scheduled', 'transit', 'delivered', 'cancelled'].includes(status)) {
-          return { success: false, error: `Unknown status: ${a.status}` }
-        }
-        ctx.setDeliveries((prev) => prev.map((d) => (String(d.id) === String(del.id) ? touchUpdatedAt({ ...d, status }) : d)))
+        const built = buildDeliveryStatusPatch(status, del)
+        if (!built.ok) return { success: false, error: built.message }
+        ctx.setDeliveries((prev) => prev.map((d) => (
+          sameDeliveryId(d.id, del.id) ? touchUpdatedAt({ ...d, ...built.patch }) : d
+        )))
         if (status === 'delivered') {
           addNotification?.({ type: 'success', title: 'Delivery Completed (AI)', message: `${del.id} delivered` })
         }
@@ -1110,15 +1124,26 @@ export function executeAiAction(name, args, ctx) {
         if (!canEdit(currentUser)) return { success: false, error: 'No edit permission' }
         const del = findDelivery(ctx, a)
         if (!del) return { success: false, error: 'Delivery not found' }
-        const patch = {
-          address: a.address ?? del.address,
+        const built = buildUpdatedDeliveryRecord({
+          invoiceId: del.invoiceId,
+          customerId: del.customerId,
+          customerName: del.customerName,
           postalCode: a.postalCode ?? del.postalCode,
+          address: a.address ?? del.address,
           schedule: a.schedule ?? del.schedule,
+          status: del.status,
           items: a.items ?? del.items,
           driver: a.driver ?? del.driver,
           notes: a.notes ?? del.notes,
-        }
-        ctx.setDeliveries((prev) => prev.map((d) => (String(d.id) === String(del.id) ? touchUpdatedAt({ ...d, ...patch }) : d)))
+        }, del, {
+          customers: ctx.customers,
+          invoices: ctx.invoices,
+          deliveries: ctx.deliveries,
+        })
+        if (!built.ok) return { success: false, error: built.message }
+        ctx.setDeliveries((prev) => prev.map((d) => (
+          sameDeliveryId(d.id, del.id) ? built.delivery : d
+        )))
         addNotification?.({ type: 'success', title: 'Delivery Updated (AI)', message: del.id })
         onNavigate?.('deliveries')
         return { success: true, message: `Updated delivery ${del.id}` }
@@ -1129,7 +1154,7 @@ export function executeAiAction(name, args, ctx) {
         if (!canDelete(currentUser)) return { success: false, error: 'No delete permission' }
         const del = findDelivery(ctx, a)
         if (!del) return { success: false, error: 'Delivery not found' }
-        ctx.setDeliveries((prev) => prev.filter((d) => String(d.id) !== String(del.id)))
+        ctx.setDeliveries((prev) => prev.filter((d) => !sameDeliveryId(d.id, del.id)))
         markDeleted('deliveries', del.id)
         addNotification?.({ type: 'info', title: 'Delivery Deleted (AI)', message: del.id })
         onNavigate?.('deliveries')
