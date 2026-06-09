@@ -6220,6 +6220,11 @@ export default function App() {
     return ALL_NAV_ITEMS.find((item) => hasPermission(currentUser, item.id))?.id || "dashboard";
   }, [currentUser, activeTab]);
 
+  const registeredPondNames = useMemo(
+    () => (pondData.ponds || []).map((p) => p.name).filter(Boolean),
+    [pondData.ponds],
+  );
+
   const handleLogin = async (user) => {
     if (!user || user.active === false) {
       auth.clearSession();
@@ -6367,11 +6372,6 @@ export default function App() {
     onCreateInvoiceFromSale: handleCreateInvoiceFromKoiSale,
     onMarkInvoicePaid: markInvoicePaidCloud,
   };
-
-  const registeredPondNames = useMemo(
-    () => (pondData.ponds || []).map((p) => p.name).filter(Boolean),
-    [pondData.ponds],
-  );
 
   const renderModule = () => {
     const props = { customers, invoices, expenses, products, deliveries, events, koiFishList, customerKoiList, currentUser, addNotification, onNavigate: goToTab };
