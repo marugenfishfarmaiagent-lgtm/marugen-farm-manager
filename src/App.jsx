@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { Users, Fish, FishSymbol, Contact, Droplets, FileText, TrendingUp, Truck, Calendar, MessageSquare, Bell, LogOut, Plus, Search, X, Check, AlertTriangle, Home, Menu, DollarSign, Boxes, Eye, Send, Phone, MapPin, Navigation, Star, Zap, Clock, CheckCircle, XCircle, Info, Archive, ShoppingBag, Shield, UserCog, UserPlus, Edit2, Trash2, Lock, Printer, BookCheck, ImagePlus, Images, Camera, ScanLine, RefreshCw } from "lucide-react";
+import { Users, Fish, FishSymbol, Contact, Droplets, FileText, TrendingUp, Truck, Calendar, MessageSquare, Bell, LogOut, Plus, Search, X, Check, AlertTriangle, Home, Menu, DollarSign, Boxes, Eye, Send, Phone, MapPin, Navigation, Star, Zap, Clock, CheckCircle, XCircle, Info, Archive, ShoppingBag, Shield, UserCog, UserPlus, Edit2, Trash2, Lock, Printer, BookCheck, ImagePlus, Images, Camera, ScanLine, RefreshCw, Download } from "lucide-react";
 import KoiFish from "./modules/KoiFish";
 import CustomerKoi from "./modules/CustomerKoi";
 import PondManagement from "./modules/PondManagement";
@@ -15,6 +15,8 @@ import {
   formatKoiInvoiceLineName, validateInvoiceKoiSales, findLinkedKoiInvoices, buildKoiRefundUpdate,
 } from "./lib/koiInvoice";
 import { PondNameInput } from "./components/ui";
+import BackupExportPanel from "./components/BackupExportPanel";
+import { backupBaseName, downloadFile, expensesToCsv, invoicesToCsv } from "./lib/backupExport";
 import InvoiceDocument from "./components/InvoiceDocument";
 import { downloadInvoicePdf } from "./lib/generateInvoicePdf";
 import { calcInvoiceAmounts } from "./lib/invoiceDesign";
@@ -1492,14 +1494,29 @@ function InvoiceModule({
     sendWhatsApp(viewInv, whatsappDraft.trim());
   };
 
+  const exportInvoicesCsv = () => {
+    const base = backupBaseName();
+    downloadFile(invoicesToCsv(invoices), `${base}-invoices.csv`, "text/csv");
+    addNotification({
+      type: "success",
+      title: "Invoices exported",
+      message: `${invoices.length} invoice(s) saved as CSV.`,
+    });
+  };
+
   return (
     <div className="space-y-4 pb-20 lg:pb-12">
-      <div>
-        <h2 className="text-xl sm:text-2xl font-black text-white">Invoices</h2>
-        <p className="text-slate-400 text-sm">Record invoices — mark when entered in your accounting app</p>
-        {unbookedInvoiceCount > 0 && (
-          <p className="text-amber-400/90 text-xs mt-1">{unbookedInvoiceCount} not yet entered in accounts</p>
-        )}
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+        <div>
+          <h2 className="text-xl sm:text-2xl font-black text-white">Invoices</h2>
+          <p className="text-slate-400 text-sm">Record invoices — mark when entered in your accounting app</p>
+          {unbookedInvoiceCount > 0 && (
+            <p className="text-amber-400/90 text-xs mt-1">{unbookedInvoiceCount} not yet entered in accounts</p>
+          )}
+        </div>
+        <Btn variant="secondary" size="sm" onClick={exportInvoicesCsv} className="shrink-0 justify-center">
+          <Download size={14} /> Export CSV
+        </Btn>
       </div>
       <Fab onClick={() => setShowNew(true)} label="New Invoice" hidden={showNew || !!viewInv} />
 
@@ -2526,14 +2543,29 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
     }
   };
 
+  const exportExpensesCsv = () => {
+    const base = backupBaseName();
+    downloadFile(expensesToCsv(expenses), `${base}-expenses.csv`, "text/csv");
+    addNotification({
+      type: "success",
+      title: "Expenses exported",
+      message: `${expenses.length} expense receipt(s) saved as CSV.`,
+    });
+  };
+
   return (
     <div className="space-y-4 pb-20 lg:pb-12">
-      <div>
-        <h2 className="text-xl sm:text-2xl font-black text-white">Expense Receipts</h2>
-        <p className="text-slate-400 text-sm">Upload invoice photos — enter amounts in your accounting app separately</p>
-        {unbookedExpenseCount > 0 && (
-          <p className="text-amber-400/90 text-xs mt-1">{unbookedExpenseCount} not yet entered in accounts</p>
-        )}
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+        <div>
+          <h2 className="text-xl sm:text-2xl font-black text-white">Expense Receipts</h2>
+          <p className="text-slate-400 text-sm">Upload invoice photos — enter amounts in your accounting app separately</p>
+          {unbookedExpenseCount > 0 && (
+            <p className="text-amber-400/90 text-xs mt-1">{unbookedExpenseCount} not yet entered in accounts</p>
+          )}
+        </div>
+        <Btn variant="secondary" size="sm" onClick={exportExpensesCsv} className="shrink-0 justify-center">
+          <Download size={14} /> Export CSV
+        </Btn>
       </div>
       <Fab onClick={() => { resetUpload(); setShowAdd(true); }} label="Upload Receipt" icon={ImagePlus} hidden={showAdd || viewExpenseId != null} />
 
@@ -3828,7 +3860,7 @@ function AiUsageStatsPanel({ isOwner, cloudMode }) {
   );
 }
 
-function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUserUpdate, cloudMode, apiEnabled, onOpenChangePin }) {
+function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUserUpdate, cloudMode, apiEnabled, onOpenChangePin, getBackupData }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editUser, setEditUser] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -4063,6 +4095,13 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
       <Fab onClick={openAdd} label="Add User" icon={UserPlus} hidden={showAdd || !canEdit} />
 
       <AiUsageStatsPanel isOwner={currentUser.role === "owner"} cloudMode={cloudMode} />
+
+      <BackupExportPanel
+        currentUser={currentUser}
+        cloudMode={cloudMode}
+        getBackupData={getBackupData}
+        addNotification={addNotification}
+      />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="p-4 border-yellow-500/20 bg-yellow-500/5">
@@ -4934,6 +4973,11 @@ export default function App() {
     koiFishList, customerKoiList, pondData, whatsappGroups,
   }), [customers, products, invoices, expenses, deliveries, events, stockLog, koiFishList, customerKoiList, pondData, whatsappGroups]);
 
+  const getBackupData = useCallback(() => ({
+    users,
+    ...syncState,
+  }), [users, syncState]);
+
   useEffect(() => {
     syncStateRef.current = syncState;
   }, [syncState]);
@@ -5339,7 +5383,7 @@ export default function App() {
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} />);
       case "calendar": return guard("calendar", "Calendar", <CalendarModule events={events} setEvents={setEvents} addNotification={addNotification} currentUser={currentUser} />);
       case "chat": return guard("chat", "AI Chat", <ChatModule aiContext={aiContext} messages={chatMessages} setMessages={setChatMessages} />);
-      case "users": return <TeamModule users={users} setUsers={setUsers} currentUser={currentUser} addNotification={addNotification} onCurrentUserUpdate={handleUserUpdate} cloudMode={isSupabaseConfigured && cloudSync} apiEnabled={isSupabaseConfigured} onOpenChangePin={() => setShowChangePin(true)} />;
+      case "users": return <TeamModule users={users} setUsers={setUsers} currentUser={currentUser} addNotification={addNotification} onCurrentUserUpdate={handleUserUpdate} cloudMode={isSupabaseConfigured && cloudSync} apiEnabled={isSupabaseConfigured} onOpenChangePin={() => setShowChangePin(true)} getBackupData={getBackupData} />;
       default: return null;
     }
   };
