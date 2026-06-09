@@ -46,6 +46,7 @@ import { isSupabaseConfigured } from "./lib/supabase";
 import * as auth from "./lib/auth";
 import { markDeleted, clearAllDeletions, peekDeletions } from "./lib/syncDeletions";
 import { mergeRecords, mergePondData, mergeInvoices } from "./lib/cloudMerge";
+import { applyInvoicePins, pinInvoice, unpinInvoice } from "./lib/invoicePins";
 import { touchUpdatedAt } from "./lib/syncMeta";
 import {
   FISH_TYPES, PRODUCT_CATEGORIES, LIST_PAGE_SIZE,
@@ -1237,7 +1238,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
 function InvoiceModule({
   invoices, setInvoices, setCustomers, setProducts, setStockLog, customers, products,
   koiFishList, setKoiFishList, onKoiSold, setCustomerKoiList,
-  addNotification, currentUser, openDraft, onDraftApplied, syncInvoicesNow,
+  addNotification, currentUser, openDraft, onDraftApplied, onMarkInvoicePaid,
 }) {
   const emptyItem = () => ({ name: "", qty: 1, price: "", productId: "", manual: true });
   const buildFormFromDraft = (draft) => ({
@@ -1596,32 +1597,32 @@ function InvoiceModule({
 
   const markPaid = async (id) => {
     if (markingPaidId) return;
-    const inv = invoices.find((i) => i.id === id);
+    const invId = String(id);
+    const inv = invoices.find((i) => String(i.id) === invId);
     if (!inv) return;
     if (inv.status === "paid") return;
     if (!canMarkPaid(inv)) {
-      addNotification({ type: "warning", title: "Cannot Mark Paid", message: `${id} is ${getInvoiceStatus(inv)}.` });
+      addNotification({ type: "warning", title: "Cannot Mark Paid", message: `${invId} is ${getInvoiceStatus(inv)}.` });
       return;
     }
     const paidTotal = calcInvoiceAmounts(inv).total;
-    const updated = touchUpdatedAt(db.sanitizeInvoiceForSync({ ...inv, status: "paid" }));
-    const nextInvoices = sortInvoices(invoices.map((i) => (i.id === id ? updated : i)));
+    const optimistic = touchUpdatedAt(db.sanitizeInvoiceForSync({ ...inv, status: "paid" }));
 
     setMarkingPaidId(id);
-    setInvoices(nextInvoices);
-    setViewInv((prev) => (prev?.id === id ? updated : prev));
-    if (inv.customerId != null && inv.customerId !== "") {
-      setCustomers((prev) => prev.map((c) => {
-        if (String(c.id) !== String(inv.customerId)) return c;
-        const totalSpent = (Number(c.totalSpent) || 0) + paidTotal;
-        return touchUpdatedAt({ ...c, totalSpent, tier: calcCustomerTier(totalSpent) });
-      }));
-    }
+    setInvoices((prev) => sortInvoices(prev.map((i) => (String(i.id) === invId ? optimistic : i))));
+    setViewInv((prev) => (prev && String(prev.id) === invId ? optimistic : prev));
+
     try {
-      await syncInvoicesNow?.(nextInvoices);
-      addNotification({ type: "success", title: "Payment Received", message: `${id} marked as paid - ${formatSGD(paidTotal)}` });
-    } catch {
-      addNotification({ type: "error", title: "Save Failed", message: `${id} marked paid on this device but cloud sync failed. Tap Retry save in the header.` });
+      await onMarkInvoicePaid?.(inv, paidTotal);
+      addNotification({ type: "success", title: "Payment Received", message: `${invId} marked as paid - ${formatSGD(paidTotal)}` });
+    } catch (err) {
+      setInvoices((prev) => sortInvoices(prev.map((i) => (String(i.id) === invId ? inv : i))));
+      setViewInv((prev) => (prev && String(prev.id) === invId ? inv : prev));
+      addNotification({
+        type: "error",
+        title: "Save Failed",
+        message: err?.message || `${invId} could not be saved to cloud. Try again.`,
+      });
     } finally {
       setMarkingPaidId(null);
     }
@@ -5209,7 +5210,7 @@ export default function App() {
     if (merge) {
       setCustomers((prev) => mergeRecords(prev, cleaned.customers, peekDeletions("customers")));
       setProducts((prev) => mergeRecords(prev, cleaned.products, peekDeletions("products")));
-      setInvoices((prev) => mergeInvoices(prev, cleaned.invoices, peekDeletions("invoices")));
+      setInvoices((prev) => applyInvoicePins(mergeInvoices(prev, cleaned.invoices, peekDeletions("invoices"))));
       setExpenses((prev) => mergeRecords(prev, cleaned.expenses, peekDeletions("expenses")));
       setDeliveries((prev) => mergeRecords(prev, cleaned.deliveries, peekDeletions("deliveries")));
       setEvents((prev) => mergeRecords(prev, cleaned.events, peekDeletions("events")));
@@ -5221,7 +5222,7 @@ export default function App() {
     } else {
       setCustomers(cleaned.customers);
       setProducts(cleaned.products);
-      setInvoices(sortInvoices(cleaned.invoices));
+      setInvoices(sortInvoices(applyInvoicePins(cleaned.invoices)));
       setExpenses(cleaned.expenses);
       setDeliveries(cleaned.deliveries);
       setEvents(cleaned.events);
@@ -5382,14 +5383,20 @@ export default function App() {
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync]);
 
   const syncInvoicesNow = useCallback(async (invoicesOverride) => {
-    if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
-    if (!hasPermission(currentUser, "invoices")) return;
+    if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) {
+      throw new Error("Cloud sync is not ready.");
+    }
+    if (!hasPermission(currentUser, "invoices")) {
+      throw new Error("Permission denied (invoices).");
+    }
     const timerKey = "invoices:Invoices";
     if (syncTimersRef.current[timerKey]) {
       clearTimeout(syncTimersRef.current[timerKey]);
       delete syncTimersRef.current[timerKey];
     }
-    if (!(await ensureCloudSyncReady())) return;
+    if (!(await ensureCloudSyncReady())) {
+      throw new Error("Session needs refresh. Log out and log in again.");
+    }
     const payload = invoicesOverride ?? syncStateRef.current.invoices;
     if (invoicesOverride) {
       syncStateRef.current = { ...syncStateRef.current, invoices: invoicesOverride };
@@ -5407,6 +5414,59 @@ export default function App() {
       syncInFlightRef.current -= 1;
     }
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync]);
+
+  const markInvoicePaidCloud = useCallback(async (inv, paidTotal) => {
+    const invId = String(inv.id);
+    const optimistic = touchUpdatedAt(db.sanitizeInvoiceForSync({ ...inv, status: "paid" }));
+
+    const timerKey = "invoices:Invoices";
+    if (syncTimersRef.current[timerKey]) {
+      clearTimeout(syncTimersRef.current[timerKey]);
+      delete syncTimersRef.current[timerKey];
+    }
+
+    let waited = 0;
+    while (syncInFlightRef.current > 0 && waited < 5000) {
+      await new Promise((r) => setTimeout(r, 100));
+      waited += 100;
+    }
+
+    pinInvoice(optimistic);
+    const nextInvoices = sortInvoices(
+      syncStateRef.current.invoices.map((i) => (String(i.id) === invId ? optimistic : i)),
+    );
+    syncStateRef.current = { ...syncStateRef.current, invoices: nextInvoices };
+
+    if (inv.customerId != null && inv.customerId !== "") {
+      setCustomers((prev) => prev.map((c) => {
+        if (String(c.id) !== String(inv.customerId)) return c;
+        const totalSpent = (Number(c.totalSpent) || 0) + paidTotal;
+        return touchUpdatedAt({ ...c, totalSpent, tier: calcCustomerTier(totalSpent) });
+      }));
+    }
+
+    if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
+
+    syncInFlightRef.current += 1;
+    try {
+      const confirmed = await db.markInvoicePaidCloud(invId);
+      unpinInvoice(invId);
+      const confirmedRow = touchUpdatedAt(db.sanitizeInvoiceForSync(confirmed));
+      const finalInvoices = sortInvoices(
+        syncStateRef.current.invoices.map((i) => (String(i.id) === invId ? confirmedRow : i)),
+      );
+      syncStateRef.current = { ...syncStateRef.current, invoices: finalInvoices };
+      setInvoices(finalInvoices);
+      setCloudSync(true);
+      setCloudError(null);
+      touchLastSync();
+    } catch (err) {
+      handleSyncFailure(err);
+      throw err;
+    } finally {
+      syncInFlightRef.current -= 1;
+    }
+  }, [currentUser, handleSyncFailure, touchLastSync]);
 
   const syncDebounced = useCallback((perm, label, fn, data) => {
     if (!dataReady || !cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
@@ -5820,7 +5880,7 @@ export default function App() {
       case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} addNotification={addNotification} canEdit={canEditRecords(currentUser)} />);
       case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondData} addNotification={addNotification} currentUser={currentUser} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} />);
-      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} syncInvoicesNow={syncInvoicesNow} />);
+      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} onMarkInvoicePaid={markInvoicePaidCloud} />);
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} addNotification={addNotification} currentUser={currentUser} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpenses} addNotification={addNotification} currentUser={currentUser} />);
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} />);

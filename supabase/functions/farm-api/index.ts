@@ -398,6 +398,31 @@ Deno.serve(async (req) => {
       return J({ url, imageUrl: url });
     }
 
+    if (body.action === "mark_invoice_paid") {
+      if (!hasPermission(user, "invoices")) {
+        return J({ error: "Permission denied (invoices)" }, 403);
+      }
+      const id = String(body.id || "").trim();
+      if (!id) return J({ error: "Invoice id required" }, 400);
+
+      const { data: existing, error: fetchErr } = await db.from("invoices").select("*").eq("id", id).maybeSingle();
+      if (fetchErr) throw fetchErr;
+      if (!existing) return J({ error: "Invoice not found" }, 404);
+      if (existing.status === "paid") return J({ ok: true, invoice: existing });
+      if (existing.status === "cancelled") {
+        return J({ error: "Cancelled invoices cannot be marked paid" }, 400);
+      }
+
+      const now = new Date().toISOString();
+      const { data, error } = await db.from("invoices")
+        .update({ status: "paid", updated_at: now })
+        .eq("id", id)
+        .select("*")
+        .single();
+      if (error) throw error;
+      return J({ ok: true, invoice: data });
+    }
+
     if (body.action === "sync") {
       const { entity, data, prune, deletedIds } = body;
       const perm = ENTITY_PERMS[entity];
