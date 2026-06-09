@@ -1245,7 +1245,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
 function InvoiceModule({
   invoices, setInvoices, setCustomers, setProducts, setStockLog, customers, products,
   koiFishList, setKoiFishList, onKoiSold, setCustomerKoiList,
-  addNotification, currentUser, openDraft, onDraftApplied, onMarkInvoicePaid, onCancelInvoiceCloud, onCreateInvoiceCloud,
+  addNotification, currentUser, openDraft, onDraftApplied, onMarkInvoicePaid, onCancelInvoiceCloud, onCreateInvoiceCloud, onInventorySideEffect,
 }) {
   const emptyItem = () => ({ name: "", qty: 1, price: "", productId: "", manual: true });
   const buildFormFromDraft = (draft) => ({
@@ -1520,6 +1520,7 @@ function InvoiceModule({
       addNotification({ type: "error", title: "Insufficient Stock", message: stockCheck.message });
       return;
     }
+    onInventorySideEffect?.();
     const koiApply = applyInvoiceKoiSales({
       items: activeItems,
       koiList: koiFishList,
@@ -1535,6 +1536,7 @@ function InvoiceModule({
         invoiceId: invId,
         by: currentUser?.name || "Staff",
       });
+      onInventorySideEffect?.();
       setFormError(koiApply.message);
       addNotification({ type: "error", title: "Fish Stock", message: koiApply.message });
       return;
@@ -1578,6 +1580,7 @@ function InvoiceModule({
         by: currentUser?.name || "Staff",
       });
       restoreInvoiceKoiSales(invoiceItems, setKoiFishList, setCustomerKoiList);
+      onInventorySideEffect?.();
       setInvoices((prev) => prev.filter((i) => String(i.id) !== String(invId)));
       setFormError(err?.message || "Could not save invoice to cloud. Check connection and try again.");
       addNotification({ type: "error", title: "Invoice Not Saved", message: err?.message || "Cloud save failed. Your invoice was not created." });
@@ -5155,6 +5158,8 @@ export default function App() {
   const syncTimersRef = useRef({});
   const syncInFlightRef = useRef(0);
   const syncStateRef = useRef({});
+  const inventorySyncPendingRef = useRef(false);
+  const handleKoiSoldRef = useRef(() => {});
   const invoicesNormalizedRef = useRef(false);
 
   const [users, setUsers] = useState(isSupabaseConfigured ? [] : LOCAL_DEMO_USERS);
@@ -5548,16 +5553,47 @@ export default function App() {
         by: currentUser?.name || "Staff",
       });
       restoreInvoiceKoiSales(inv.items || [], setKoiFishList, setCustomerKoiList);
+      setDeliveries((prev) => prev.map((d) => {
+        if (String(d.invoiceId || "") !== invId) return d;
+        if (!["scheduled", "transit"].includes(d.status)) return d;
+        return touchUpdatedAt({ ...d, status: "cancelled" });
+      }));
+      inventorySyncPendingRef.current = true;
     };
 
+    const revertCancelSideEffects = () => {
+      deductStockForInvoice(setProducts, setStockLog, products, inv.items || [], {
+        invoiceId: invId,
+        by: currentUser?.name || "Staff",
+      });
+      applyInvoiceKoiSales({
+        items: inv.items || [],
+        koiList: koiFishList,
+        setKoiList: setKoiFishList,
+        customerId: inv.customerId,
+        customers,
+        soldDate: inv.date || today(),
+        onKoiSold: (...args) => handleKoiSoldRef.current?.(...args),
+        addNotification,
+      });
+      setDeliveries((prev) => prev.map((d) => {
+        if (String(d.invoiceId || "") !== invId || d.status !== "cancelled") return d;
+        return touchUpdatedAt({ ...d, status: "scheduled" });
+      }));
+      inventorySyncPendingRef.current = true;
+    };
+
+    applyCancelSideEffects();
+
     if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) {
-      applyCancelSideEffects();
       return;
     }
     if (!hasPermission(currentUser, "invoices") || !hasPermission(currentUser, "delete")) {
+      revertCancelSideEffects();
       throw new Error("Permission denied.");
     }
     if (!(await ensureCloudSyncReady())) {
+      revertCancelSideEffects();
       throw new Error("Session needs refresh. Log out and log in again.");
     }
 
@@ -5565,7 +5601,6 @@ export default function App() {
     try {
       const confirmed = await db.cancelInvoiceCloud(invId);
       unpinInvoice(invId);
-      applyCancelSideEffects();
       const confirmedRow = touchUpdatedAt(db.sanitizeInvoiceForSync(confirmed));
       const finalInvoices = sortInvoices(
         syncStateRef.current.invoices.map((i) => (String(i.id) === invId ? confirmedRow : i)),
@@ -5577,14 +5612,15 @@ export default function App() {
       touchLastSync();
     } catch (err) {
       unpinInvoice(invId);
+      revertCancelSideEffects();
       handleSyncFailure(err);
       throw err;
     } finally {
       syncInFlightRef.current -= 1;
     }
   }, [
-    currentUser, products, handleSyncFailure, touchLastSync, ensureCloudSyncReady,
-    setProducts, setStockLog, setKoiFishList, setCustomerKoiList,
+    currentUser, products, customers, koiFishList, handleSyncFailure, touchLastSync, ensureCloudSyncReady,
+    setProducts, setStockLog, setKoiFishList, setCustomerKoiList, setDeliveries, addNotification,
   ]);
 
   const createInvoiceCloud = useCallback(async (inv) => {
@@ -5637,6 +5673,10 @@ export default function App() {
     }
   }, [currentUser, handleSyncFailure, touchLastSync, ensureCloudSyncReady]);
 
+  const requestInventorySideEffect = useCallback(() => {
+    inventorySyncPendingRef.current = true;
+  }, []);
+
   const syncDebounced = useCallback((perm, label, fn, data) => {
     if (!dataReady || !cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
     if (!hasPermission(currentUser, perm)) return;
@@ -5670,6 +5710,44 @@ export default function App() {
       delete syncTimersRef.current[key];
     };
   }, [dataReady, cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync]);
+
+  useEffect(() => {
+    if (!inventorySyncPendingRef.current) return;
+    if (!dataReady || !cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
+    if (!hasPermission(currentUser, "inventory")) {
+      inventorySyncPendingRef.current = false;
+      return;
+    }
+    inventorySyncPendingRef.current = false;
+
+    const productKey = "inventory:Inventory";
+    const stockKey = "inventory:Stock activity";
+    if (syncTimersRef.current[productKey]) {
+      clearTimeout(syncTimersRef.current[productKey]);
+      delete syncTimersRef.current[productKey];
+    }
+    if (syncTimersRef.current[stockKey]) {
+      clearTimeout(syncTimersRef.current[stockKey]);
+      delete syncTimersRef.current[stockKey];
+    }
+
+    syncInFlightRef.current += 1;
+    (async () => {
+      try {
+        if (!(await ensureCloudSyncReady())) return;
+        const snap = syncStateRef.current;
+        await db.syncProducts(snap.products || []);
+        await db.syncStockActivity(snap.stockLog || []);
+        setCloudSync(true);
+        setCloudError(null);
+        touchLastSync();
+      } catch (err) {
+        handleSyncFailure(err);
+      } finally {
+        syncInFlightRef.current -= 1;
+      }
+    })();
+  }, [products, stockLog, dataReady, cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync]);
 
   const retryCloudSync = useCallback(async () => {
     if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser || !cloudHydrated) return;
@@ -5842,6 +5920,10 @@ export default function App() {
       message: `Koi kept at ${keepPondName} for ${customer.name}. Track in Customer Koi.`,
     });
   }, [addNotification, customerKoiList]);
+
+  useEffect(() => {
+    handleKoiSoldRef.current = handleKoiSold;
+  }, [handleKoiSold]);
 
   const handleKoiRefund = useCallback((koi, { reason = "" } = {}) => {
     if (!canRefundSales(currentUser)) {
@@ -6049,7 +6131,7 @@ export default function App() {
       case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} addNotification={addNotification} canEdit={canEditRecords(currentUser)} />);
       case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondData} addNotification={addNotification} currentUser={currentUser} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} />);
-      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} />);
+      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} />);
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} addNotification={addNotification} currentUser={currentUser} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpenses} addNotification={addNotification} currentUser={currentUser} />);
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} />);

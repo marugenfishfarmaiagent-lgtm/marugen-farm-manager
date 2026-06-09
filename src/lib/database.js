@@ -67,14 +67,20 @@ function sanitizeInvoiceItems(items) {
   if (!Array.isArray(items)) return []
   return items.map((it) => {
     if (!it || typeof it !== 'object') return it
+    const productId = it.productId ?? it.product_id
+    const koiId = it.koiId ?? it.koi_id
     const next = {
       ...it,
       name: it.name ?? '',
       qty: Number(it.qty) || 0,
       price: Number(it.price) || 0,
     }
-    if (next.productId === '' || next.productId == null) delete next.productId
-    if (next.koiId === '' || next.koiId == null) delete next.koiId
+    delete next.product_id
+    delete next.koi_id
+    if (productId != null && productId !== '') next.productId = productId
+    else delete next.productId
+    if (koiId != null && koiId !== '') next.koiId = koiId
+    else delete next.koiId
     return next
   })
 }

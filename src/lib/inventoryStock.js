@@ -3,28 +3,44 @@ import { isStockTracked } from './productCatalog'
 import { touchUpdatedAt } from './syncMeta'
 
 export function serializeInvoiceItem(it) {
+  const normalized = normalizeInvoiceItemRef(it)
   const item = {
-    name: it.name,
-    qty: +it.qty || 0,
-    price: +it.price || 0,
+    name: normalized.name,
+    qty: +normalized.qty || 0,
+    price: +normalized.price || 0,
   }
-  if (it.productId != null && it.productId !== '') {
-    item.productId = it.productId
+  if (normalized.productId != null && normalized.productId !== '') {
+    item.productId = normalized.productId
   }
-  if (it.koiId != null && it.koiId !== '') {
-    item.koiId = it.koiId
-    item.koiDisposition = it.koiDisposition || 'taken'
-    if (it.koiDisposition === 'keep' && it.keepPondName) {
-      item.keepPondName = it.keepPondName
+  if (normalized.koiId != null && normalized.koiId !== '') {
+    item.koiId = normalized.koiId
+    item.koiDisposition = normalized.koiDisposition || 'taken'
+    if (normalized.koiDisposition === 'keep' && normalized.keepPondName) {
+      item.keepPondName = normalized.keepPondName
     }
-    if (it.koiAlreadySold) item.koiAlreadySold = true
+    if (normalized.koiAlreadySold) item.koiAlreadySold = true
   }
   return item
 }
 
+export function normalizeInvoiceItemRef(it) {
+  if (!it || typeof it !== 'object') return it
+  const productId = it.productId ?? it.product_id
+  const koiId = it.koiId ?? it.koi_id
+  const next = { ...it }
+  if (productId != null && productId !== '') next.productId = productId
+  else delete next.productId
+  if (koiId != null && koiId !== '') next.koiId = koiId
+  else delete next.koiId
+  delete next.product_id
+  delete next.koi_id
+  return next
+}
+
 function aggregateQtyByProduct(items) {
   const qtyByProduct = new Map()
-  for (const it of items || []) {
+  for (const raw of items || []) {
+    const it = normalizeInvoiceItemRef(raw)
     if (it.productId == null || it.productId === '') continue
     const key = String(it.productId)
     qtyByProduct.set(key, (qtyByProduct.get(key) || 0) + (+it.qty || 0))
