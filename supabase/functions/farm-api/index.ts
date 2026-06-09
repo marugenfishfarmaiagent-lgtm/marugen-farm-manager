@@ -224,6 +224,45 @@ async function isPinTaken(db: ReturnType<typeof adminClient>, pin: string, excep
   return false;
 }
 
+const FARM_PERMISSION_IDS = new Set([
+  "dashboard", "inventory", "koifish", "customerkoi", "ponds", "invoices", "customers",
+  "expenses", "accounting", "edit", "delete", "refund", "deliveries", "calendar", "chat", "users",
+]);
+
+function sanitizeFarmPermissions(perms: unknown): string[] | null {
+  if (!Array.isArray(perms) || !perms.length) return null;
+  const clean = [...new Set(perms.map((p) => String(p)).filter((p) => FARM_PERMISSION_IDS.has(p)))];
+  return clean.length ? clean : null;
+}
+
+function isValidFarmPin(pin: unknown, { required = false } = {}): pin is string {
+  const raw = String(pin ?? "").trim();
+  if (!raw) return !required;
+  return /^\d{4,6}$/.test(raw);
+}
+
+async function assertOwnerGuardrails(
+  db: ReturnType<typeof adminClient>,
+  target: { role?: string; active?: boolean; is_system?: boolean },
+  next: { role: string; active: boolean; permissions: string[] },
+) {
+  if (target.is_system && next.role !== "owner") {
+    return "System owner account must remain an owner";
+  }
+  if (target.role === "owner" && target.active !== false) {
+    const { count } = await db.from("farm_users")
+      .select("*", { count: "exact", head: true })
+      .eq("role", "owner")
+      .eq("active", true);
+    if ((count || 0) <= 1) {
+      if (next.role !== "owner") return "At least one active owner is required";
+      if (!next.permissions.includes("users")) return "Last owner must keep Team permission";
+      if (!next.active) return "Cannot deactivate the only active owner";
+    }
+  }
+  return null;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return optionsResponse(req);
 
@@ -556,44 +595,31 @@ Deno.serve(async (req) => {
           if (!["owner", "staff"].includes(String(u.role))) {
             return J({ error: "Invalid role" }, 400);
           }
-          if (!Array.isArray(u.permissions) || !u.permissions.length) {
-            return J({ error: "At least one permission required" }, 400);
-          }
+          const permissions = sanitizeFarmPermissions(u.permissions);
+          if (!permissions) return J({ error: "At least one valid permission required" }, 400);
 
           const { data: target } = await db.from("farm_users")
             .select("id, role, active, is_system")
             .eq("id", u.id)
             .maybeSingle();
 
-          if (target?.is_system && String(u.role) !== "owner") {
-            return J({ error: "System owner account must remain an owner" }, 400);
-          }
-
-          if (target?.role === "owner" && target.active !== false) {
-            const { count } = await db.from("farm_users")
-              .select("*", { count: "exact", head: true })
-              .eq("role", "owner")
-              .eq("active", true);
-            if ((count || 0) <= 1) {
-              if (String(u.role) !== "owner") {
-                return J({ error: "At least one active owner is required" }, 400);
-              }
-              if (!u.permissions?.includes("users")) {
-                return J({ error: "Last owner must keep Team permission" }, 400);
-              }
-            }
-          }
+          const ownerErr = await assertOwnerGuardrails(db, target || {}, {
+            role: String(u.role),
+            active: u.active !== false,
+            permissions,
+          });
+          if (ownerErr) return J({ error: ownerErr }, 400);
 
           const row: Record<string, unknown> = {
             name: String(u.name).trim(),
             role: u.role,
             active: u.active !== false,
-            permissions: u.permissions,
+            permissions,
             is_system: u.isSystem || false,
           };
 
           let pin_hash: string | undefined;
-          if (u.pin && String(u.pin).length >= 4) {
+          if (u.pin && isValidFarmPin(u.pin)) {
             if (await isPinTaken(db, String(u.pin), Number(u.id))) {
               return J({ error: "PIN already in use" }, 400);
             }
@@ -961,8 +987,11 @@ Deno.serve(async (req) => {
       }
       const { name, role, pin, permissions, active } = body;
       if (!name?.trim()) return J({ error: "Name is required" }, 400);
-      if (!pin || String(pin).length < 4) return J({ error: "4-digit PIN required" }, 400);
-      if (!permissions?.length) return J({ error: "At least one permission required" }, 400);
+      if (!isValidFarmPin(pin, { required: true })) {
+        return J({ error: "PIN must be 4–6 digits" }, 400);
+      }
+      const cleanPermissions = sanitizeFarmPermissions(permissions);
+      if (!cleanPermissions) return J({ error: "At least one valid permission required" }, 400);
       if (!["owner", "staff"].includes(role)) return J({ error: "Invalid role" }, 400);
 
       if (await isPinTaken(db, String(pin))) {
@@ -975,7 +1004,7 @@ Deno.serve(async (req) => {
         role,
         pin_hash,
         active: active !== false,
-        permissions,
+        permissions: cleanPermissions,
         is_system: false,
       }).select("id, name, role, active, permissions, is_system").single();
       if (error) return J({ error: error.message }, 500);
@@ -990,7 +1019,8 @@ Deno.serve(async (req) => {
       const { userId, name, role, pin, permissions, active } = body;
       if (userId == null) return J({ error: "userId required" }, 400);
       if (!name?.trim()) return J({ error: "Name is required" }, 400);
-      if (!permissions?.length) return J({ error: "At least one permission required" }, 400);
+      const cleanPermissions = sanitizeFarmPermissions(permissions);
+      if (!cleanPermissions) return J({ error: "At least one valid permission required" }, 400);
       if (!["owner", "staff"].includes(role)) return J({ error: "Invalid role" }, 400);
 
       const { data: target, error: fetchErr } = await db.from("farm_users")
@@ -999,32 +1029,20 @@ Deno.serve(async (req) => {
         .maybeSingle();
       if (fetchErr || !target) return J({ error: "User not found" }, 404);
 
-      if (target.is_system && role !== "owner") {
-        return J({ error: "System owner account must remain an owner" }, 400);
-      }
-
-      if (target.role === "owner" && target.active !== false) {
-        const { count } = await db.from("farm_users")
-          .select("*", { count: "exact", head: true })
-          .eq("role", "owner")
-          .eq("active", true);
-        if ((count || 0) <= 1) {
-          if (role !== "owner") {
-            return J({ error: "At least one active owner is required" }, 400);
-          }
-          if (!permissions?.includes("users")) {
-            return J({ error: "Last owner must keep Team permission" }, 400);
-          }
-        }
-      }
+      const ownerErr = await assertOwnerGuardrails(db, target, {
+        role,
+        active: active !== false,
+        permissions: cleanPermissions,
+      });
+      if (ownerErr) return J({ error: ownerErr }, 400);
 
       const row: Record<string, unknown> = {
         name: String(name).trim(),
         role,
         active: active !== false,
-        permissions,
+        permissions: cleanPermissions,
       };
-      if (pin && String(pin).length >= 4) {
+      if (pin && isValidFarmPin(pin)) {
         if (await isPinTaken(db, String(pin), Number(userId))) {
           return J({ error: "PIN already in use" }, 400);
         }

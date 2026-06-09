@@ -45,6 +45,10 @@ import {
   buildAssistantReplyText, buildChatApiThread, CHAT_HISTORY_MAX,
   sanitizeStoredChatMessages, slimChatMessageForStorage, validateChatOutgoingMessage,
 } from "./lib/chatOps";
+import {
+  defaultPermissionsForRole, getUserDeactivateBlockReason, getUserDeleteBlockReason,
+  sameUserId, userInitial, validateUserFields, validateUserPin,
+} from "./lib/teamOps";
 import { buildBusinessContext, executeAiActions, resolvePendingAiActions } from "./lib/aiActions";
 import * as db from "./lib/database";
 import { SYNC_ENTITIES } from "./lib/cloudSync";
@@ -4267,18 +4271,24 @@ function ChangePinModal({ open, onClose, currentUser, users, setUsers, addNotifi
       if (isSupabaseConfigured) {
         await auth.changeMyPin({ currentPin, newPin });
       } else {
-        const me = users.find((u) => String(u.id) === String(currentUser.id));
+        const me = users.find((u) => sameUserId(u.id, currentUser.id));
         if (!me || me.pin !== currentPin) {
           setError("Current PIN is incorrect.");
           setSaving(false);
           return;
         }
-        if (users.some((u) => u.pin === newPin && String(u.id) !== String(currentUser.id))) {
+        const pinCheck = validateUserPin(newPin, { required: true });
+        if (!pinCheck.ok) {
+          setError(pinCheck.message);
+          setSaving(false);
+          return;
+        }
+        if (users.some((u) => u.pin === newPin && !sameUserId(u.id, currentUser.id))) {
           setError("This PIN is already assigned to another user.");
           setSaving(false);
           return;
         }
-        setUsers((prev) => prev.map((u) => (String(u.id) === String(currentUser.id) ? { ...u, pin: newPin } : u)));
+        setUsers((prev) => prev.map((u) => (sameUserId(u.id, currentUser.id) ? { ...u, pin: newPin } : u)));
       }
       addNotification({ type: "success", title: "PIN Updated", message: "Your login PIN has been changed successfully." });
       handleClose();
@@ -4416,8 +4426,8 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
   const [showAdd, setShowAdd] = useState(false);
   const [editUser, setEditUser] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ name: "", role: "staff", pin: "", permissions: [...DEFAULT_PERMISSIONS.staff], active: true });
-  const sameUserId = (a, b) => String(a) === String(b);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [form, setForm] = useState({ name: "", role: "staff", pin: "", permissions: defaultPermissionsForRole("staff"), active: true });
 
   if (!hasPermission(currentUser, "users")) return <AccessDenied moduleName="Team & Permissions" />;
 
@@ -4429,7 +4439,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
-    setForm({ name: "", role: "staff", pin: "", permissions: [...DEFAULT_PERMISSIONS.staff], active: true });
+    setForm({ name: "", role: "staff", pin: "", permissions: defaultPermissionsForRole("staff"), active: true });
     setEditUser(null);
     setShowAdd(true);
   };
@@ -4454,7 +4464,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
   };
 
   const applyRoleDefaults = (role) => {
-    setForm((f) => ({ ...f, role, permissions: [...DEFAULT_PERMISSIONS[role]] }));
+    setForm((f) => ({ ...f, role, permissions: defaultPermissionsForRole(role) }));
   };
 
   const saveUser = async () => {
@@ -4462,43 +4472,20 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
-    if (!form.name.trim()) {
-      addNotification({ type: "error", title: "Validation Error", message: "Name is required." });
+    const validated = validateUserFields(form, {
+      isNew: !editUser,
+      users,
+      editUser,
+      currentUserId: currentUser.id,
+    });
+    if (!validated.ok) {
+      addNotification({ type: "error", title: "Validation Error", message: validated.message });
       return;
     }
-    const pinChanging = form.pin.length > 0;
-    if (!editUser && form.pin.length < 4) {
-      addNotification({ type: "error", title: "Validation Error", message: "New users need a 4-digit PIN." });
-      return;
-    }
-    if (editUser && pinChanging && form.pin.length < 4) {
-      addNotification({ type: "error", title: "Validation Error", message: "PIN must be at least 4 digits, or leave blank to keep current PIN." });
-      return;
-    }
-    if (pinChanging && !apiEnabled) {
-      const pinTaken = users.some((u) => u.pin === form.pin && u.id !== editUser?.id);
+    if (validated.pinChanging && !apiEnabled) {
+      const pinTaken = users.some((u) => u.pin === validated.pin && !sameUserId(u.id, editUser?.id));
       if (pinTaken) {
         addNotification({ type: "error", title: "PIN In Use", message: "This PIN is already assigned to another user." });
-        return;
-      }
-    }
-    if (form.permissions.length === 0) {
-      addNotification({ type: "error", title: "No Permissions", message: "Select at least one permission." });
-      return;
-    }
-
-    if (editUser) {
-      const isLastOwner = editUser.role === "owner" && users.filter((u) => u.role === "owner" && u.active !== false).length === 1;
-      if (isLastOwner && form.role !== "owner") {
-        addNotification({ type: "error", title: "Cannot Change", message: "At least one active owner must remain." });
-        return;
-      }
-      if (isLastOwner && !form.permissions.includes("users")) {
-        addNotification({ type: "error", title: "Cannot Remove", message: "Last owner must keep Team permission." });
-        return;
-      }
-      if (editUser.isSystem && form.role !== "owner") {
-        addNotification({ type: "error", title: "Cannot Change", message: "The system owner account must remain an owner." });
         return;
       }
     }
@@ -4509,57 +4496,70 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
         if (editUser) {
           const saved = await db.updateUser({
             userId: editUser.id,
-            name: form.name.trim(),
-            role: form.role,
-            pin: pinChanging ? form.pin : undefined,
-            permissions: form.permissions,
-            active: form.active,
+            name: validated.name,
+            role: validated.role,
+            pin: validated.pinChanging ? validated.pin : undefined,
+            permissions: validated.permissions,
+            active: validated.active,
           });
           const refreshed = await db.fetchUsers();
           if (refreshed) setUsers(refreshed);
           else if (saved) setUsers((prev) => prev.map((u) => (sameUserId(u.id, saved.id) ? saved : u)));
           if (sameUserId(editUser.id, currentUser.id) && onCurrentUserUpdate) {
             onCurrentUserUpdate({
-              name: form.name.trim(),
-              role: form.role,
-              permissions: form.permissions,
-              active: form.active,
+              name: validated.name,
+              role: validated.role,
+              permissions: validated.permissions,
+              active: validated.active,
             });
           }
-          const msg = pinChanging ? `${form.name} updated (PIN changed).` : `${form.name} saved.`;
+          const msg = validated.pinChanging ? `${validated.name} updated (PIN changed).` : `${validated.name} saved.`;
           addNotification({ type: "success", title: "User Updated", message: msg });
         } else {
           await db.addUser({
-            name: form.name.trim(),
-            role: form.role,
-            pin: form.pin,
-            permissions: form.permissions,
-            active: form.active,
+            name: validated.name,
+            role: validated.role,
+            pin: validated.pin,
+            permissions: validated.permissions,
+            active: validated.active,
           });
           const refreshed = await db.fetchUsers();
           if (refreshed) setUsers(refreshed);
-          addNotification({ type: "success", title: "User Added", message: `${form.name} (${form.role}) account created. Share their PIN securely.` });
+          addNotification({ type: "success", title: "User Added", message: `${validated.name} (${validated.role}) account created. Share their PIN securely.` });
         }
       } else if (editUser) {
         setUsers((prev) => prev.map((u) => {
           if (!sameUserId(u.id, editUser.id)) return u;
-          const next = { ...u, name: form.name.trim(), role: form.role, permissions: form.permissions, active: form.active };
-          if (pinChanging) next.pin = form.pin;
+          const next = {
+            ...u,
+            name: validated.name,
+            role: validated.role,
+            permissions: validated.permissions,
+            active: validated.active,
+          };
+          if (validated.pinChanging) next.pin = validated.pin;
           return next;
         }));
         if (sameUserId(editUser.id, currentUser.id) && onCurrentUserUpdate) {
           onCurrentUserUpdate({
-            name: form.name.trim(),
-            role: form.role,
-            permissions: form.permissions,
-            active: form.active,
+            name: validated.name,
+            role: validated.role,
+            permissions: validated.permissions,
+            active: validated.active,
           });
         }
-        addNotification({ type: "success", title: "User Updated", message: `${form.name} saved locally.` });
+        addNotification({ type: "success", title: "User Updated", message: `${validated.name} saved locally.` });
       } else {
-        const newUser = { id: Date.now(), ...form, name: form.name.trim() };
+        const newUser = {
+          id: Date.now(),
+          name: validated.name,
+          role: validated.role,
+          pin: validated.pin,
+          permissions: validated.permissions,
+          active: validated.active,
+        };
         setUsers((prev) => [...prev, newUser]);
-        addNotification({ type: "success", title: "User Added", message: `${form.name} added locally (offline mode).` });
+        addNotification({ type: "success", title: "User Added", message: `${validated.name} added locally (offline mode).` });
       }
       setShowAdd(false);
       setEditUser(null);
@@ -4570,25 +4570,26 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
     }
   };
 
-  const deleteUser = async (user) => {
+  const requestDeleteUser = (user) => {
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
       return;
     }
-    if (sameUserId(user.id, currentUser.id)) {
-      addNotification({ type: "error", title: "Cannot Delete", message: "You cannot delete your own account." });
+    const blockReason = getUserDeleteBlockReason(user, { users, currentUserId: currentUser.id });
+    if (blockReason) {
+      addNotification({ type: "error", title: "Cannot Delete", message: blockReason });
       return;
     }
-    if (user.isSystem) {
-      addNotification({ type: "error", title: "Cannot Delete", message: "The system owner account cannot be removed." });
-      return;
-    }
-    if (user.role === "owner" && users.filter((u) => u.role === "owner" && u.active !== false).length <= 1) {
-      addNotification({ type: "error", title: "Cannot Delete", message: "At least one active owner is required." });
-      return;
-    }
-    if (!confirm(`Remove ${user.name}? This cannot be undone.`)) return;
+    setDeleteConfirm(user);
+  };
 
+  const confirmDeleteUser = async () => {
+    if (!deleteConfirm) return;
+    if (!canDelete) {
+      notifyPermissionDenied(addNotification, "delete");
+      return;
+    }
+    const user = deleteConfirm;
     try {
       if (apiEnabled) {
         await db.deleteUser(user.id);
@@ -4599,6 +4600,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
         setUsers((prev) => prev.filter((u) => !sameUserId(u.id, user.id)));
       }
       addNotification({ type: "info", title: "User Removed", message: `${user.name} has been permanently removed.` });
+      setDeleteConfirm(null);
     } catch (err) {
       addNotification({ type: "error", title: "Delete Failed", message: err?.message || "Could not remove user from server." });
     }
@@ -4609,15 +4611,14 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
-    if (sameUserId(user.id, currentUser.id)) {
-      addNotification({ type: "error", title: "Cannot Deactivate", message: "You cannot deactivate your own account." });
-      return;
-    }
-    if (user.role === "owner" && user.active !== false && users.filter((u) => u.role === "owner" && u.active !== false).length <= 1) {
-      addNotification({ type: "error", title: "Cannot Deactivate", message: "At least one active owner is required." });
-      return;
-    }
     const nextActive = user.active === false;
+    if (!nextActive) {
+      const blockReason = getUserDeactivateBlockReason(user, { users, currentUserId: currentUser.id });
+      if (blockReason) {
+        addNotification({ type: "error", title: "Cannot Deactivate", message: blockReason });
+        return;
+      }
+    }
     try {
       if (apiEnabled) {
         await db.updateUser({
@@ -4644,7 +4645,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
         <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2"><UserCog size={22} className="text-cyan-400 shrink-0" />Team & Permissions</h2>
         <p className="text-slate-400 text-sm">Manage staff & owner accounts with module access</p>
       </div>
-      <Fab onClick={openAdd} label="Add User" icon={UserPlus} hidden={showAdd || !canEdit} />
+      <Fab onClick={openAdd} label="Add User" icon={UserPlus} hidden={showAdd || !!deleteConfirm || !canEdit} />
 
       <AiUsageStatsPanel isOwner={currentUser.role === "owner"} cloudMode={cloudMode} />
 
@@ -4682,7 +4683,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
             <div className="flex items-start justify-between gap-4 flex-wrap">
               <div className="flex items-center gap-3">
                 <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-black ${user.role === "owner" ? "bg-yellow-500/20 text-yellow-300" : "bg-blue-500/20 text-blue-300"}`}>
-                  {user.name[0].toUpperCase()}
+                  {userInitial(user.name)}
                 </div>
                 <div>
                   <p className="text-white font-bold flex items-center gap-2">
@@ -4703,7 +4704,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
                     {user.active === false ? "Activate" : "Deactivate"}
                   </Btn>
                 )}
-                {!user.isSystem && canDelete && <Btn variant="danger" size="sm" onClick={() => deleteUser(user)}><Trash2 size={12} /></Btn>}
+                {!user.isSystem && canDelete && <Btn variant="danger" size="sm" onClick={() => requestDeleteUser(user)}><Trash2 size={12} /></Btn>}
               </div>
             </div>
             <div className="flex flex-wrap gap-1.5 mt-3 pt-3 border-t border-slate-700/50">
@@ -4764,8 +4765,27 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
         </div>
         <div className="modal-actions">
           <Btn variant="secondary" onClick={() => { setShowAdd(false); setEditUser(null); }}>Cancel</Btn>
-          <Btn onClick={saveUser} disabled={saving}><Check size={14} />{saving ? "Saving..." : editUser ? "Save Changes" : "Add User"}</Btn>
+          <Btn onClick={saveUser} disabled={saving || !canEdit}><Check size={14} />{saving ? "Saving..." : editUser ? "Save Changes" : "Add User"}</Btn>
         </div>
+      </Modal>
+
+      <Modal open={!!deleteConfirm} onClose={() => setDeleteConfirm(null)} title="Remove User" size="sm">
+        {deleteConfirm && (
+          <div className="space-y-4">
+            <p className="text-slate-300 text-sm">
+              Remove <strong className="text-white">{deleteConfirm.name}</strong> permanently? Their login sessions will be revoked.
+            </p>
+            {deleteConfirm.role === "owner" && (
+              <p className="text-amber-300 text-xs bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+                This user is an owner. Ensure another active owner remains before removing them.
+              </p>
+            )}
+            <div className="modal-actions flex justify-end gap-2">
+              <Btn variant="secondary" onClick={() => setDeleteConfirm(null)}>Cancel</Btn>
+              <Btn variant="danger" onClick={confirmDeleteUser}><Trash2 size={14} />Remove</Btn>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );
@@ -6255,6 +6275,7 @@ export default function App() {
             name: next.name,
             role: next.role,
             permissions: next.permissions,
+            active: next.active !== false,
           },
         });
       }

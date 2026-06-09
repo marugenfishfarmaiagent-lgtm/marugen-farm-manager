@@ -5,20 +5,21 @@ import { normalizeCustomerRecord } from './customerOps'
 import { normalizeExpenseRecord } from './expenseOps'
 import { normalizeDeliveryRecord } from './deliveryOps'
 import { normalizeEventRecord } from './calendarOps'
+import { normalizeUserRecord } from './teamOps'
 import { emptyPondData } from './cloudData'
 import { normalizeImageFieldForSync, storagePaths } from './farmImage'
 import { confirmDeletions, peekDeletions } from './syncDeletions'
 import { touchPondData, touchUpdatedAt, withUpdatedAt } from './syncMeta'
 
 function mapUser(row) {
-  return {
+  return normalizeUserRecord({
     id: row.id,
-    name: row.name,
-    role: row.role,
+    name: row.name ?? '',
+    role: row.role ?? 'staff',
     active: row.active,
-    permissions: row.permissions || [],
+    permissions: row.permissions ?? [],
     isSystem: row.isSystem ?? row.is_system,
-  }
+  })
 }
 
 function mapCustomer(row) {
