@@ -19,6 +19,9 @@ const MODEL_UNAVAILABLE = /no longer available|deprecated|not found|does not exi
 const RATE_LIMIT = 30;
 const RATE_WINDOW_MS = 60_000;
 const MAX_CHAT_HISTORY = 40;
+const MAX_MESSAGE_CHARS = 4000;
+const MAX_SYSTEM_PROMPT_CHARS = 120_000;
+const MAX_IMAGES_PER_MESSAGE = 3;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -42,6 +45,45 @@ function parseDataUrl(dataUrl: string): { mimeType: string; data: string } | nul
   const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
   if (!match) return null;
   return { mimeType: match[1], data: match[2] };
+}
+
+function sanitizeIncomingMessages(messages: unknown): ChatMessage[] {
+  if (!Array.isArray(messages)) return [];
+  const out: ChatMessage[] = [];
+  for (const raw of messages.slice(-MAX_CHAT_HISTORY)) {
+    if (!raw || typeof raw !== "object") continue;
+    const m = raw as ChatMessage;
+    if (m.functionCalls?.length) {
+      out.push({
+        role: "assistant",
+        functionCalls: m.functionCalls
+          .filter((fc) => fc?.name && typeof fc.name === "string")
+          .map((fc) => ({ name: fc.name, args: fc.args || {} })),
+      });
+      continue;
+    }
+    if (m.functionResponses?.length) {
+      out.push({
+        role: "user",
+        functionResponses: m.functionResponses
+          .filter((fr) => fr?.name && typeof fr.name === "string")
+          .map((fr) => ({ name: fr.name, response: fr.response || {} })),
+      });
+      continue;
+    }
+    if (m.role !== "user" && m.role !== "assistant") continue;
+    const content = String(m.content ?? "").slice(0, MAX_MESSAGE_CHARS);
+    const images = Array.isArray(m.images)
+      ? m.images.filter((src) => typeof src === "string" && src.startsWith("data:image/")).slice(0, MAX_IMAGES_PER_MESSAGE)
+      : [];
+    if (!content.trim() && !images.length) continue;
+    out.push({
+      role: m.role,
+      content: content.trim() || (images.length ? "Please look at the attached photo(s)." : ""),
+      ...(images.length ? { images } : {}),
+    });
+  }
+  return out;
 }
 
 function toGeminiContents(messages: ChatMessage[]) {
@@ -131,8 +173,26 @@ Deno.serve(async (req) => {
     const apiKey = Deno.env.get("GEMINI_API_KEY");
     if (!apiKey) return J({ error: "GEMINI_API_KEY not set on server" }, 500);
 
-    const body = await req.json();
+    let body: Record<string, unknown>;
+    try {
+      body = await req.json();
+    } catch {
+      return J({ error: "Invalid JSON body" }, 400);
+    }
     const { systemPrompt, messages, tools, confirmOverage } = body;
+
+    if (systemPrompt != null && typeof systemPrompt !== "string") {
+      return J({ error: "systemPrompt must be a string" }, 400);
+    }
+    if (String(systemPrompt ?? "").length > MAX_SYSTEM_PROMPT_CHARS) {
+      return J({ error: "systemPrompt is too large" }, 400);
+    }
+    if (messages != null && !Array.isArray(messages)) {
+      return J({ error: "messages must be an array" }, 400);
+    }
+    if (tools != null && !Array.isArray(tools)) {
+      return J({ error: "tools must be an array" }, 400);
+    }
 
     const quota = await checkDailyQuota(user.id, Boolean(confirmOverage));
     if (quota.blocked) {
@@ -143,8 +203,14 @@ Deno.serve(async (req) => {
       });
     }
 
-    const history = Array.isArray(messages) ? messages.slice(-MAX_CHAT_HISTORY) : [];
+    const history = sanitizeIncomingMessages(messages);
+    if (!history.length) {
+      return J({ error: "At least one valid chat message is required" }, 400);
+    }
     const contents = toGeminiContents(history);
+    if (!contents.length) {
+      return J({ error: "No valid chat content to send" }, 400);
+    }
 
     const payload: Record<string, unknown> = {
       systemInstruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,

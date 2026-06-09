@@ -342,3 +342,5 @@ export const AI_TOOL_DEFINITIONS = [
     },
   },
 ]
+
+export const AI_TOOL_NAMES = new Set(AI_TOOL_DEFINITIONS.map((tool) => tool.name))

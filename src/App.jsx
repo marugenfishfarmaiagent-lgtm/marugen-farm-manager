@@ -41,6 +41,10 @@ import { fetchAiUsage, fetchAiUsageStats, sendChatMessage } from "./lib/gemini";
 import { readChatImageFile, MAX_CHAT_IMAGES } from "./lib/chatImage";
 import { AI_DAILY_FREE_TOKENS, AI_WARN_AT_TOKENS, formatTokens } from "./lib/aiUsage";
 import { AI_TOOL_DEFINITIONS } from "./lib/aiTools";
+import {
+  buildAssistantReplyText, buildChatApiThread, CHAT_HISTORY_MAX,
+  sanitizeStoredChatMessages, slimChatMessageForStorage, validateChatOutgoingMessage,
+} from "./lib/chatOps";
 import { buildBusinessContext, executeAiActions, resolvePendingAiActions } from "./lib/aiActions";
 import * as db from "./lib/database";
 import { SYNC_ENTITIES } from "./lib/cloudSync";
@@ -4776,48 +4780,11 @@ const INITIAL_CHAT_MESSAGES = [
   },
 ];
 
-const CHAT_HISTORY_MAX = 50;
-
-function slimChatMessageForStorage(m) {
-  const { images, ...rest } = m;
-  if (images?.length) {
-    return {
-      ...rest,
-      hadImages: true,
-      content: rest.content?.trim() || "📷 Photo",
-    };
-  }
-  return rest;
-}
-
-function sanitizeChatMessages(parsed) {
-  if (!Array.isArray(parsed)) return null;
-  const clean = parsed
-    .filter((m) => m && (m.role === "user" || m.role === "assistant")
-      && ((typeof m.content === "string" && m.content.trim()) || m.hadImages))
-    .map((m) => ({
-      role: m.role,
-      content: m.content,
-      ...(m.hadImages ? { hadImages: true } : {}),
-      ...(Array.isArray(m.executed) && m.executed.length ? { executed: m.executed } : {}),
-    }));
-  return clean.length ? clean.slice(-CHAT_HISTORY_MAX) : null;
-}
-
-function buildChatThread(messages, userMsg) {
-  const prior = messages.filter((m) =>
-    (m.role === "user" || m.role === "assistant")
-    && !m.retryable
-    && (String(m.content || "").trim() || m.images?.length),
-  );
-  return [...prior, userMsg].slice(-CHAT_HISTORY_MAX);
-}
-
 function loadChatHistory() {
   try {
     const raw = sessionStorage.getItem(CHAT_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
-    return sanitizeChatMessages(parsed) || INITIAL_CHAT_MESSAGES;
+    return sanitizeStoredChatMessages(parsed) || INITIAL_CHAT_MESSAGES;
   } catch {
     return INITIAL_CHAT_MESSAGES;
   }
@@ -4865,6 +4832,8 @@ function ChatModule({ aiContext, messages, setMessages }) {
   const [actionConfirmOpen, setActionConfirmOpen] = useState(false);
   const [actionConfirmMsg, setActionConfirmMsg] = useState("");
   const [pendingActionResume, setPendingActionResume] = useState(null);
+  const [pendingActionExecuted, setPendingActionExecuted] = useState([]);
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const [retryThread, setRetryThread] = useState(null);
   const endRef = useRef(null);
   const warnNotified = useRef(false);
@@ -4928,6 +4897,7 @@ function ChatModule({ aiContext, messages, setMessages }) {
 
     if (result.requiresActionConfirm) {
       setPendingActionResume(result.resumeState);
+      setPendingActionExecuted(result.executed || []);
       setActionConfirmMsg(
         result.confirmSummaries?.length > 1
           ? result.confirmSummaries.map((s, i) => `${i + 1}. ${s}`).join("\n\n")
@@ -4941,13 +4911,9 @@ function ChatModule({ aiContext, messages, setMessages }) {
 
     applyUsageResult(result);
     setRetryThread(null);
-    const replyText = result.text?.trim()
-      || (result.executed?.length
-        ? result.executed.map((a) => (a.success ? `✓ ${a.message || a.name}` : `✗ ${a.error || a.name}`)).join("\n")
-        : "Done.");
     setMessages((prev) => [...prev.slice(-CHAT_HISTORY_MAX), {
       role: "assistant",
-      content: replyText,
+      content: buildAssistantReplyText(result),
       executed: result.executed?.length ? result.executed : undefined,
     }]);
   };
@@ -4964,13 +4930,14 @@ function ChatModule({ aiContext, messages, setMessages }) {
   };
 
   const clearChat = () => {
-    if (!confirm("Clear this chat history?")) return;
     setMessages(INITIAL_CHAT_MESSAGES);
     setPendingImages([]);
     setPendingThread(null);
     setConfirmOpen(false);
     setPendingActionResume(null);
+    setPendingActionExecuted([]);
     setActionConfirmOpen(false);
+    setClearConfirmOpen(false);
     setRetryThread(null);
     warnNotified.current = false;
     limitNotified.current = false;
@@ -5006,7 +4973,16 @@ function ChatModule({ aiContext, messages, setMessages }) {
   const sendMessage = async () => {
     const text = input.trim();
     const images = [...pendingImages];
-    if ((!text && !images.length) || loading || imageUploading) return;
+    if (loading || imageUploading) return;
+    const validated = validateChatOutgoingMessage({ text, images });
+    if (!validated.ok) {
+      aiContextRef.current.addNotification?.({
+        type: "error",
+        title: "Cannot Send",
+        message: validated.message,
+      });
+      return;
+    }
     if (!isSupabaseConfigured) {
       aiContextRef.current.addNotification?.({
         type: "error",
@@ -5017,11 +4993,11 @@ function ChatModule({ aiContext, messages, setMessages }) {
     }
     const userMsg = {
       role: "user",
-      content: text || (images.length ? "Please look at this photo." : ""),
+      content: validated.content,
       ...(images.length ? { images } : {}),
     };
-    const thread = buildChatThread(messages, userMsg);
-    setMessages((prev) => [...prev.slice(-CHAT_HISTORY_MAX - 1), userMsg]);
+    const thread = buildChatApiThread(messages, userMsg);
+    setMessages((prev) => [...prev.slice(-CHAT_HISTORY_MAX), userMsg]);
     setInput("");
     setPendingImages([]);
     setLoading(true);
@@ -5046,12 +5022,22 @@ function ChatModule({ aiContext, messages, setMessages }) {
     setLoading(false);
   };
 
+  const handleConfirmDecline = () => {
+    setConfirmOpen(false);
+    setPendingThread(null);
+    setMessages((prev) => [...prev, {
+      role: "assistant",
+      content: "OK — I did not continue past today's free token limit. Try again tomorrow, or tap Continue when you are ready to proceed.",
+    }]);
+  };
+
   const handleActionConfirm = async () => {
     if (!pendingActionResume) return;
     setActionConfirmOpen(false);
     setLoading(true);
     const { thread, functionCalls, partialResults } = pendingActionResume;
     setPendingActionResume(null);
+    setPendingActionExecuted([]);
     try {
       const finalResults = resolvePendingAiActions(partialResults, aiContextRef.current);
       const newThread = [
@@ -5073,6 +5059,7 @@ function ChatModule({ aiContext, messages, setMessages }) {
   const handleActionCancel = () => {
     setActionConfirmOpen(false);
     setPendingActionResume(null);
+    setPendingActionExecuted([]);
     setMessages((prev) => [...prev, { role: "assistant", content: "Cancelled — no changes were made." }]);
   };
 
@@ -5084,7 +5071,7 @@ function ChatModule({ aiContext, messages, setMessages }) {
             <h2 className="text-xl sm:text-2xl font-black text-white">AI Assistant</h2>
             <p className="text-slate-400 text-sm">Powered by Gemini · photos supported · {formatTokens(AI_DAILY_FREE_TOKENS)} free tokens/day</p>
           </div>
-          <Btn variant="secondary" size="sm" onClick={clearChat} className="w-full sm:w-auto justify-center shrink-0">
+          <Btn variant="secondary" size="sm" onClick={() => setClearConfirmOpen(true)} className="w-full sm:w-auto justify-center shrink-0">
             <Trash2 size={14} />Clear chat
           </Btn>
         </div>
@@ -5096,20 +5083,38 @@ function ChatModule({ aiContext, messages, setMessages }) {
         <AiUsageBar usage={usage} />
       </div>
 
-      <Modal open={confirmOpen} onClose={() => { setConfirmOpen(false); setPendingThread(null); }} title="Continue AI Usage?" size="sm">
+      <Modal open={confirmOpen} onClose={handleConfirmDecline} title="Continue AI Usage?" size="sm">
         <p className="text-slate-300 text-sm mb-3">{confirmMsg}</p>
         <p className="text-slate-500 text-xs mb-4">
           Used today: <span className="text-amber-400 font-bold">{formatTokens(usage?.tokens ?? AI_DAILY_FREE_TOKENS)}/{formatTokens(AI_DAILY_FREE_TOKENS)}</span> tokens.
           Extra usage may incur API costs.
         </p>
         <div className="flex justify-end gap-2">
-          <Btn variant="secondary" onClick={() => { setConfirmOpen(false); setPendingThread(null); }}>Not now</Btn>
+          <Btn variant="secondary" onClick={handleConfirmDecline}>Not now</Btn>
           <Btn onClick={handleConfirmContinue}><Check size={14} />Yes, continue</Btn>
+        </div>
+      </Modal>
+
+      <Modal open={clearConfirmOpen} onClose={() => setClearConfirmOpen(false)} title="Clear Chat" size="sm">
+        <p className="text-slate-300 text-sm mb-4">Clear this chat history? This cannot be undone.</p>
+        <div className="flex justify-end gap-2">
+          <Btn variant="secondary" onClick={() => setClearConfirmOpen(false)}>Cancel</Btn>
+          <Btn variant="danger" onClick={clearChat}><Trash2 size={14} />Clear</Btn>
         </div>
       </Modal>
 
       <Modal open={actionConfirmOpen} onClose={handleActionCancel} title="Confirm Action" size="sm">
         <p className="text-slate-300 text-sm mb-4 whitespace-pre-wrap">{actionConfirmMsg}</p>
+        {pendingActionExecuted.length > 0 && (
+          <div className="mb-4 p-3 rounded-lg bg-slate-800/80 border border-slate-600 text-xs space-y-1">
+            <p className="text-slate-400 font-semibold mb-1">Already completed:</p>
+            {pendingActionExecuted.map((a, idx) => (
+              <p key={idx} className={a.success ? "text-emerald-400" : "text-red-400"}>
+                {a.success ? "✓" : "✗"} {a.message || a.error || a.name}
+              </p>
+            ))}
+          </div>
+        )}
         <p className="text-amber-400/90 text-xs mb-4">This may change or delete data. Only proceed if you intend to do this.</p>
         <div className="flex justify-end gap-2">
           <Btn variant="secondary" onClick={handleActionCancel}>Cancel</Btn>

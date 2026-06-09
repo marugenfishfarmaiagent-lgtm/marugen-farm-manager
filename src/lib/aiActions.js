@@ -24,8 +24,9 @@ import {
   buildDeliveryStatusPatch, buildNewDeliveryRecord, buildUpdatedDeliveryRecord, sameDeliveryId,
 } from './deliveryOps'
 import {
-  buildNewEventRecord, buildUpdatedEventRecord, sameEventId,
+  buildNewEventRecord, buildUpdatedEventRecord, filterTodayEvents, sameEventId,
 } from './calendarOps'
+import { AI_TOOL_NAMES } from './aiTools'
 
 const EXPENSE_ALIASES = {
   feed: 'Feed', food: 'Feed', pellets: 'Feed', fishfood: 'Feed',
@@ -500,7 +501,7 @@ ${can('customers') ? `Customers: ${customers.slice(0, 20).map((c) => `${c.name} 
 
 ${can('inventory') ? `Products (${products.length}): ${products.slice(0, 50).map(formatProductCatalogEntry).join(' || ') || 'none'}` : ''}
 
-${can('invoices') ? `Pending: ${pending.slice(0, 10).map((i) => `${i.id} ${i.customerName} ${formatSGD(i.total)}`).join('; ') || 'none'}` : ''}
+${can('invoices') ? `Pending: ${pending.slice(0, 10).map((i) => `${i.id} ${i.customerName} ${formatSGD(calcInvoiceAmounts(i).total)}`).join('; ') || 'none'}` : ''}
 
 ${can('deliveries') ? `Deliveries active: ${deliveries.filter((d) => ['scheduled', 'transit'].includes(d.status)).slice(0, 8).map((d) => `${d.id} ${d.customerName}`).join('; ') || 'none'}` : ''}
 
@@ -566,10 +567,7 @@ export function executeAiAction(name, args, ctx) {
           data.todayDeliveries = ctx.deliveries.filter((x) => x.schedule?.startsWith(d))
         }
         if ((q === 'summary' || q === 'today_events') && canDo(currentUser, 'calendar')) {
-          const d = today()
-          data.todayEvents = ctx.events
-            .filter((x) => x.date === d)
-            .sort((a, b) => `${a.time || ''}`.localeCompare(`${b.time || ''}`))
+          data.todayEvents = filterTodayEvents(ctx.events, today())
             .map((x) => ({ title: x.title, time: x.time, type: x.type, note: x.note }))
         }
         if ((q === 'summary' || q === 'customers') && canDo(currentUser, 'customers')) {
@@ -653,6 +651,7 @@ export function executeAiAction(name, args, ctx) {
 
       case 'create_invoice': {
         if (!canDo(currentUser, 'invoices')) return { success: false, error: 'No permission for invoices' }
+        if (!canEdit(currentUser)) return { success: false, error: 'No edit permission' }
         const customerName = a.customerName?.trim()
         const { items, errors } = resolveInvoiceItems(a.items, ctx)
         if (!customerName) return { success: false, error: 'Could not determine customer — who is this invoice for?' }
@@ -702,6 +701,7 @@ export function executeAiAction(name, args, ctx) {
 
       case 'mark_invoice_paid': {
         if (!canDo(currentUser, 'invoices')) return { success: false, error: 'No permission for invoices' }
+        if (!canEdit(currentUser)) return { success: false, error: 'No edit permission' }
         const inv = findInvoice(ctx, a)
         if (!inv) return { success: false, error: 'No matching unpaid invoice found' }
         if (getInvoiceStatus(inv) === 'paid') return { success: false, error: `${inv.id} is already paid` }
@@ -762,6 +762,7 @@ export function executeAiAction(name, args, ctx) {
 
       case 'create_product': {
         if (!canDo(currentUser, 'inventory')) return { success: false, error: 'No permission for inventory' }
+        if (!canEdit(currentUser)) return { success: false, error: 'No edit permission' }
         const name = (a.name || a.productName)?.trim()
         if (!name) return { success: false, error: 'Product name required' }
         const existing = findProduct(ctx, name)
@@ -783,6 +784,7 @@ export function executeAiAction(name, args, ctx) {
 
       case 'create_products': {
         if (!canDo(currentUser, 'inventory')) return { success: false, error: 'No permission for inventory' }
+        if (!canEdit(currentUser)) return { success: false, error: 'No edit permission' }
         const lines = Array.isArray(a.products) ? a.products : []
         if (!lines.length) return { success: false, error: 'No products to add' }
 
@@ -848,6 +850,7 @@ export function executeAiAction(name, args, ctx) {
 
       case 'restock_product': {
         if (!canDo(currentUser, 'inventory')) return { success: false, error: 'No permission for inventory' }
+        if (!canEdit(currentUser)) return { success: false, error: 'No edit permission' }
         const product = findProduct(ctx, a.productName)
         if (!product) {
           const near = findProductCandidates(ctx.products, a.productName, 3)
@@ -879,6 +882,7 @@ export function executeAiAction(name, args, ctx) {
         if (!canDo(currentUser, 'expenses')) return { success: false, error: 'No permission for expenses' }
         const imageData = a.imageData || a.image || a.receiptImage
         if (imageData?.startsWith?.('data:image/')) {
+          if (!canEdit(currentUser)) return { success: false, error: 'No edit permission' }
           const built = buildExpenseReceiptRecord({
             imageData,
             imageName: a.imageName || 'receipt.jpg',
@@ -1209,7 +1213,13 @@ export function executeAiAction(name, args, ctx) {
 
 export function executeAiActions(calls, ctx, options = {}) {
   const { skipRiskCheck = false } = options
-  return calls.map((call) => {
+  return (calls || []).map((call) => {
+    if (!call?.name || !AI_TOOL_NAMES.has(call.name)) {
+      return {
+        name: call?.name || 'unknown',
+        response: { success: false, error: `Unknown action: ${call?.name || 'unknown'}` },
+      }
+    }
     if (!skipRiskCheck && isRiskyAiAction(call.name)) {
       return {
         name: call.name,
@@ -1234,8 +1244,11 @@ export function resolvePendingAiActions(partialResults, ctx) {
     .map((r) => ({ name: r.name, args: r.response.action?.args || {} }))
   if (!riskyCalls.length) return partialResults
   const executed = executeAiActions(riskyCalls, ctx, { skipRiskCheck: true })
+  let execIdx = 0
   return partialResults.map((r) => {
     if (!r.response?.requiresConfirm) return r
-    return executed.find((e) => e.name === r.name) || r
+    const next = executed[execIdx]
+    execIdx += 1
+    return next || r
   })
 }

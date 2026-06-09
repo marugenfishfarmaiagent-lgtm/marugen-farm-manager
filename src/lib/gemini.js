@@ -1,5 +1,6 @@
 import { clearSession, getAuthHeaders, getSessionToken, hasCloudSession } from './auth'
 import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
+import { CHAT_HISTORY_MAX } from './chatOps'
 
 const RETRYABLE_CHAT = /high demand|overloaded|resource.?exhausted|unavailable|try again|rate limit|too many requests/i
 
@@ -40,7 +41,12 @@ async function callGeminiChat(body, { method = 'POST' } = {}) {
       body: method === 'POST' ? JSON.stringify(body) : undefined,
     })
 
-    const data = await response.json()
+    let data
+    try {
+      data = await response.json()
+    } catch {
+      throw Object.assign(new Error('Invalid response from AI server.'), { retryable: true })
+    }
     if (response.status === 401) {
       clearSession()
       throw new Error('Session expired. Please log in again.')
@@ -87,8 +93,14 @@ export async function sendChatMessage({
   if (!isSupabaseConfigured) {
     throw new Error('AI Chat requires Supabase. Configure VITE_SUPABASE_URL and deploy the gemini-chat edge function.')
   }
+  if (!Array.isArray(messages) || !messages.length) {
+    throw new Error('No messages to send.')
+  }
+  if (!systemPrompt?.trim()) {
+    throw new Error('AI context is missing. Refresh the page and try again.')
+  }
 
-  let thread = [...messages]
+  let thread = [...messages].slice(-CHAT_HISTORY_MAX)
   const executed = []
   const maxRounds = 5
 
