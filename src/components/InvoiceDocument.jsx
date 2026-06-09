@@ -1,7 +1,7 @@
 import logo from '../assets/logo.png'
 import paynowQr from '../assets/paynow-qr.png'
 import { PAYNOW_UEN, formatSGD } from '../data/constants'
-import { THEME, computeInvoiceTotals } from '../lib/invoiceDesign'
+import { THEME, computeInvoiceTotals, A4_WIDTH_PX, A4_HEIGHT_PX } from '../lib/invoiceDesign'
 
 const statusLabel = {
   paid: { text: 'PAID', className: 'bg-emerald-100 text-emerald-800' },
@@ -10,7 +10,7 @@ const statusLabel = {
   cancelled: { text: 'CANCELLED', className: 'bg-gray-100 text-gray-600' },
 }
 
-export default function InvoiceDocument({ invoice, className = '' }) {
+export default function InvoiceDocument({ invoice, className = '', preview = false }) {
   const data = computeInvoiceTotals(invoice)
   const isPaid = data.status === 'paid'
   const isCancelled = data.status === 'cancelled'
@@ -18,11 +18,11 @@ export default function InvoiceDocument({ invoice, className = '' }) {
 
   return (
     <div
-      className={`invoice-document bg-white text-gray-900 mx-auto shadow-sm ${className}`}
+      className={`invoice-document bg-white text-gray-900 shadow-sm ${preview ? '' : 'mx-auto'} ${className}`}
       style={{
-        width: '210mm',
-        maxWidth: '100%',
-        minHeight: '297mm',
+        width: preview ? `${A4_WIDTH_PX}px` : '210mm',
+        maxWidth: preview ? 'none' : '100%',
+        minHeight: preview ? `${A4_HEIGHT_PX}px` : '297mm',
         fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif",
       }}
     >

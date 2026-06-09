@@ -21,7 +21,7 @@ import { backupBaseName, downloadFile, expensesToCsv, invoicesToCsv } from "./li
 import InvoiceDocument from "./components/InvoiceDocument";
 import InvoicePreviewFrame from "./components/InvoicePreviewFrame";
 import { downloadInvoicePdf } from "./lib/generateInvoicePdf";
-import { calcInvoiceAmounts } from "./lib/invoiceDesign";
+import { calcInvoiceAmounts, sortInvoices } from './lib/invoiceDesign';
 import { compressReceiptImage, expenseImageSrc } from "./lib/compressImage";
 import { enrichInvoiceCustomer, findCustomerWhatsApp, formatCustomerAddress, findCustomerRecord, openWhatsAppChat, resolveInvoiceCustomer, resolveInvoiceWhatsApp } from "./lib/invoiceWhatsApp";
 import { lookupSingaporePostalAddress } from "./lib/sgPostalLookup";
@@ -1273,13 +1273,13 @@ function InvoiceModule({
     onDraftApplied?.();
   }, [openDraft, onDraftApplied]);
 
-  const filtered = invoices.filter((i) => {
+  const filtered = useMemo(() => sortInvoices(invoices.filter((i) => {
     if (!showOlderInvoices && !isAppVisibleInvoice(i)) return false;
     if (filter !== "all" && getInvoiceStatus(i) !== filter) return false;
     if (bookedFilter === "booked" && !i.booked) return false;
     if (bookedFilter === "unbooked" && i.booked) return false;
     return true;
-  });
+  })), [invoices, showOlderInvoices, filter, bookedFilter]);
   const hiddenInvoiceCount = invoices.filter((i) => !isAppVisibleInvoice(i)).length;
   const unbookedInvoiceCount = invoices.filter((i) => !i.booked && getInvoiceStatus(i) !== "cancelled").length;
   const invoicePage = usePagination(filtered, LIST_PAGE_SIZE, `${filter}-${bookedFilter}-${showOlderInvoices}`);
@@ -1319,7 +1319,7 @@ function InvoiceModule({
     const { id, currentlyBooked } = bookedConfirm;
     const patch = makeBookedPatch(!currentlyBooked, currentUser.name);
     const apply = (row) => (row.id === id ? touchUpdatedAt({ ...row, ...patch }) : row);
-    setInvoices((prev) => prev.map(apply));
+    setInvoices((prev) => sortInvoices(prev.map(apply)));
     setViewInv((prev) => (prev?.id === id ? apply(prev) : prev));
     setBookedConfirm(null);
   };
@@ -1333,7 +1333,7 @@ function InvoiceModule({
       normalized.discountValue = Number(normalized.discountValue) || 0;
     }
     const apply = (i) => (i.id === id ? touchUpdatedAt(db.sanitizeInvoiceForSync({ ...i, ...normalized })) : i);
-    setInvoices((prev) => prev.map(apply));
+    setInvoices((prev) => sortInvoices(prev.map(apply)));
     setViewInv((prev) => (prev?.id === id ? apply(prev) : prev));
   };
 
@@ -1546,7 +1546,7 @@ function InvoiceModule({
       bookedAt: null,
       bookedBy: "",
     });
-    setInvoices(prev => [touchUpdatedAt(inv), ...prev]);
+    setInvoices(prev => sortInvoices([touchUpdatedAt(inv), ...prev]));
     setShowNew(false);
     setViewInv(inv);
     setFormError("");
@@ -1585,9 +1585,9 @@ function InvoiceModule({
       by: currentUser?.name || "Staff",
     });
     restoreInvoiceKoiSales(inv.items || [], setKoiFishList, setCustomerKoiList);
-    setInvoices((prev) => prev.map((i) => (
+    setInvoices((prev) => sortInvoices(prev.map((i) => (
       i.id === id ? touchUpdatedAt(db.sanitizeInvoiceForSync({ ...i, status: "cancelled" })) : i
-    )));
+    ))));
     setViewInv((prev) => (prev?.id === id ? null : prev));
     setCancelConfirm(null);
     addNotification({ type: "info", title: "Invoice Cancelled", message: `${id} has been cancelled. Inventory and fish stock restored where applicable.` });
@@ -1602,9 +1602,9 @@ function InvoiceModule({
       return;
     }
     const paidTotal = calcInvoiceAmounts(inv).total;
-    setInvoices((prev) => prev.map((i) => (
+    setInvoices((prev) => sortInvoices(prev.map((i) => (
       i.id === id ? touchUpdatedAt(db.sanitizeInvoiceForSync({ ...i, status: "paid" })) : i
-    )));
+    ))));
     setViewInv((prev) => (
       prev?.id === id ? touchUpdatedAt(db.sanitizeInvoiceForSync({ ...prev, status: "paid" })) : prev
     ));
@@ -1633,7 +1633,7 @@ function InvoiceModule({
 
   const persistInvoiceWhatsapp = (invId, phone) => {
     const patch = (row) => (row.id === invId ? touchUpdatedAt({ ...row, customerWhatsapp: phone, customerPhone: phone }) : row);
-    setInvoices((prev) => prev.map(patch));
+    setInvoices((prev) => sortInvoices(prev.map(patch)));
     setViewInv((prev) => (prev?.id === invId ? patch(prev) : prev));
   };
 
@@ -1715,7 +1715,7 @@ function InvoiceModule({
         </button>
       )}
 
-      <div className="md:hidden space-y-3">
+      <div className="md:hidden space-y-3 pb-24">
         {filtered.length === 0 ? (
           <Card>
             <EmptyState
@@ -1726,41 +1726,52 @@ function InvoiceModule({
           </Card>
         ) : invoicePage.paginatedItems.map(inv => {
           const invAmounts = calcInvoiceAmounts(inv);
+          const status = getInvoiceStatus(inv);
           return (
           <Card key={inv.id} className="p-4">
-            <div className="flex items-start justify-between gap-3 mb-3">
-              <div className="min-w-0">
+            <div className="flex items-start justify-between gap-3 mb-2">
+              <div className="min-w-0 flex-1">
                 <p className="font-mono text-cyan-400 font-bold text-xs">{inv.id}</p>
                 <p className="text-white font-bold truncate">{inv.customerName}</p>
-                <p className="text-slate-500 text-xs">{inv.date}</p>
+                <p className="text-slate-500 text-xs mt-0.5">{inv.date}</p>
               </div>
-              <div className="flex flex-col items-end gap-1">
-                <Badge className={statusColor[getInvoiceStatus(inv)]}>{getInvoiceStatus(inv)}</Badge>
+              <div className="flex flex-col items-end gap-1 shrink-0">
+                <Badge className={statusColor[status]}>{status}</Badge>
                 <BookedBadge booked={inv.booked} bookedBy={inv.bookedBy} />
               </div>
             </div>
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xl font-black text-white">{formatSGD(invAmounts.total)}</p>
-                {invAmounts.discountAmount > 0 && (
-                  <p className="text-xs text-emerald-400">-{formatSGD(invAmounts.discountAmount)} discount</p>
-                )}
-              </div>
-              <div className="flex gap-2">
-                <Btn variant="ghost" size="sm" onClick={() => setViewInv(inv)} title="View"><Eye size={14} /></Btn>
-                <Btn variant="ghost" size="sm" onClick={() => { setViewInv(inv); sendWhatsApp(inv); }} title="Send WhatsApp" disabled={pdfLoading}><MessageSquare size={14} /></Btn>
-                <Btn variant="ghost" size="sm" onClick={() => downloadPdf(inv)} title="Download PDF" disabled={pdfLoading}><Printer size={14} /></Btn>
-                {canMarkAccounting(currentUser) && (
-                  <Btn variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); requestInvoiceBookedChange(inv.id); }} title={inv.booked ? "Change accounts mark" : "Mark entered in accounts"}>
-                    <BookCheck size={14} className={inv.booked ? "text-emerald-400" : "text-slate-500"} />
-                  </Btn>
-                )}
-                {canCancelInvoice(inv) && canDeleteRecords(currentUser) && (
-                  <Btn variant="ghost" size="sm" onClick={() => cancelInvoice(inv.id)} title="Cancel invoice"><XCircle size={14} className="text-red-400" /></Btn>
-                )}
-                {canMarkPaid(inv) && <Btn variant="success" size="sm" onClick={() => markPaid(inv.id)}><Check size={12} />Paid</Btn>}
-              </div>
+            <div className="mb-3">
+              <p className="text-2xl font-black text-white">{formatSGD(invAmounts.total)}</p>
+              {invAmounts.discountAmount > 0 && (
+                <p className="text-xs text-emerald-400">-{formatSGD(invAmounts.discountAmount)} discount</p>
+              )}
             </div>
+            <div className="flex flex-wrap gap-2">
+              <Btn variant="secondary" size="sm" onClick={() => setViewInv(inv)} className="flex-1 min-w-[4.5rem] justify-center">
+                <Eye size={14} />View
+              </Btn>
+              <Btn variant="ghost" size="sm" onClick={() => { setViewInv(inv); sendWhatsApp(inv); }} disabled={pdfLoading} className="justify-center" title="WhatsApp">
+                <MessageSquare size={14} />
+              </Btn>
+              <Btn variant="ghost" size="sm" onClick={() => downloadPdf(inv)} disabled={pdfLoading} className="justify-center" title="PDF">
+                <Printer size={14} />
+              </Btn>
+              {canMarkAccounting(currentUser) && (
+                <Btn variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); requestInvoiceBookedChange(inv.id); }} title={inv.booked ? "Change accounts mark" : "Mark entered in accounts"} className="justify-center">
+                  <BookCheck size={14} className={inv.booked ? "text-emerald-400" : "text-slate-500"} />
+                </Btn>
+              )}
+              {canCancelInvoice(inv) && canDeleteRecords(currentUser) && (
+                <Btn variant="ghost" size="sm" onClick={() => cancelInvoice(inv.id)} title="Cancel invoice" className="justify-center">
+                  <XCircle size={14} className="text-red-400" />
+                </Btn>
+              )}
+            </div>
+            {canMarkPaid(inv) && (
+              <Btn variant="success" size="sm" onClick={() => markPaid(inv.id)} className="w-full mt-2 justify-center">
+                <Check size={14} />Mark Paid
+              </Btn>
+            )}
           </Card>
         );})}
       </div>
@@ -2188,9 +2199,9 @@ function InvoiceModule({
                 </div>
               </Card>
             )}
-            <div className="no-print rounded-xl border border-slate-600 bg-[#d4d4d4] p-3 sm:p-6 overflow-y-auto max-h-[min(80vh,920px)]">
-              <InvoicePreviewFrame>
-                <InvoiceDocument invoice={docInv} className="shadow-2xl" />
+            <div className="no-print rounded-xl border border-slate-600 bg-[#d4d4d4] p-2 sm:p-6 overflow-y-auto max-h-[min(70vh,920px)]">
+              <InvoicePreviewFrame resetKey={activeViewInv?.id || ''}>
+                <InvoiceDocument invoice={docInv} preview className="shadow-2xl" />
               </InvoicePreviewFrame>
             </div>
             <p className="no-print text-xs text-slate-500 text-center">
@@ -3675,9 +3686,9 @@ function DeliveryModule({
           const inv = invoices.find((i) => String(i.id) === String(invoicePreviewId));
           if (!inv) return <p className="text-slate-400 text-sm">Invoice not found.</p>;
           return (
-            <div className="rounded-xl border border-slate-600 bg-[#d4d4d4] p-3 sm:p-6 overflow-y-auto max-h-[min(80vh,920px)]">
-              <InvoicePreviewFrame>
-                <InvoiceDocument invoice={enrichInvoiceCustomer(inv, customers)} className="shadow-2xl" />
+            <div className="rounded-xl border border-slate-600 bg-[#d4d4d4] p-2 sm:p-6 overflow-y-auto max-h-[min(70vh,920px)]">
+              <InvoicePreviewFrame resetKey={invoicePreviewId || ''}>
+                <InvoiceDocument invoice={enrichInvoiceCustomer(inv, customers)} preview className="shadow-2xl" />
               </InvoicePreviewFrame>
             </div>
           );
@@ -5195,7 +5206,7 @@ export default function App() {
     } else {
       setCustomers(cleaned.customers);
       setProducts(cleaned.products);
-      setInvoices(cleaned.invoices);
+      setInvoices(sortInvoices(cleaned.invoices));
       setExpenses(cleaned.expenses);
       setDeliveries(cleaned.deliveries);
       setEvents(cleaned.events);
@@ -5519,7 +5530,7 @@ export default function App() {
   useEffect(() => {
     if (!cloudHydrated || invoicesNormalizedRef.current) return;
     invoicesNormalizedRef.current = true;
-    setInvoices((prev) => prev.map((inv) => db.sanitizeInvoiceForSync(inv)));
+    setInvoices((prev) => sortInvoices(prev.map((inv) => db.sanitizeInvoiceForSync(inv))));
   }, [cloudHydrated]);
 
   useEffect(() => syncDebounced("customers", "Customers", db.syncCustomers, customers), [customers, syncDebounced]);

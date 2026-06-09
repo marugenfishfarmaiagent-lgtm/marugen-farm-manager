@@ -13,6 +13,20 @@ export const THEME = {
 
 export const PAGE_MM = { w: 210, h: 297, margin: 16 }
 
+export const A4_WIDTH_PX = (210 / 25.4) * 96
+export const A4_HEIGHT_PX = A4_WIDTH_PX * (297 / 210)
+
+/** Stable newest-first ordering for invoice lists (date, then invoice id). */
+export function compareInvoicesDesc(a, b) {
+  const dateCmp = String(b?.date || '').localeCompare(String(a?.date || ''))
+  if (dateCmp !== 0) return dateCmp
+  return String(b?.id || '').localeCompare(String(a?.id || ''))
+}
+
+export function sortInvoices(list = []) {
+  return [...list].sort(compareInvoicesDesc)
+}
+
 function roundMoney(n) {
   return Math.round(n * 100) / 100
 }

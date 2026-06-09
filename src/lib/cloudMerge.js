@@ -1,3 +1,5 @@
+import { sortInvoices } from './invoiceDesign'
+
 function ts(record) {
   if (!record?.updatedAt) return 0
   const t = new Date(record.updatedAt).getTime()
@@ -46,7 +48,7 @@ export function mergeRecords(local = [], remote = [], pendingDeleteIds = [], res
 }
 
 export function mergeInvoices(local = [], remote = [], pendingDeleteIds = []) {
-  return mergeRecords(local, remote, pendingDeleteIds, resolveInvoiceConflict)
+  return sortInvoices(mergeRecords(local, remote, pendingDeleteIds, resolveInvoiceConflict))
 }
 
 export function mergePondData(local, remote) {
