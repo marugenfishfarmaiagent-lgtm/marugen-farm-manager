@@ -59,6 +59,9 @@ import {
   isDuplicateCustomerName, propagateCustomerProfileChange, sameCustomerId,
 } from "./lib/customerOps";
 import {
+  buildExpenseReceiptRecord, sameExpenseId, validateExpenseDateUpdate,
+} from "./lib/expenseOps";
+import {
   FISH_TYPES, PRODUCT_CATEGORIES, LIST_PAGE_SIZE,
   CUSTOMER_TIERS, ALL_PERMISSIONS, DEFAULT_PERMISSIONS, SG_AREAS,
   formatSGD, formatInvoiceDate, today, genId, genInvoiceId, getInvoiceStatus, calcCustomerTier, KOI_STATUS, CUSTOMER_KOI_STATUS,
@@ -2700,11 +2703,13 @@ function CustomerModule({
 // EXPENSE RECEIPTS (image records for external accounting)
 // ─────────────────────────────────────────────
 function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) {
+  const canEdit = canEditRecords(currentUser);
   const [showAdd, setShowAdd] = useState(false);
   const [viewExpenseId, setViewExpenseId] = useState(null);
   const [bookedFilter, setBookedFilter] = useState("all");
   const [showOlderExpenses, setShowOlderExpenses] = useState(false);
   const [bookedConfirm, setBookedConfirm] = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [uploadPreview, setUploadPreview] = useState(null);
   const [uploadName, setUploadName] = useState("");
   const [uploadNote, setUploadNote] = useState("");
@@ -2717,7 +2722,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
   const cameraInputRef = useRef(null);
 
   const viewExpense = viewExpenseId != null
-    ? expenses.find((e) => String(e.id) === String(viewExpenseId))
+    ? expenses.find((e) => sameExpenseId(e.id, viewExpenseId))
     : null;
 
   const refreshReceiptUrl = useCallback(async (expenseId) => {
@@ -2726,7 +2731,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
       const { imageUrl } = await db.refreshExpenseReceiptUrl(expenseId);
       if (imageUrl) {
         setExpenses((prev) => prev.map((e) => (
-          String(e.id) === String(expenseId) ? { ...e, imageUrl } : e
+          sameExpenseId(e.id, expenseId) ? { ...e, imageUrl } : e
         )));
       }
     } catch {
@@ -2785,12 +2790,12 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
   };
 
   const openCamera = () => {
-    if (uploading) return;
+    if (!canEdit || uploading) return;
     cameraInputRef.current?.click();
   };
 
   const handleImagePick = async (file) => {
-    if (!file) return;
+    if (!canEdit || !file) return;
     try {
       setUploading(true);
       const { dataUrl, name } = await compressReceiptImage(file);
@@ -2809,7 +2814,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
       addNotification({ type: "error", title: "Permission Denied", message: "Accounting marks permission is required." });
       return;
     }
-    const expense = expenses.find((e) => String(e.id) === String(id));
+    const expense = expenses.find((e) => sameExpenseId(e.id, id));
     if (!expense) return;
     const label = expense.imageName || expense.date || "Receipt";
     setBookedConfirm({ id, label, currentlyBooked: !!expense.booked });
@@ -2819,59 +2824,66 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
     if (!bookedConfirm) return;
     const { id, currentlyBooked } = bookedConfirm;
     const patch = makeBookedPatch(!currentlyBooked, currentUser.name);
-    setExpenses((prev) => prev.map((e) => (String(e.id) === String(id) ? touchUpdatedAt({ ...e, ...patch }) : e)));
+    setExpenses((prev) => prev.map((e) => (sameExpenseId(e.id, id) ? touchUpdatedAt({ ...e, ...patch }) : e)));
     setBookedConfirm(null);
   };
 
-  const deleteExpense = (expense) => {
+  const requestDeleteExpense = (expense) => {
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
       return;
     }
-    const label = expense.imageName || expense.date || "this receipt";
-    if (!confirm(`Delete ${label}? This cannot be undone.`)) return;
-    setExpenses((prev) => prev.filter((e) => e.id !== expense.id));
+    setDeleteConfirm(expense);
+  };
+
+  const confirmDeleteExpense = () => {
+    if (!deleteConfirm) return;
+    if (!canDelete) {
+      notifyPermissionDenied(addNotification, "delete");
+      return;
+    }
+    const expense = deleteConfirm;
+    setExpenses((prev) => prev.filter((e) => !sameExpenseId(e.id, expense.id)));
     markDeleted("expenses", expense.id);
-    setViewExpenseId((prev) => (String(prev) === String(expense.id) ? null : prev));
+    setViewExpenseId((prev) => (sameExpenseId(prev, expense.id) ? null : prev));
     addNotification({ type: "info", title: "Receipt Deleted", message: "Expense receipt removed." });
+    setDeleteConfirm(null);
   };
 
   const updateExpenseDate = (id, date) => {
-    if (!date) {
-      addNotification({ type: "error", title: "Date Required", message: "Choose a receipt date before saving." });
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
       return;
     }
-    setExpenses((prev) => prev.map((e) => (String(e.id) === String(id) ? touchUpdatedAt({ ...e, date }) : e)));
+    const check = validateExpenseDateUpdate(date);
+    if (!check.ok) {
+      addNotification({ type: "error", title: "Date Required", message: check.message });
+      return;
+    }
+    setExpenses((prev) => prev.map((e) => (sameExpenseId(e.id, id) ? touchUpdatedAt({ ...e, date: date.trim() }) : e)));
     addNotification({ type: "success", title: "Date Updated", message: "Receipt date saved." });
   };
 
   const saveReceipt = async () => {
-    if (!uploadPreview) {
-      addNotification({ type: "error", title: "Image Required", message: "Upload an expense invoice or receipt photo." });
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
       return;
     }
     if (uploading) return;
-    if (!uploadDate) {
-      addNotification({ type: "error", title: "Date Required", message: "Choose the receipt date before saving." });
+    const built = buildExpenseReceiptRecord({
+      imageData: uploadPreview,
+      imageName: uploadName,
+      date: uploadDate,
+      note: uploadNote,
+      addedBy: currentUser?.name || "Staff",
+    });
+    if (!built.ok) {
+      addNotification({ type: "error", title: "Cannot Save Receipt", message: built.message });
       return;
     }
-    const id = Date.now();
     try {
       setUploading(true);
-      const e = touchUpdatedAt({
-        id,
-        category: null,
-        amount: null,
-        date: uploadDate,
-        note: uploadNote?.trim() || "",
-        imageData: uploadPreview,
-        imageName: uploadName,
-        imageUrl: "",
-        addedBy: currentUser?.name || "Staff",
-        booked: false,
-        bookedAt: null,
-        bookedBy: "",
-      });
+      const e = built.expense;
       setExpenses((prev) => [...prev, e]);
       addNotification({
         type: "success",
@@ -2913,7 +2925,9 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
           <Download size={14} /> Export CSV
         </Btn>
       </div>
-      <Fab onClick={() => { resetUpload(); setShowAdd(true); }} label="Upload Receipt" icon={ImagePlus} hidden={showAdd || viewExpenseId != null} />
+      {canEdit && (
+        <Fab onClick={() => { resetUpload(); setShowAdd(true); }} label="Upload Receipt" icon={ImagePlus} hidden={showAdd || viewExpenseId != null || !!deleteConfirm} />
+      )}
 
       <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
         {[
@@ -2984,8 +2998,8 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
               : dateRangeInvalid
                 ? "From must be on or before To"
                 : "Adjust filters above"}
-            actionLabel={expenses.length === 0 ? "Upload first receipt" : undefined}
-            onAction={expenses.length === 0 ? () => { resetUpload(); setShowAdd(true); } : undefined}
+            actionLabel={expenses.length === 0 && canEdit ? "Upload first receipt" : undefined}
+            onAction={expenses.length === 0 && canEdit ? () => { resetUpload(); setShowAdd(true); } : undefined}
           />
         </Card>
       ) : (
@@ -3018,7 +3032,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
                     {canDelete && (
                       <button
                         type="button"
-                        onClick={(ev) => { ev.stopPropagation(); deleteExpense(e); }}
+                        onClick={(ev) => { ev.stopPropagation(); requestDeleteExpense(e); }}
                         className="p-1.5 rounded-lg bg-slate-900/80 text-red-400 hover:text-red-300 hover:bg-slate-800 touch-manipulation"
                         title="Delete receipt"
                       >
@@ -3136,14 +3150,14 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
         </div>
         <div className="modal-actions">
           <Btn variant="secondary" onClick={() => { setShowAdd(false); resetUpload(); }}>Cancel</Btn>
-          <Btn onClick={saveReceipt} disabled={!uploadPreview || uploading}><Plus size={14} />{uploading ? "Saving…" : "Save Receipt"}</Btn>
+          <Btn onClick={saveReceipt} disabled={!canEdit || !uploadPreview || uploading}><Plus size={14} />{uploading ? "Saving…" : "Save Receipt"}</Btn>
         </div>
       </Modal>
 
       <Modal
         open={!!viewExpense}
         onClose={() => {
-          if (viewExpense && viewEditDate && viewEditDate !== (viewExpense.date || "")) {
+          if (canEdit && viewExpense && viewEditDate && viewEditDate !== (viewExpense.date || "")) {
             updateExpenseDate(viewExpense.id, viewEditDate);
           }
           setViewExpenseId(null);
@@ -3164,10 +3178,11 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
               value={viewEditDate}
               onChange={(ev) => setViewEditDate(ev.target.value)}
               onBlur={() => {
-                if (viewEditDate !== (viewExpense.date || "")) {
+                if (canEdit && viewEditDate !== (viewExpense.date || "")) {
                   updateExpenseDate(viewExpense.id, viewEditDate);
                 }
               }}
+              readOnly={!canEdit}
               required
             />
             {(viewExpense.category || viewExpense.amount > 0) && (
@@ -3208,7 +3223,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
                 </Btn>
               )}
               {canDelete && (
-                <Btn variant="danger" onClick={() => deleteExpense(viewExpense)} className="flex-1 justify-center">
+                <Btn variant="danger" onClick={() => requestDeleteExpense(viewExpense)} className="flex-1 justify-center">
                   <Trash2 size={14} />Delete Receipt
                 </Btn>
               )}
@@ -3224,6 +3239,25 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
         onCancel={() => setBookedConfirm(null)}
         onSubmit={applyExpenseBookedConfirm}
       />
+
+      <Modal open={!!deleteConfirm} onClose={() => setDeleteConfirm(null)} title="Delete Receipt" size="sm">
+        {deleteConfirm && (
+          <div className="space-y-4">
+            <p className="text-slate-300 text-sm">
+              Delete <strong className="text-white">{deleteConfirm.imageName || deleteConfirm.date || "this receipt"}</strong>? This cannot be undone.
+            </p>
+            {deleteConfirm.booked && (
+              <p className="text-amber-300 text-xs bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+                This receipt is marked as entered in accounts. Delete only if it was uploaded by mistake.
+              </p>
+            )}
+            <div className="modal-actions flex justify-end gap-2">
+              <Btn variant="secondary" onClick={() => setDeleteConfirm(null)}>Cancel</Btn>
+              <Btn variant="danger" onClick={confirmDeleteExpense}><Trash2 size={14} />Delete</Btn>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

@@ -681,6 +681,23 @@ Deno.serve(async (req) => {
         });
       } else if (entity === "expenses") {
         const incoming = (data || []) as Record<string, unknown>[];
+        const EXPENSE_CATEGORIES = new Set([
+          "Feed", "Transport", "Utilities", "Rent", "Equipment", "Labor",
+          "Medicine", "Packaging", "Marketing", "Other",
+        ]);
+        for (const e of incoming) {
+          if (e.id == null || String(e.id).trim() === "") {
+            return J({ error: "Expense id is required" }, 400);
+          }
+          if (!String(e.date ?? "").trim()) return J({ error: "Expense date is required" }, 400);
+          if (e.amount != null && e.amount !== "") {
+            const amt = nullableNumeric(e.amount, -1);
+            if (amt < 0) return J({ error: "Expense amount cannot be negative" }, 400);
+          }
+          if (e.category && !EXPENSE_CATEGORIES.has(String(e.category))) {
+            return J({ error: `Invalid expense category: ${e.category}` }, 400);
+          }
+        }
         const rows = await Promise.all(incoming.map(async (e) => {
           let imagePath = normalizeImageUrlForStorage(String(e.imageUrl ?? ""), e.id);
           let imageData = e.imageData ?? null;

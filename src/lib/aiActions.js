@@ -19,6 +19,7 @@ import { sanitizeInvoiceForSync } from './database'
 import {
   buildNewCustomerRecord, buildUpdatedCustomerRecord, isDuplicateCustomerName, sameCustomerId,
 } from './customerOps'
+import { buildExpenseReceiptRecord } from './expenseOps'
 
 const EXPENSE_ALIASES = {
   feed: 'Feed', food: 'Feed', pellets: 'Feed', fishfood: 'Feed',
@@ -869,6 +870,25 @@ export function executeAiAction(name, args, ctx) {
 
       case 'add_expense': {
         if (!canDo(currentUser, 'expenses')) return { success: false, error: 'No permission for expenses' }
+        const imageData = a.imageData || a.image || a.receiptImage
+        if (imageData?.startsWith?.('data:image/')) {
+          const built = buildExpenseReceiptRecord({
+            imageData,
+            imageName: a.imageName || 'receipt.jpg',
+            date: a.date || today(),
+            note: a.note,
+            addedBy: currentUser?.name || 'Staff',
+          })
+          if (!built.ok) return { success: false, error: built.message }
+          ctx.setExpenses?.((prev) => [...prev, built.expense])
+          onNavigate?.('expenses')
+          addNotification?.({
+            type: 'success',
+            title: 'Receipt Saved',
+            message: 'Expense receipt photo recorded from chat.',
+          })
+          return { success: true, message: 'Expense receipt saved.' }
+        }
         onNavigate?.('expenses')
         return {
           success: false,

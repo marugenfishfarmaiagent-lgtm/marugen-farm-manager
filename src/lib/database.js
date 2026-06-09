@@ -2,6 +2,7 @@ import { clearSession, cloudFetch, getAuthHeaders } from './auth'
 import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
 import { normalizeCustomerKoiRecord } from '../data/constants'
 import { normalizeCustomerRecord } from './customerOps'
+import { normalizeExpenseRecord } from './expenseOps'
 import { emptyPondData } from './cloudData'
 import { normalizeImageFieldForSync, storagePaths } from './farmImage'
 import { confirmDeletions, peekDeletions } from './syncDeletions'
@@ -143,10 +144,11 @@ function expenseStoragePath(id) {
 
 function mapExpense(row) {
   const imageUrl = row.image_url ?? row.imageUrl ?? ''
-  return withUpdatedAt({
+  const amountRaw = row.amount
+  return withUpdatedAt(normalizeExpenseRecord({
     id: row.id,
-    category: row.category || '',
-    amount: Number(row.amount) || 0,
+    category: row.category ?? null,
+    amount: amountRaw != null && amountRaw !== '' ? Number(amountRaw) : null,
     date: row.date,
     note: row.note || '',
     imageData: imageUrl ? '' : (row.image_data ?? row.imageData ?? ''),
@@ -156,7 +158,7 @@ function mapExpense(row) {
     booked: Boolean(row.booked),
     bookedAt: row.booked_at ?? row.bookedAt ?? null,
     bookedBy: row.booked_by ?? row.bookedBy ?? '',
-  })
+  }))
 }
 
 function mapDelivery(row) {
@@ -432,13 +434,14 @@ export async function uploadExpenseReceipt(expenseId, imageData, imageName = '')
 export async function syncExpenses(expenses, options) {
   if (!isSupabaseConfigured) return
   const payload = expenses.map((e) => {
-    const hasHttpUrl = e.imageUrl?.startsWith('http')
+    const normalized = normalizeExpenseRecord(e)
+    const hasHttpUrl = normalized.imageUrl?.startsWith('http')
     return {
-      ...e,
+      ...normalized,
       imageUrl: hasHttpUrl
-        ? expenseStoragePath(e.id)
-        : (e.imageUrl || (e.imageData ? expenseStoragePath(e.id) : '')),
-      imageData: hasHttpUrl ? '' : (e.imageData || ''),
+        ? expenseStoragePath(normalized.id)
+        : (normalized.imageUrl || (normalized.imageData ? expenseStoragePath(normalized.id) : '')),
+      imageData: hasHttpUrl ? '' : (normalized.imageData || ''),
     }
   })
   await syncCall('expenses', payload, options)
