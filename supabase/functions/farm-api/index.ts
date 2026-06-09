@@ -451,6 +451,42 @@ Deno.serve(async (req) => {
       return J({ ok: true, invoice: data });
     }
 
+    if (body.action === "upsert_invoice") {
+      if (!hasPermission(user, "invoices")) {
+        return J({ error: "Permission denied (invoices)" }, 403);
+      }
+      const incoming = (body.invoice || {}) as Record<string, unknown>;
+      const id = String(incoming.id || "").trim();
+      if (!id) return J({ error: "Invoice id required" }, 400);
+
+      const now = new Date().toISOString();
+      const row = {
+        id,
+        customer_id: invoiceCustomerId(incoming),
+        customer_name: incoming.customerName ?? incoming.customer_name ?? "",
+        customer_phone: incoming.customerPhone ?? incoming.customer_phone ?? "",
+        customer_whatsapp: incoming.customerWhatsapp ?? incoming.customer_whatsapp ?? "",
+        customer_address: incoming.customerAddress ?? incoming.customer_address ?? "",
+        items: sanitizeInvoiceItems(incoming.items),
+        total: nullableNumeric(incoming.total),
+        status: incoming.status ?? "pending",
+        date: nullableDate(incoming.date),
+        due_date: nullableDate(incoming.due ?? incoming.due_date),
+        notes: incoming.notes ?? "",
+        discount_type: incoming.discountType ?? incoming.discount_type ?? "none",
+        discount_value: nullableNumeric(incoming.discountValue ?? incoming.discount_value),
+        booked: Boolean(incoming.booked),
+        booked_at: nullableTimestamptz(incoming.bookedAt ?? incoming.booked_at),
+        booked_by: incoming.bookedBy ?? incoming.booked_by ?? "",
+        created_by: incoming.createdBy ?? incoming.created_by ?? "",
+        updated_at: now,
+      };
+
+      const { data, error } = await db.from("invoices").upsert(row, { onConflict: "id" }).select("*").single();
+      if (error) throw error;
+      return J({ ok: true, invoice: data });
+    }
+
     if (body.action === "sync") {
       const { entity, data, prune, deletedIds } = body;
       const perm = ENTITY_PERMS[entity];

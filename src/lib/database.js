@@ -4,7 +4,7 @@ import { normalizeCustomerKoiRecord } from '../data/constants'
 import { emptyPondData } from './cloudData'
 import { normalizeImageFieldForSync, storagePaths } from './farmImage'
 import { confirmDeletions, peekDeletions } from './syncDeletions'
-import { touchPondData, withUpdatedAt } from './syncMeta'
+import { touchPondData, touchUpdatedAt, withUpdatedAt } from './syncMeta'
 
 function mapUser(row) {
   return {
@@ -403,6 +403,14 @@ export async function markInvoicePaidCloud(id) {
 export async function cancelInvoiceCloud(id) {
   if (!isSupabaseConfigured) throw new Error('Cloud sync is not configured')
   const data = await apiCall({ action: 'cancel_invoice', id: String(id) })
+  return mapInvoice(data.invoice)
+}
+
+/** Upsert a single invoice on the server (avoids full-list sync timestamp races on create). */
+export async function upsertInvoiceCloud(invoice) {
+  if (!isSupabaseConfigured) throw new Error('Cloud sync is not configured')
+  const payload = sanitizeInvoiceForSync(touchUpdatedAt(invoice))
+  const data = await apiCall({ action: 'upsert_invoice', invoice: payload })
   return mapInvoice(data.invoice)
 }
 

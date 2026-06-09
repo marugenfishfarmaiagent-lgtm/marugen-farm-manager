@@ -110,7 +110,7 @@ function CloudOfflineBanner({ error, onRetry, retrying }) {
 
 function AccountsMarkConfirmModal({ open, recordLabel, currentlyBooked, onCancel, onSubmit }) {
   return (
-    <Modal open={open} onClose={onCancel} title={currentlyBooked ? "Remove accounts mark?" : "Mark in accounts?"} size="sm">
+    <Modal open={open} onClose={onCancel} title={currentlyBooked ? "Remove accounts mark?" : "Mark in accounts?"} size="sm" priority>
       <p className="text-slate-300 text-sm mb-4">
         {currentlyBooked
           ? <>Remove <strong className="text-white">{recordLabel}</strong> from accounts? It will show as <span className="text-amber-300">Pending accounts</span> again.</>
@@ -128,7 +128,7 @@ function AccountsMarkConfirmModal({ open, recordLabel, currentlyBooked, onCancel
 
 function InvoiceCancelConfirmModal({ open, invoiceId, customerName, onCancel, onConfirm, loading = false }) {
   return (
-    <Modal open={open} onClose={loading ? undefined : onCancel} title="Cancel invoice?" size="sm">
+    <Modal open={open} onClose={loading ? () => {} : onCancel} title="Cancel invoice?" size="sm" priority>
       <p className="text-slate-300 text-sm mb-4">
         Cancel <strong className="text-white">{invoiceId}</strong> for <strong className="text-white">{customerName}</strong>?
         Inventory and fish stock will be restored where applicable. This cannot be undone.
@@ -209,20 +209,27 @@ function Card({ children, className = "" }) {
   return <div className={`bg-slate-800/60 border border-slate-700/50 rounded-xl ${className}`}>{children}</div>;
 }
 
-function Modal({ open, onClose, title, children, size = "md" }) {
+function Modal({ open, onClose, title, children, size = "md", priority = false, footer = null }) {
   if (!open) return null;
   const sizes = { sm: "max-w-sm", md: "max-w-lg", lg: "max-w-2xl", xl: "max-w-4xl", full: "max-w-[900px]" };
+  const zClass = priority ? "z-[60]" : "z-50";
+  const handleBackdropClose = onClose || (() => {});
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm" onClick={onClose}>
+    <div className={`fixed inset-0 ${zClass} flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm`} onClick={handleBackdropClose}>
       <div
-        className={`bg-slate-800 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full ${sizes[size]} max-h-screen max-h-[92dvh] sm:max-h-[90vh] flex flex-col shadow-2xl safe-top overflow-hidden`}
+        className={`bg-slate-800 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full ${sizes[size]} h-[92dvh] sm:h-auto max-h-[92dvh] sm:max-h-[90vh] flex flex-col shadow-2xl overflow-hidden`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-700 shrink-0">
-          <h3 className="text-base sm:text-lg font-bold text-white pr-2">{title}</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-white p-2 -mr-1 rounded-lg hover:bg-slate-700 transition-colors touch-manipulation"><X size={18} /></button>
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 p-4 sm:p-5 border-b border-slate-700 shrink-0 bg-slate-800 pt-[max(1rem,env(safe-area-inset-top,0px))]">
+          <h3 className="text-base sm:text-lg font-bold text-white pr-2 min-w-0 truncate">{title}</h3>
+          <button type="button" onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white p-2 -mr-1 rounded-lg hover:bg-slate-700 transition-colors touch-manipulation shrink-0"><X size={20} /></button>
         </div>
         <div className="overflow-y-auto flex-1 p-4 sm:p-5 overscroll-contain min-w-0">{children}</div>
+        {footer && (
+          <div className="sticky bottom-0 shrink-0 border-t border-slate-700 bg-slate-800/95 backdrop-blur-sm p-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))]">
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1238,7 +1245,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
 function InvoiceModule({
   invoices, setInvoices, setCustomers, setProducts, setStockLog, customers, products,
   koiFishList, setKoiFishList, onKoiSold, setCustomerKoiList,
-  addNotification, currentUser, openDraft, onDraftApplied, onMarkInvoicePaid, onCancelInvoiceCloud,
+  addNotification, currentUser, openDraft, onDraftApplied, onMarkInvoicePaid, onCancelInvoiceCloud, onCreateInvoiceCloud,
 }) {
   const emptyItem = () => ({ name: "", qty: 1, price: "", productId: "", manual: true });
   const buildFormFromDraft = (draft) => ({
@@ -1252,7 +1259,7 @@ function InvoiceModule({
     discountValue: draft.discountValue || "",
   });
   const emptyForm = () => ({
-    customerId: "", customerName: "", manualCustomer: false, items: [emptyItem()], notes: "", due: "",
+    customerId: "", customerName: "", manualCustomer: false, items: [emptyItem()], notes: "", due: today(),
     discountType: "none", discountValue: "",
   });
 
@@ -1265,6 +1272,7 @@ function InvoiceModule({
   const [cancelConfirm, setCancelConfirm] = useState(null);
   const [markingPaidId, setMarkingPaidId] = useState(null);
   const [cancellingId, setCancellingId] = useState(null);
+  const [creatingInvoice, setCreatingInvoice] = useState(false);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [formError, setFormError] = useState("");
   const [showWhatsappInput, setShowWhatsappInput] = useState(false);
@@ -1449,6 +1457,7 @@ function InvoiceModule({
   });
 
   const createInvoice = async () => {
+    if (creatingInvoice) return;
     setFormError("");
     const activeItems = stripBlankItems(form.items);
     if (!activeItems.length) {
@@ -1487,7 +1496,8 @@ function InvoiceModule({
     const customerDetails = resolveInvoiceCustomer({ customerId: form.customerId, customerName: form.customerName }, customers);
     const discountValue = form.discountType === "none" ? 0 : +form.discountValue || 0;
     const issueDate = today();
-    if (form.due && form.due < issueDate) {
+    const dueDate = form.due?.trim() || issueDate;
+    if (dueDate < issueDate) {
       setFormError("Due date cannot be before the invoice date.");
       return;
     }
@@ -1529,7 +1539,7 @@ function InvoiceModule({
       addNotification({ type: "error", title: "Fish Stock", message: koiApply.message });
       return;
     }
-    const inv = db.sanitizeInvoiceForSync({
+    const inv = touchUpdatedAt(db.sanitizeInvoiceForSync({
       id: invId,
       customerId: form.manualCustomer || !form.customerId ? null : form.customerId,
       customerName: form.customerName,
@@ -1542,26 +1552,37 @@ function InvoiceModule({
       total: formAmounts.total,
       status: "pending",
       date: issueDate,
-      due: form.due || issueDate,
+      due: dueDate,
       notes: form.notes,
       createdBy: currentUser.name,
       booked: false,
       bookedAt: null,
       bookedBy: "",
-    });
-    setInvoices(prev => sortInvoices([touchUpdatedAt(inv), ...prev]));
-    setShowNew(false);
-    setViewInv(inv);
-    setFormError("");
-    setForm({
-      customerId: "", customerName: "", manualCustomer: false, items: [emptyItem()], notes: "", due: "",
-      discountType: "none", discountValue: "",
-    });
+    }));
 
-    addNotification({ type: "success", title: "Invoice Created", message: `${inv.id} for ${inv.customerName} - ${formatSGD(inv.total)}` });
-
-    if (!customerDetails.phone && !form.manualCustomer && form.customerId) {
-      addNotification({ type: "info", title: "No WhatsApp Number", message: "Add a WhatsApp number to this customer, then use Send WhatsApp when ready." });
+    setCreatingInvoice(true);
+    setInvoices((prev) => sortInvoices([inv, ...prev]));
+    try {
+      await onCreateInvoiceCloud?.(inv);
+      setShowNew(false);
+      setViewInv(inv);
+      setFormError("");
+      setForm(emptyForm());
+      addNotification({ type: "success", title: "Invoice Created", message: `${inv.id} for ${inv.customerName} - ${formatSGD(inv.total)}` });
+      if (!customerDetails.phone && !form.manualCustomer && form.customerId) {
+        addNotification({ type: "info", title: "No WhatsApp Number", message: "Add a WhatsApp number to this customer, then use Send WhatsApp when ready." });
+      }
+    } catch (err) {
+      restoreStockForInvoice(setProducts, setStockLog, products, invoiceItems, {
+        invoiceId: invId,
+        by: currentUser?.name || "Staff",
+      });
+      restoreInvoiceKoiSales(invoiceItems, setKoiFishList, setCustomerKoiList);
+      setInvoices((prev) => prev.filter((i) => String(i.id) !== String(invId)));
+      setFormError(err?.message || "Could not save invoice to cloud. Check connection and try again.");
+      addNotification({ type: "error", title: "Invoice Not Saved", message: err?.message || "Cloud save failed. Your invoice was not created." });
+    } finally {
+      setCreatingInvoice(false);
     }
   };
 
@@ -1570,9 +1591,9 @@ function InvoiceModule({
       notifyPermissionDenied(addNotification, "delete");
       return;
     }
-    const inv = invoices.find((i) => i.id === id);
+    const inv = invoices.find((i) => String(i.id) === String(id));
     if (!inv || !canCancelInvoice(inv)) return;
-    setCancelConfirm({ id, customerName: inv.customerName });
+    setCancelConfirm({ id: inv.id, customerName: inv.customerName });
   };
 
   const confirmCancelInvoice = async () => {
@@ -1866,7 +1887,20 @@ function InvoiceModule({
       </Card>
 
       {/* New Invoice Modal */}
-      <Modal open={showNew} onClose={() => { setShowNew(false); setFormError(""); }} title="Create Invoice" size="lg">
+      <Modal
+        open={showNew}
+        onClose={() => { if (!creatingInvoice) { setShowNew(false); setFormError(""); } }}
+        title="Create Invoice"
+        size="lg"
+        footer={(
+          <div className="modal-actions">
+            <Btn variant="secondary" onClick={() => { setShowNew(false); setFormError(""); }} disabled={creatingInvoice}>Cancel</Btn>
+            <Btn onClick={createInvoice} disabled={creatingInvoice}>
+              {creatingInvoice ? <><Loader2 size={14} className="animate-spin" />Saving...</> : <><FileText size={14} />Create Invoice</>}
+            </Btn>
+          </div>
+        )}
+      >
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
@@ -1885,7 +1919,7 @@ function InvoiceModule({
                   { value: "manual", label: "Walk-in / Other customer" },
                 ]} />
             </div>
-            <Input label="Due Date" type="date" value={form.due} onChange={e => setForm(f => ({ ...f, due: e.target.value }))} />
+            <Input label="Due Date" type="date" value={form.due} min={today()} onChange={e => setForm(f => ({ ...f, due: e.target.value }))} />
           </div>
           {form.manualCustomer && (
             <Input label="Customer Name" value={form.customerName} onChange={e => setForm(f => ({ ...f, customerName: e.target.value }))} placeholder="Enter customer name" required />
@@ -2111,14 +2145,20 @@ function InvoiceModule({
           )}
           <Textarea label="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} rows={2} />
         </div>
-        <div className="modal-actions">
-          <Btn variant="secondary" onClick={() => { setShowNew(false); setFormError(""); }}>Cancel</Btn>
-          <Btn onClick={createInvoice}><FileText size={14} />Create Invoice</Btn>
-        </div>
       </Modal>
 
       {/* View Invoice Modal */}
-      <Modal open={!!activeViewInv} onClose={() => { setViewInv(null); setShowWhatsappInput(false); }} title={`Invoice ${activeViewInv?.id}`} size="full">
+      <Modal
+        open={!!activeViewInv}
+        onClose={() => { setViewInv(null); setShowWhatsappInput(false); }}
+        title={activeViewInv ? `Invoice ${activeViewInv.id}` : "Invoice"}
+        size="full"
+        footer={(
+          <Btn variant="secondary" onClick={() => { setViewInv(null); setShowWhatsappInput(false); }} className="w-full justify-center">
+            <X size={14} />Close
+          </Btn>
+        )}
+      >
         {activeViewInv && (() => {
           const viewAmounts = calcInvoiceAmounts(activeViewInv);
           const canEditDiscount = ["pending", "overdue"].includes(getInvoiceStatus(activeViewInv));
@@ -5547,6 +5587,56 @@ export default function App() {
     setProducts, setStockLog, setKoiFishList, setCustomerKoiList,
   ]);
 
+  const createInvoiceCloud = useCallback(async (inv) => {
+    const invId = String(inv.id);
+    const optimistic = touchUpdatedAt(db.sanitizeInvoiceForSync(inv));
+
+    const timerKey = "invoices:Invoices";
+    if (syncTimersRef.current[timerKey]) {
+      clearTimeout(syncTimersRef.current[timerKey]);
+      delete syncTimersRef.current[timerKey];
+    }
+
+    let waited = 0;
+    while (syncInFlightRef.current > 0 && waited < 5000) {
+      await new Promise((r) => setTimeout(r, 100));
+      waited += 100;
+    }
+
+    pinInvoice(optimistic);
+    const nextInvoices = sortInvoices([optimistic, ...syncStateRef.current.invoices.filter((i) => String(i.id) !== invId)]);
+    syncStateRef.current = { ...syncStateRef.current, invoices: nextInvoices };
+
+    if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
+    if (!hasPermission(currentUser, "invoices")) {
+      throw new Error("Permission denied (invoices).");
+    }
+    if (!(await ensureCloudSyncReady())) {
+      throw new Error("Session needs refresh. Log out and log in again.");
+    }
+
+    syncInFlightRef.current += 1;
+    try {
+      const confirmed = await db.upsertInvoiceCloud(optimistic);
+      unpinInvoice(invId);
+      const confirmedRow = touchUpdatedAt(db.sanitizeInvoiceForSync(confirmed));
+      const finalInvoices = sortInvoices(
+        syncStateRef.current.invoices.map((i) => (String(i.id) === invId ? confirmedRow : i)),
+      );
+      syncStateRef.current = { ...syncStateRef.current, invoices: finalInvoices };
+      setInvoices(finalInvoices);
+      setCloudSync(true);
+      setCloudError(null);
+      touchLastSync();
+    } catch (err) {
+      unpinInvoice(invId);
+      handleSyncFailure(err);
+      throw err;
+    } finally {
+      syncInFlightRef.current -= 1;
+    }
+  }, [currentUser, handleSyncFailure, touchLastSync, ensureCloudSyncReady]);
+
   const syncDebounced = useCallback((perm, label, fn, data) => {
     if (!dataReady || !cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
     if (!hasPermission(currentUser, perm)) return;
@@ -5959,7 +6049,7 @@ export default function App() {
       case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} addNotification={addNotification} canEdit={canEditRecords(currentUser)} />);
       case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondData} addNotification={addNotification} currentUser={currentUser} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} />);
-      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} />);
+      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} />);
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} addNotification={addNotification} currentUser={currentUser} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpenses} addNotification={addNotification} currentUser={currentUser} />);
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} />);
