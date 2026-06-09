@@ -13,6 +13,7 @@ import {
   findProductCandidates, findProductInList, formatProductCatalogEntry, productMatchHint,
 } from './productMatch'
 import { isStockTracked } from './productCatalog'
+import { sanitizeInvoiceForSync } from './database'
 
 const EXPENSE_ALIASES = {
   feed: 'Feed', food: 'Feed', pellets: 'Feed', fishfood: 'Feed',
@@ -665,7 +666,7 @@ export function executeAiAction(name, args, ctx) {
         })
         if (!stockCheck.ok) return { success: false, error: stockCheck.message }
 
-        const inv = touchUpdatedAt({
+        const inv = touchUpdatedAt(sanitizeInvoiceForSync({
           id: invId,
           customerId: customer?.id ?? null,
           customerName: displayName,
@@ -681,7 +682,7 @@ export function executeAiAction(name, args, ctx) {
           due: a.due || issueDate,
           notes: a.notes || '',
           createdBy: currentUser.name,
-        })
+        }))
         ctx.setInvoices((prev) => [inv, ...prev])
         addNotification?.({ type: 'success', title: 'Invoice Created (AI)', message: `${inv.id} for ${displayName} — ${formatSGD(total)}` })
         onNavigate?.('invoices')
@@ -694,8 +695,10 @@ export function executeAiAction(name, args, ctx) {
         if (!inv) return { success: false, error: 'No matching unpaid invoice found' }
         if (getInvoiceStatus(inv) === 'paid') return { success: false, error: `${inv.id} is already paid` }
 
-        ctx.setInvoices((prev) => prev.map((i) => (i.id === inv.id ? touchUpdatedAt({ ...i, status: 'paid' }) : i)))
-        if (inv.customerId) {
+        ctx.setInvoices((prev) => prev.map((i) => (
+          i.id === inv.id ? touchUpdatedAt(sanitizeInvoiceForSync({ ...i, status: 'paid' })) : i
+        )))
+        if (inv.customerId != null && inv.customerId !== '') {
           ctx.setCustomers((prev) => prev.map((c) => {
             if (c.id !== inv.customerId) return c
             const totalSpent = (Number(c.totalSpent) || 0) + (Number(inv.total) || 0)
@@ -945,7 +948,9 @@ export function executeAiAction(name, args, ctx) {
           by: currentUser?.name || 'Staff',
         })
         restoreInvoiceKoiSales(inv.items || [], ctx.setKoiFishList, ctx.setCustomerKoiList)
-        ctx.setInvoices((prev) => prev.map((i) => (i.id === inv.id ? touchUpdatedAt({ ...i, status: 'cancelled' }) : i)))
+        ctx.setInvoices((prev) => prev.map((i) => (
+          i.id === inv.id ? touchUpdatedAt(sanitizeInvoiceForSync({ ...i, status: 'cancelled' })) : i
+        )))
         addNotification?.({ type: 'info', title: 'Invoice Cancelled (AI)', message: `${inv.id} cancelled. Stock restored.` })
         onNavigate?.('invoices')
         return { success: true, message: `Cancelled ${inv.id} for ${inv.customerName}` }

@@ -42,6 +42,36 @@ function nullableBigint(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function nullableNumeric(value: unknown, fallback = 0): number {
+  if (value == null || value === "") return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function nullableTimestamptz(value: unknown): string | null {
+  if (value == null || value === "") return null;
+  const s = String(value);
+  const t = new Date(s).getTime();
+  return Number.isFinite(t) ? s : null;
+}
+
+function sanitizeInvoiceItems(items: unknown): unknown[] {
+  if (!Array.isArray(items)) return [];
+  return items.map((raw) => {
+    if (!raw || typeof raw !== "object") return raw;
+    const it = raw as Record<string, unknown>;
+    const next: Record<string, unknown> = {
+      ...it,
+      name: it.name ?? "",
+      qty: nullableNumeric(it.qty),
+      price: nullableNumeric(it.price),
+    };
+    if (it.productId == null || it.productId === "") delete next.productId;
+    if (it.koiId == null || it.koiId === "") delete next.koiId;
+    return next;
+  });
+}
+
 const ENTITY_PERMS: Record<string, string> = {
   users: "users",
   customers: "customers",
@@ -455,20 +485,20 @@ Deno.serve(async (req) => {
         await upsertSync("invoices", incoming.map((i) => withTs({
           id: i.id,
           customer_id: nullableBigint(i.customerId),
-          customer_name: i.customerName,
+          customer_name: i.customerName ?? "",
           customer_phone: i.customerPhone ?? "",
           customer_whatsapp: i.customerWhatsapp ?? "",
           customer_address: i.customerAddress ?? "",
-          items: i.items,
-          total: i.total,
-          status: i.status,
+          items: sanitizeInvoiceItems(i.items),
+          total: nullableNumeric(i.total),
+          status: i.status ?? "pending",
           date: i.date,
           due_date: i.due,
-          notes: i.notes,
+          notes: i.notes ?? "",
           discount_type: i.discountType ?? "none",
-          discount_value: i.discountValue ?? 0,
+          discount_value: nullableNumeric(i.discountValue),
           booked: Boolean(i.booked),
-          booked_at: i.bookedAt ?? null,
+          booked_at: nullableTimestamptz(i.bookedAt),
           booked_by: i.bookedBy ?? "",
           created_by: i.createdBy ?? "",
         }, i)), "id", {
@@ -615,10 +645,20 @@ Deno.serve(async (req) => {
       }
       if (seed?.invoices?.length) {
         await db.from("invoices").insert(seed.invoices.map((i: Record<string, unknown>) => ({
-          id: i.id, customer_id: i.customerId, customer_name: i.customerName, items: i.items,
-          total: i.total, status: i.status, date: i.date, due_date: i.due, notes: i.notes,
-          discount_type: i.discountType ?? "none", discount_value: i.discountValue ?? 0,
-          booked: Boolean(i.booked), booked_at: i.bookedAt ?? null, booked_by: i.bookedBy ?? "",
+          id: i.id,
+          customer_id: nullableBigint(i.customerId),
+          customer_name: i.customerName,
+          items: sanitizeInvoiceItems(i.items),
+          total: nullableNumeric(i.total),
+          status: i.status,
+          date: i.date,
+          due_date: i.due,
+          notes: i.notes,
+          discount_type: i.discountType ?? "none",
+          discount_value: nullableNumeric(i.discountValue),
+          booked: Boolean(i.booked),
+          booked_at: nullableTimestamptz(i.bookedAt),
+          booked_by: i.bookedBy ?? "",
         })));
       }
       if (seed?.expenses?.length) {

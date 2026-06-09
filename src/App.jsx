@@ -1294,7 +1294,14 @@ function InvoiceModule({
   };
 
   const patchInvoice = (id, patch) => {
-    const apply = (i) => (i.id === id ? touchUpdatedAt({ ...i, ...patch }) : i);
+    const normalized = { ...patch };
+    if ("customerId" in normalized) {
+      normalized.customerId = normalized.customerId == null || normalized.customerId === "" ? null : normalized.customerId;
+    }
+    if ("discountValue" in normalized) {
+      normalized.discountValue = Number(normalized.discountValue) || 0;
+    }
+    const apply = (i) => (i.id === id ? touchUpdatedAt(db.sanitizeInvoiceForSync({ ...i, ...normalized })) : i);
     setInvoices((prev) => prev.map(apply));
     setViewInv((prev) => (prev?.id === id ? apply(prev) : prev));
   };
@@ -1488,7 +1495,7 @@ function InvoiceModule({
       addNotification({ type: "error", title: "Fish Stock", message: koiApply.message });
       return;
     }
-    const inv = {
+    const inv = db.sanitizeInvoiceForSync({
       id: invId,
       customerId: form.manualCustomer || !form.customerId ? null : form.customerId,
       customerName: form.customerName,
@@ -1498,9 +1505,16 @@ function InvoiceModule({
       items: invoiceItems,
       discountType: form.discountType,
       discountValue,
-      total: formAmounts.total, status: "pending", date: issueDate, due: form.due || issueDate, notes: form.notes, createdBy: currentUser.name,
-      booked: false, bookedAt: null, bookedBy: "",
-    };
+      total: formAmounts.total,
+      status: "pending",
+      date: issueDate,
+      due: form.due || issueDate,
+      notes: form.notes,
+      createdBy: currentUser.name,
+      booked: false,
+      bookedAt: null,
+      bookedBy: "",
+    });
     setInvoices(prev => [touchUpdatedAt(inv), ...prev]);
     setShowNew(false);
     setViewInv(inv);
@@ -1530,7 +1544,9 @@ function InvoiceModule({
       by: currentUser?.name || "Staff",
     });
     restoreInvoiceKoiSales(inv.items || [], setKoiFishList, setCustomerKoiList);
-    setInvoices((prev) => prev.map((i) => (i.id === id ? touchUpdatedAt({ ...i, status: "cancelled" }) : i)));
+    setInvoices((prev) => prev.map((i) => (
+      i.id === id ? touchUpdatedAt(db.sanitizeInvoiceForSync({ ...i, status: "cancelled" })) : i
+    )));
     setViewInv((prev) => (prev?.id === id ? null : prev));
     addNotification({ type: "info", title: "Invoice Cancelled", message: `${id} has been cancelled. Inventory and fish stock restored where applicable.` });
   };
@@ -1544,7 +1560,9 @@ function InvoiceModule({
       return;
     }
     const paidTotal = calcInvoiceAmounts(inv).total;
-    setInvoices((prev) => prev.map((i) => (i.id === id ? touchUpdatedAt({ ...i, status: "paid" }) : i)));
+    setInvoices((prev) => prev.map((i) => (
+      i.id === id ? touchUpdatedAt(db.sanitizeInvoiceForSync({ ...i, status: "paid" })) : i
+    )));
     setViewInv((prev) => (prev?.id === id ? { ...prev, status: "paid" } : prev));
     if (inv.customerId != null && inv.customerId !== "") {
       setCustomers((prev) => prev.map((c) => {

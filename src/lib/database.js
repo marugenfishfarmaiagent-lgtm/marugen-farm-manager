@@ -54,27 +54,69 @@ function normalizeBigintId(value) {
   return value
 }
 
+function sanitizeInvoiceItems(items) {
+  if (!Array.isArray(items)) return []
+  return items.map((it) => {
+    if (!it || typeof it !== 'object') return it
+    const next = {
+      ...it,
+      name: it.name ?? '',
+      qty: Number(it.qty) || 0,
+      price: Number(it.price) || 0,
+    }
+    if (next.productId === '' || next.productId == null) delete next.productId
+    if (next.koiId === '' || next.koiId == null) delete next.koiId
+    return next
+  })
+}
+
+/** Normalize invoice fields before cloud sync or after DB fetch. */
+export function sanitizeInvoiceForSync(inv) {
+  if (!inv || typeof inv !== 'object') return inv
+  const bookedAt = inv.bookedAt ?? inv.booked_at
+  return {
+    ...inv,
+    customerId: normalizeBigintId(inv.customerId ?? inv.customer_id),
+    customerName: inv.customerName ?? inv.customer_name ?? '',
+    customerPhone: inv.customerPhone ?? inv.customer_phone ?? '',
+    customerWhatsapp: inv.customerWhatsapp ?? inv.customer_whatsapp ?? '',
+    customerAddress: inv.customerAddress ?? inv.customer_address ?? '',
+    items: sanitizeInvoiceItems(inv.items),
+    total: Number(inv.total) || 0,
+    status: inv.status || 'pending',
+    date: inv.date,
+    due: inv.due ?? inv.due_date,
+    notes: inv.notes || '',
+    discountType: inv.discountType ?? inv.discount_type ?? 'none',
+    discountValue: Number(inv.discountValue ?? inv.discount_value) || 0,
+    booked: Boolean(inv.booked),
+    bookedAt: bookedAt || null,
+    bookedBy: inv.bookedBy ?? inv.booked_by ?? '',
+    createdBy: inv.createdBy ?? inv.created_by ?? '',
+  }
+}
+
 function mapInvoice(row) {
-  return withUpdatedAt({
+  return sanitizeInvoiceForSync(withUpdatedAt({
     id: row.id,
-    customerId: normalizeBigintId(row.customer_id ?? row.customerId),
+    customerId: row.customer_id ?? row.customerId,
     customerName: row.customer_name ?? row.customerName,
     customerPhone: row.customer_phone ?? row.customerPhone ?? '',
     customerWhatsapp: row.customer_whatsapp ?? row.customerWhatsapp ?? '',
     customerAddress: row.customer_address ?? row.customerAddress ?? '',
     items: row.items || [],
-    total: Number(row.total),
+    total: row.total,
     status: row.status,
     date: row.date,
     due: row.due_date ?? row.due,
     notes: row.notes || '',
     discountType: row.discount_type ?? row.discountType ?? 'none',
-    discountValue: Number(row.discount_value ?? row.discountValue) || 0,
-    booked: Boolean(row.booked),
+    discountValue: row.discount_value ?? row.discountValue,
+    booked: row.booked,
     bookedAt: row.booked_at ?? row.bookedAt ?? null,
     bookedBy: row.booked_by ?? row.bookedBy ?? '',
     createdBy: row.created_by ?? row.createdBy ?? '',
-  })
+  }))
 }
 
 function expenseStoragePath(id) {
@@ -336,7 +378,7 @@ export async function syncProducts(products, options) {
 
 export async function syncInvoices(invoices, options) {
   if (!isSupabaseConfigured) return
-  await syncCall('invoices', invoices, options)
+  await syncCall('invoices', (invoices || []).map(sanitizeInvoiceForSync), options)
 }
 
 export async function uploadExpenseReceipt(expenseId, imageData, imageName = '') {
