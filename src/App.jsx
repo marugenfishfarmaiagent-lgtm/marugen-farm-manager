@@ -126,17 +126,17 @@ function AccountsMarkConfirmModal({ open, recordLabel, currentlyBooked, onCancel
   );
 }
 
-function InvoiceCancelConfirmModal({ open, invoiceId, customerName, onCancel, onConfirm }) {
+function InvoiceCancelConfirmModal({ open, invoiceId, customerName, onCancel, onConfirm, loading = false }) {
   return (
-    <Modal open={open} onClose={onCancel} title="Cancel invoice?" size="sm">
+    <Modal open={open} onClose={loading ? undefined : onCancel} title="Cancel invoice?" size="sm">
       <p className="text-slate-300 text-sm mb-4">
         Cancel <strong className="text-white">{invoiceId}</strong> for <strong className="text-white">{customerName}</strong>?
         Inventory and fish stock will be restored where applicable. This cannot be undone.
       </p>
       <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
-        <Btn variant="secondary" onClick={onCancel} className="w-full sm:w-auto justify-center">Keep invoice</Btn>
-        <Btn variant="danger" onClick={onConfirm} className="w-full sm:w-auto justify-center">
-          <XCircle size={14} />Cancel invoice
+        <Btn variant="secondary" onClick={onCancel} disabled={loading} className="w-full sm:w-auto justify-center">Keep invoice</Btn>
+        <Btn variant="danger" onClick={onConfirm} disabled={loading} className="w-full sm:w-auto justify-center">
+          {loading ? <><Loader2 size={14} className="animate-spin" />Cancelling...</> : <><XCircle size={14} />Cancel invoice</>}
         </Btn>
       </div>
     </Modal>
@@ -1238,7 +1238,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
 function InvoiceModule({
   invoices, setInvoices, setCustomers, setProducts, setStockLog, customers, products,
   koiFishList, setKoiFishList, onKoiSold, setCustomerKoiList,
-  addNotification, currentUser, openDraft, onDraftApplied, onMarkInvoicePaid,
+  addNotification, currentUser, openDraft, onDraftApplied, onMarkInvoicePaid, onCancelInvoiceCloud,
 }) {
   const emptyItem = () => ({ name: "", qty: 1, price: "", productId: "", manual: true });
   const buildFormFromDraft = (draft) => ({
@@ -1264,6 +1264,7 @@ function InvoiceModule({
   const [bookedConfirm, setBookedConfirm] = useState(null);
   const [cancelConfirm, setCancelConfirm] = useState(null);
   const [markingPaidId, setMarkingPaidId] = useState(null);
+  const [cancellingId, setCancellingId] = useState(null);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [formError, setFormError] = useState("");
   const [showWhatsappInput, setShowWhatsappInput] = useState(false);
@@ -1574,25 +1575,35 @@ function InvoiceModule({
     setCancelConfirm({ id, customerName: inv.customerName });
   };
 
-  const confirmCancelInvoice = () => {
+  const confirmCancelInvoice = async () => {
     const id = cancelConfirm?.id;
-    if (!id) return;
-    const inv = invoices.find((i) => i.id === id);
+    if (!id || cancellingId) return;
+    const invId = String(id);
+    const inv = invoices.find((i) => String(i.id) === invId);
     if (!inv || !canCancelInvoice(inv)) {
       setCancelConfirm(null);
       return;
     }
-    restoreStockForInvoice(setProducts, setStockLog, products, inv.items || [], {
-      invoiceId: id,
-      by: currentUser?.name || "Staff",
-    });
-    restoreInvoiceKoiSales(inv.items || [], setKoiFishList, setCustomerKoiList);
-    setInvoices((prev) => sortInvoices(prev.map((i) => (
-      i.id === id ? touchUpdatedAt(db.sanitizeInvoiceForSync({ ...i, status: "cancelled" })) : i
-    ))));
-    setViewInv((prev) => (prev?.id === id ? null : prev));
-    setCancelConfirm(null);
-    addNotification({ type: "info", title: "Invoice Cancelled", message: `${id} has been cancelled. Inventory and fish stock restored where applicable.` });
+    const optimistic = touchUpdatedAt(db.sanitizeInvoiceForSync({ ...inv, status: "cancelled" }));
+
+    setCancellingId(id);
+    setInvoices((prev) => sortInvoices(prev.map((i) => (String(i.id) === invId ? optimistic : i))));
+    setViewInv((prev) => (prev && String(prev.id) === invId ? null : prev));
+
+    try {
+      await onCancelInvoiceCloud?.(inv);
+      setCancelConfirm(null);
+      addNotification({ type: "info", title: "Invoice Cancelled", message: `${invId} has been cancelled. Inventory and fish stock restored where applicable.` });
+    } catch (err) {
+      setInvoices((prev) => sortInvoices(prev.map((i) => (String(i.id) === invId ? inv : i))));
+      addNotification({
+        type: "error",
+        title: "Cancel Failed",
+        message: err?.message || `${invId} could not be cancelled on cloud. Try again.`,
+      });
+    } finally {
+      setCancellingId(null);
+    }
   };
 
   const markPaid = async (id) => {
@@ -2239,6 +2250,7 @@ function InvoiceModule({
         open={!!cancelConfirm}
         invoiceId={cancelConfirm?.id || ""}
         customerName={cancelConfirm?.customerName || ""}
+        loading={!!cancellingId}
         onCancel={() => setCancelConfirm(null)}
         onConfirm={confirmCancelInvoice}
       />
@@ -5468,6 +5480,73 @@ export default function App() {
     }
   }, [currentUser, handleSyncFailure, touchLastSync]);
 
+  const cancelInvoiceCloud = useCallback(async (inv) => {
+    const invId = String(inv.id);
+    const optimistic = touchUpdatedAt(db.sanitizeInvoiceForSync({ ...inv, status: "cancelled" }));
+
+    const timerKey = "invoices:Invoices";
+    if (syncTimersRef.current[timerKey]) {
+      clearTimeout(syncTimersRef.current[timerKey]);
+      delete syncTimersRef.current[timerKey];
+    }
+
+    let waited = 0;
+    while (syncInFlightRef.current > 0 && waited < 5000) {
+      await new Promise((r) => setTimeout(r, 100));
+      waited += 100;
+    }
+
+    pinInvoice(optimistic);
+    const nextInvoices = sortInvoices(
+      syncStateRef.current.invoices.map((i) => (String(i.id) === invId ? optimistic : i)),
+    );
+    syncStateRef.current = { ...syncStateRef.current, invoices: nextInvoices };
+
+    const applyCancelSideEffects = () => {
+      restoreStockForInvoice(setProducts, setStockLog, products, inv.items || [], {
+        invoiceId: invId,
+        by: currentUser?.name || "Staff",
+      });
+      restoreInvoiceKoiSales(inv.items || [], setKoiFishList, setCustomerKoiList);
+    };
+
+    if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) {
+      applyCancelSideEffects();
+      return;
+    }
+    if (!hasPermission(currentUser, "invoices") || !hasPermission(currentUser, "delete")) {
+      throw new Error("Permission denied.");
+    }
+    if (!(await ensureCloudSyncReady())) {
+      throw new Error("Session needs refresh. Log out and log in again.");
+    }
+
+    syncInFlightRef.current += 1;
+    try {
+      const confirmed = await db.cancelInvoiceCloud(invId);
+      unpinInvoice(invId);
+      applyCancelSideEffects();
+      const confirmedRow = touchUpdatedAt(db.sanitizeInvoiceForSync(confirmed));
+      const finalInvoices = sortInvoices(
+        syncStateRef.current.invoices.map((i) => (String(i.id) === invId ? confirmedRow : i)),
+      );
+      syncStateRef.current = { ...syncStateRef.current, invoices: finalInvoices };
+      setInvoices(finalInvoices);
+      setCloudSync(true);
+      setCloudError(null);
+      touchLastSync();
+    } catch (err) {
+      unpinInvoice(invId);
+      handleSyncFailure(err);
+      throw err;
+    } finally {
+      syncInFlightRef.current -= 1;
+    }
+  }, [
+    currentUser, products, handleSyncFailure, touchLastSync, ensureCloudSyncReady,
+    setProducts, setStockLog, setKoiFishList, setCustomerKoiList,
+  ]);
+
   const syncDebounced = useCallback((perm, label, fn, data) => {
     if (!dataReady || !cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
     if (!hasPermission(currentUser, perm)) return;
@@ -5880,7 +5959,7 @@ export default function App() {
       case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} addNotification={addNotification} canEdit={canEditRecords(currentUser)} />);
       case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondData} addNotification={addNotification} currentUser={currentUser} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} />);
-      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} onMarkInvoicePaid={markInvoicePaidCloud} />);
+      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} />);
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} addNotification={addNotification} currentUser={currentUser} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpenses} addNotification={addNotification} currentUser={currentUser} />);
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} />);

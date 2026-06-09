@@ -423,6 +423,34 @@ Deno.serve(async (req) => {
       return J({ ok: true, invoice: data });
     }
 
+    if (body.action === "cancel_invoice") {
+      if (!hasPermission(user, "invoices")) {
+        return J({ error: "Permission denied (invoices)" }, 403);
+      }
+      if (!hasPermission(user, "delete")) {
+        return J({ error: "Permission denied (delete)" }, 403);
+      }
+      const id = String(body.id || "").trim();
+      if (!id) return J({ error: "Invoice id required" }, 400);
+
+      const { data: existing, error: fetchErr } = await db.from("invoices").select("*").eq("id", id).maybeSingle();
+      if (fetchErr) throw fetchErr;
+      if (!existing) return J({ error: "Invoice not found" }, 404);
+      if (existing.status === "cancelled") return J({ ok: true, invoice: existing });
+      if (existing.status === "paid") {
+        return J({ error: "Paid invoices cannot be cancelled" }, 400);
+      }
+
+      const now = new Date().toISOString();
+      const { data, error } = await db.from("invoices")
+        .update({ status: "cancelled", updated_at: now })
+        .eq("id", id)
+        .select("*")
+        .single();
+      if (error) throw error;
+      return J({ ok: true, invoice: data });
+    }
+
     if (body.action === "sync") {
       const { entity, data, prune, deletedIds } = body;
       const perm = ENTITY_PERMS[entity];

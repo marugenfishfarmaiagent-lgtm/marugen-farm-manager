@@ -399,6 +399,13 @@ export async function markInvoicePaidCloud(id) {
   return mapInvoice(data.invoice)
 }
 
+/** Atomically cancel one invoice on the server (avoids full-list sync timestamp races). */
+export async function cancelInvoiceCloud(id) {
+  if (!isSupabaseConfigured) throw new Error('Cloud sync is not configured')
+  const data = await apiCall({ action: 'cancel_invoice', id: String(id) })
+  return mapInvoice(data.invoice)
+}
+
 export async function uploadExpenseReceipt(expenseId, imageData, imageName = '') {
   if (!isSupabaseConfigured) throw new Error('Cloud storage is not configured')
   return apiCall({ action: 'upload_expense_receipt', expenseId, imageData, imageName })
