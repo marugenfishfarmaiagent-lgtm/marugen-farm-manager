@@ -14,11 +14,11 @@ function isTerminalInvoiceStatus(status) {
 export function resolveInvoiceConflict(local, remote) {
   const lt = ts(local)
   const rt = ts(remote)
-  if (lt !== rt) return lt > rt ? local : remote
   const ls = local?.status || 'pending'
   const rs = remote?.status || 'pending'
   if (isTerminalInvoiceStatus(ls) && !isTerminalInvoiceStatus(rs)) return local
   if (isTerminalInvoiceStatus(rs) && !isTerminalInvoiceStatus(ls)) return remote
+  if (lt !== rt) return lt > rt ? local : remote
   return local
 }
 

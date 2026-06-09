@@ -221,7 +221,7 @@ function Modal({ open, onClose, title, children, size = "md" }) {
           <h3 className="text-base sm:text-lg font-bold text-white pr-2">{title}</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-white p-2 -mr-1 rounded-lg hover:bg-slate-700 transition-colors touch-manipulation"><X size={18} /></button>
         </div>
-        <div className="overflow-y-auto flex-1 p-4 sm:p-5 overscroll-contain">{children}</div>
+        <div className="overflow-y-auto flex-1 p-4 sm:p-5 overscroll-contain min-w-0">{children}</div>
       </div>
     </div>
   );
@@ -1262,6 +1262,7 @@ function InvoiceModule({
   const [showOlderInvoices, setShowOlderInvoices] = useState(false);
   const [bookedConfirm, setBookedConfirm] = useState(null);
   const [cancelConfirm, setCancelConfirm] = useState(null);
+  const [markingPaidId, setMarkingPaidId] = useState(null);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [formError, setFormError] = useState("");
   const [showWhatsappInput, setShowWhatsappInput] = useState(false);
@@ -1593,7 +1594,8 @@ function InvoiceModule({
     addNotification({ type: "info", title: "Invoice Cancelled", message: `${id} has been cancelled. Inventory and fish stock restored where applicable.` });
   };
 
-  const markPaid = (id) => {
+  const markPaid = async (id) => {
+    if (markingPaidId) return;
     const inv = invoices.find((i) => i.id === id);
     if (!inv) return;
     if (inv.status === "paid") return;
@@ -1602,12 +1604,12 @@ function InvoiceModule({
       return;
     }
     const paidTotal = calcInvoiceAmounts(inv).total;
-    setInvoices((prev) => sortInvoices(prev.map((i) => (
-      i.id === id ? touchUpdatedAt(db.sanitizeInvoiceForSync({ ...i, status: "paid" })) : i
-    ))));
-    setViewInv((prev) => (
-      prev?.id === id ? touchUpdatedAt(db.sanitizeInvoiceForSync({ ...prev, status: "paid" })) : prev
-    ));
+    const updated = touchUpdatedAt(db.sanitizeInvoiceForSync({ ...inv, status: "paid" }));
+    const nextInvoices = sortInvoices(invoices.map((i) => (i.id === id ? updated : i)));
+
+    setMarkingPaidId(id);
+    setInvoices(nextInvoices);
+    setViewInv((prev) => (prev?.id === id ? updated : prev));
     if (inv.customerId != null && inv.customerId !== "") {
       setCustomers((prev) => prev.map((c) => {
         if (String(c.id) !== String(inv.customerId)) return c;
@@ -1615,8 +1617,14 @@ function InvoiceModule({
         return touchUpdatedAt({ ...c, totalSpent, tier: calcCustomerTier(totalSpent) });
       }));
     }
-    syncInvoicesNow?.().catch(() => {});
-    addNotification({ type: "success", title: "Payment Received", message: `${id} marked as paid - ${formatSGD(paidTotal)}` });
+    try {
+      await syncInvoicesNow?.(nextInvoices);
+      addNotification({ type: "success", title: "Payment Received", message: `${id} marked as paid - ${formatSGD(paidTotal)}` });
+    } catch {
+      addNotification({ type: "error", title: "Save Failed", message: `${id} marked paid on this device but cloud sync failed. Tap Retry save in the header.` });
+    } finally {
+      setMarkingPaidId(null);
+    }
   };
 
   const downloadPdf = async (inv) => {
@@ -1715,7 +1723,7 @@ function InvoiceModule({
         </button>
       )}
 
-      <div className="md:hidden space-y-3 pb-24">
+      <div className="lg:hidden space-y-3 pb-28 min-w-0">
         {filtered.length === 0 ? (
           <Card>
             <EmptyState
@@ -1727,15 +1735,16 @@ function InvoiceModule({
         ) : invoicePage.paginatedItems.map(inv => {
           const invAmounts = calcInvoiceAmounts(inv);
           const status = getInvoiceStatus(inv);
+          const isMarking = markingPaidId === inv.id;
           return (
-          <Card key={inv.id} className="p-4">
-            <div className="flex items-start justify-between gap-3 mb-2">
+          <Card key={inv.id} className="p-4 overflow-hidden max-w-full min-w-0">
+            <div className="flex items-start justify-between gap-3 mb-2 min-w-0">
               <div className="min-w-0 flex-1">
                 <p className="font-mono text-cyan-400 font-bold text-xs">{inv.id}</p>
                 <p className="text-white font-bold truncate">{inv.customerName}</p>
                 <p className="text-slate-500 text-xs mt-0.5">{inv.date}</p>
               </div>
-              <div className="flex flex-col items-end gap-1 shrink-0">
+              <div className="flex flex-col items-end gap-1 shrink-0 max-w-[45%]">
                 <Badge className={statusColor[status]}>{status}</Badge>
                 <BookedBadge booked={inv.booked} bookedBy={inv.bookedBy} />
               </div>
@@ -1746,38 +1755,44 @@ function InvoiceModule({
                 <p className="text-xs text-emerald-400">-{formatSGD(invAmounts.discountAmount)} discount</p>
               )}
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Btn variant="secondary" size="sm" onClick={() => setViewInv(inv)} className="flex-1 min-w-[4.5rem] justify-center">
+            <div className="grid grid-cols-4 gap-2 max-w-full">
+              <Btn variant="secondary" size="sm" onClick={() => setViewInv(inv)} className="col-span-2 justify-center min-w-0">
                 <Eye size={14} />View
               </Btn>
-              <Btn variant="ghost" size="sm" onClick={() => { setViewInv(inv); sendWhatsApp(inv); }} disabled={pdfLoading} className="justify-center" title="WhatsApp">
+              <Btn variant="ghost" size="sm" onClick={() => { setViewInv(inv); sendWhatsApp(inv); }} disabled={pdfLoading} className="justify-center min-w-0" title="WhatsApp">
                 <MessageSquare size={14} />
               </Btn>
-              <Btn variant="ghost" size="sm" onClick={() => downloadPdf(inv)} disabled={pdfLoading} className="justify-center" title="PDF">
+              <Btn variant="ghost" size="sm" onClick={() => downloadPdf(inv)} disabled={pdfLoading} className="justify-center min-w-0" title="PDF">
                 <Printer size={14} />
               </Btn>
               {canMarkAccounting(currentUser) && (
-                <Btn variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); requestInvoiceBookedChange(inv.id); }} title={inv.booked ? "Change accounts mark" : "Mark entered in accounts"} className="justify-center">
+                <Btn variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); requestInvoiceBookedChange(inv.id); }} title={inv.booked ? "Accounts mark" : "Mark in accounts"} className="justify-center min-w-0">
                   <BookCheck size={14} className={inv.booked ? "text-emerald-400" : "text-slate-500"} />
                 </Btn>
               )}
               {canCancelInvoice(inv) && canDeleteRecords(currentUser) && (
-                <Btn variant="ghost" size="sm" onClick={() => cancelInvoice(inv.id)} title="Cancel invoice" className="justify-center">
+                <Btn variant="ghost" size="sm" onClick={() => cancelInvoice(inv.id)} title="Cancel invoice" className="justify-center min-w-0">
                   <XCircle size={14} className="text-red-400" />
                 </Btn>
               )}
             </div>
             {canMarkPaid(inv) && (
-              <Btn variant="success" size="sm" onClick={() => markPaid(inv.id)} className="w-full mt-2 justify-center">
-                <Check size={14} />Mark Paid
+              <Btn
+                variant="success"
+                size="sm"
+                onClick={() => markPaid(inv.id)}
+                disabled={!!markingPaidId}
+                className="w-full max-w-full mt-3 justify-center box-border"
+              >
+                {isMarking ? <><Loader2 size={14} className="animate-spin" />Saving...</> : <><Check size={14} />Mark Paid</>}
               </Btn>
             )}
           </Card>
         );})}
       </div>
-      <PaginationControls {...invoicePage} className="md:hidden" />
+      <PaginationControls {...invoicePage} className="lg:hidden" />
 
-      <Card className="overflow-hidden hidden md:block">
+      <Card className="overflow-hidden hidden lg:block">
         <div className="overflow-x-auto">
         <table className="w-full text-sm min-w-[640px]">
           <thead><tr className="bg-slate-700/30 text-slate-400 text-xs">
@@ -2118,8 +2133,8 @@ function InvoiceModule({
                   <Printer size={14} />{pdfLoading ? "Generating..." : "Download PDF"}
                 </Btn>
                 {canMarkPaid(activeViewInv) && (
-                  <Btn variant="success" onClick={() => markPaid(activeViewInv.id)} className="flex-1 sm:flex-none justify-center">
-                    <Check size={14} />Mark Paid
+                  <Btn variant="success" onClick={() => markPaid(activeViewInv.id)} disabled={!!markingPaidId} className="flex-1 sm:flex-none justify-center">
+                    {markingPaidId === activeViewInv.id ? <><Loader2 size={14} className="animate-spin" />Saving...</> : <><Check size={14} />Mark Paid</>}
                   </Btn>
                 )}
                 {canCancelInvoice(activeViewInv) && canDeleteRecords(currentUser) && (
@@ -2199,8 +2214,8 @@ function InvoiceModule({
                 </div>
               </Card>
             )}
-            <div className="no-print rounded-xl border border-slate-600 bg-[#d4d4d4] p-2 sm:p-6 overflow-y-auto max-h-[min(70vh,920px)]">
-              <InvoicePreviewFrame resetKey={activeViewInv?.id || ''}>
+            <div className="no-print rounded-xl border border-slate-600 bg-[#d4d4d4] p-2 sm:p-6 min-w-0 max-w-full overflow-x-hidden overflow-y-auto max-h-[min(65vh,920px)]">
+              <InvoicePreviewFrame resetKey={`${activeViewInv?.id || ''}-${activeViewInv?.status || ''}-${activeViewInv?.updatedAt || ''}`}>
                 <InvoiceDocument invoice={docInv} preview className="shadow-2xl" />
               </InvoicePreviewFrame>
             </div>
@@ -3686,7 +3701,7 @@ function DeliveryModule({
           const inv = invoices.find((i) => String(i.id) === String(invoicePreviewId));
           if (!inv) return <p className="text-slate-400 text-sm">Invoice not found.</p>;
           return (
-            <div className="rounded-xl border border-slate-600 bg-[#d4d4d4] p-2 sm:p-6 overflow-y-auto max-h-[min(70vh,920px)]">
+            <div className="rounded-xl border border-slate-600 bg-[#d4d4d4] p-2 sm:p-6 min-w-0 max-w-full overflow-x-hidden overflow-y-auto max-h-[min(65vh,920px)]">
               <InvoicePreviewFrame resetKey={invoicePreviewId || ''}>
                 <InvoiceDocument invoice={enrichInvoiceCustomer(inv, customers)} preview className="shadow-2xl" />
               </InvoicePreviewFrame>
@@ -5366,7 +5381,7 @@ export default function App() {
     }
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync]);
 
-  const syncInvoicesNow = useCallback(async () => {
+  const syncInvoicesNow = useCallback(async (invoicesOverride) => {
     if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
     if (!hasPermission(currentUser, "invoices")) return;
     const timerKey = "invoices:Invoices";
@@ -5375,9 +5390,13 @@ export default function App() {
       delete syncTimersRef.current[timerKey];
     }
     if (!(await ensureCloudSyncReady())) return;
+    const payload = invoicesOverride ?? syncStateRef.current.invoices;
+    if (invoicesOverride) {
+      syncStateRef.current = { ...syncStateRef.current, invoices: invoicesOverride };
+    }
     syncInFlightRef.current += 1;
     try {
-      await db.syncInvoices(syncStateRef.current.invoices);
+      await db.syncInvoices(payload);
       setCloudSync(true);
       setCloudError(null);
       touchLastSync();
