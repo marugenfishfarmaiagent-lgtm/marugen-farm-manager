@@ -1,4 +1,10 @@
 import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
+import {
+  normalizeAuthUser,
+  validateChangePinForm,
+  validateLoginPin,
+  validateSetupOwnerFields,
+} from './loginOps'
 
 const SESSION_KEY = 'marugen_session'
 
@@ -107,7 +113,9 @@ export function sessionNeedsRefresh() {
 
 function applyAuthBootstrap(data) {
   if (!data?.authenticated || !data?.user || !data?.sessionToken) return false
-  setSession({ user: data.user, token: data.sessionToken })
+  const user = normalizeAuthUser(data.user)
+  if (!user?.active) return false
+  setSession({ user, token: data.sessionToken })
   return true
 }
 
@@ -130,15 +138,25 @@ export async function authStatus() {
 
 export async function loginWithPin(pin) {
   if (!isSupabaseConfigured) return null
+  const check = validateLoginPin(pin)
+  if (!check.ok) throw new Error(check.message)
+
   const res = await cloudFetch(`${getFunctionsUrl()}/auth-login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'login', pin }),
+    body: JSON.stringify({ action: 'login', pin: check.pin }),
   })
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Login failed')
-  setSession({ user: data.user, token: data.sessionToken })
-  return data
+
+  const user = normalizeAuthUser(data.user)
+  if (!user?.active) {
+    clearSession()
+    throw new Error('This account is inactive. Contact the farm owner.')
+  }
+
+  setSession({ user, token: data.sessionToken })
+  return { ...data, user }
 }
 
 export async function fetchPublicUsers() {
@@ -147,30 +165,47 @@ export async function fetchPublicUsers() {
   return status.hasUsers ? [{ id: 'cloud', name: 'Team member', role: 'staff', active: true }] : []
 }
 
-export async function setupOwner({ name, pin, setupSecret }) {
+export async function setupOwner({ name, pin, confirmPin, setupSecret }) {
   if (!isSupabaseConfigured) return null
+  const check = validateSetupOwnerFields({ name, pin, confirmPin: confirmPin ?? pin })
+  if (!check.ok) throw new Error(check.message)
+
   const res = await cloudFetch(`${getFunctionsUrl()}/auth-login`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...(setupSecret ? { 'x-setup-secret': setupSecret } : {}),
     },
-    body: JSON.stringify({ action: 'setup', name, pin, setupSecret }),
+    body: JSON.stringify({
+      action: 'setup',
+      name: check.name,
+      pin: check.pin,
+      setupSecret,
+    }),
   })
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Setup failed')
-  setSession({ user: data.user, token: data.sessionToken })
-  return data
+
+  const user = normalizeAuthUser(data.user)
+  setSession({ user, token: data.sessionToken })
+  return { ...data, user }
 }
 
-export async function changeMyPin({ currentPin, newPin }) {
+export async function changeMyPin({ currentPin, newPin, confirmPin }) {
   if (!isSupabaseConfigured) {
     return { local: true }
   }
+  const check = validateChangePinForm({ currentPin, newPin, confirmPin: confirmPin ?? newPin })
+  if (!check.ok) throw new Error(check.message)
+
   const res = await cloudFetch(`${getFunctionsUrl()}/auth-login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'change_pin', currentPin, newPin }),
+    body: JSON.stringify({
+      action: 'change_pin',
+      currentPin: check.currentPin,
+      newPin: check.newPin,
+    }),
   })
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Failed to change PIN')
@@ -198,11 +233,10 @@ export async function logout() {
 }
 
 export function toAppUser(user) {
+  const normalized = normalizeAuthUser(user)
+  if (!normalized) return null
   return {
-    id: user.id,
-    role: user.role,
-    name: user.name,
-    permissions: user.permissions,
-    displayName: user.role === 'owner' ? `🐟 ${user.name}` : `👤 ${user.name}`,
+    ...normalized,
+    displayName: normalized.role === 'owner' ? `🐟 ${normalized.name}` : `👤 ${normalized.name}`,
   }
 }

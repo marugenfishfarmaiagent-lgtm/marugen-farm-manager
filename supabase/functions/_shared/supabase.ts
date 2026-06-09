@@ -24,7 +24,11 @@ export async function validateSession(token: string | null): Promise<SessionUser
     .select("user_id, expires_at")
     .eq("token", token)
     .maybeSingle();
-  if (!session || new Date(session.expires_at) < new Date()) return null;
+  if (!session) return null;
+  if (new Date(session.expires_at) < new Date()) {
+    await db.from("auth_sessions").delete().eq("token", token);
+    return null;
+  }
 
   const { data: user } = await db
     .from("farm_users")

@@ -9,7 +9,8 @@ import {
 import { adminClient, sessionTokenFrom, validateSession } from "../_shared/supabase.ts";
 
 const SESSION_DAYS = 7;
-const MAX_PIN_LENGTH = 32;
+const PIN_MIN = 4;
+const PIN_MAX = 6;
 
 const OWNER_PERMISSIONS = [
   "dashboard", "inventory", "koifish", "customerkoi", "ponds",
@@ -24,9 +25,13 @@ function clientIp(req: Request): string {
     || "unknown";
 }
 
+function normalizePin(pin: unknown): string {
+  return String(pin ?? "").replace(/\D/g, "");
+}
+
 function isValidPin(pin: unknown): pin is string {
-  const s = String(pin ?? "");
-  return s.length >= 4 && s.length <= MAX_PIN_LENGTH && /^\d+$/.test(s);
+  const s = normalizePin(pin);
+  return s.length >= PIN_MIN && s.length <= PIN_MAX && /^\d+$/.test(s);
 }
 
 function publicUser(row: Record<string, unknown>) {
@@ -92,21 +97,30 @@ Deno.serve(async (req) => {
       }
 
       const existingToken = sessionTokenFrom(req);
-      const sessionUser = await validateSession(existingToken);
-      if (sessionUser) {
-        const { data: row } = await db.from("farm_users")
-          .select("id, name, role, active, permissions, is_system")
-          .eq("id", sessionUser.id)
-          .maybeSingle();
-        if (row && row.active !== false) {
-          return jsonResponse({
-            authenticated: true,
-            user: publicUser(row),
-            sessionToken: existingToken,
-            needsSetup: false,
-            hasUsers: true,
-          }, 200, req);
+      if (existingToken) {
+        const sessionUser = await validateSession(existingToken);
+        if (sessionUser) {
+          const { data: row } = await db.from("farm_users")
+            .select("id, name, role, active, permissions, is_system")
+            .eq("id", sessionUser.id)
+            .maybeSingle();
+          if (row && row.active !== false) {
+            return jsonResponse({
+              authenticated: true,
+              user: publicUser(row),
+              sessionToken: existingToken,
+              needsSetup: false,
+              hasUsers: true,
+            }, 200, req);
+          }
+          await db.from("auth_sessions").delete().eq("token", existingToken);
         }
+
+        const { count: userCount } = await db.from("farm_users").select("*", { count: "exact", head: true });
+        return jsonResponse({
+          needsSetup: userCount === 0,
+          hasUsers: (userCount || 0) > 0,
+        }, 200, req, { "Set-Cookie": clearSessionCookieHeader() });
       }
 
       const { count } = await db.from("farm_users").select("*", { count: "exact", head: true });
@@ -116,20 +130,25 @@ Deno.serve(async (req) => {
       }, 200, req);
     }
 
-    const body = await req.json();
+    let body: Record<string, unknown>;
+    try {
+      body = await req.json();
+    } catch {
+      return jsonResponse({ error: "Invalid JSON body" }, 400, req);
+    }
     const { action } = body;
 
     if (action === "login") {
-      const { pin } = body;
-      if (!isValidPin(pin)) {
-        return jsonResponse({ error: "Enter a 4–32 digit PIN" }, 400, req);
+      const pinStr = normalizePin(body.pin);
+      if (!isValidPin(pinStr)) {
+        return jsonResponse({ error: "Enter a 4–6 digit PIN" }, 400, req);
       }
       if (!(await checkRateLimit(db, `login:${clientIp(req)}`, 10, 15 * 60_000))) {
         return jsonResponse({ error: "Too many login attempts. Try again in 15 minutes." }, 429, req);
       }
       const { data: users } = await db.from("farm_users").select("*").eq("active", true);
       for (const user of users || []) {
-        if (await verifyUserPin(user, String(pin))) {
+        if (await verifyUserPin(user, pinStr)) {
           const token = await createSession(user.id);
           return authJson({ user: publicUser(user) }, req, 200, token);
         }
@@ -145,17 +164,18 @@ Deno.serve(async (req) => {
         return jsonResponse({ error: "Invalid setup authorization" }, 403, req);
       }
 
-      const { name, pin } = body;
-      if (!name?.trim() || !isValidPin(pin)) {
-        return jsonResponse({ error: "Name and a 4–32 digit PIN required" }, 400, req);
+      const name = String(body.name ?? "").trim();
+      const pinStr = normalizePin(body.pin);
+      if (!name || !isValidPin(pinStr)) {
+        return jsonResponse({ error: "Name and a 4–6 digit PIN required" }, 400, req);
       }
       if (!(await checkRateLimit(db, `setup:${clientIp(req)}`, 5, 60 * 60_000))) {
         return jsonResponse({ error: "Too many setup attempts. Try again later." }, 429, req);
       }
 
-      const pin_hash = await hashPin(String(pin));
+      const pin_hash = await hashPin(pinStr);
       const { data: created, error } = await db.from("farm_users").insert({
-        name: name.trim(),
+        name,
         role: "owner",
         pin_hash,
         active: true,
@@ -179,29 +199,30 @@ Deno.serve(async (req) => {
       const sessionUser = await validateSession(sessionToken);
       if (!sessionUser) return jsonResponse({ error: "Unauthorized — login required" }, 401, req);
 
-      const { currentPin, newPin } = body;
-      if (!isValidPin(currentPin) || !isValidPin(newPin)) {
-        return jsonResponse({ error: "Current and new PIN must be 4–32 digits" }, 400, req);
+      const currentPinStr = normalizePin(body.currentPin);
+      const newPinStr = normalizePin(body.newPin);
+      if (!isValidPin(currentPinStr) || !isValidPin(newPinStr)) {
+        return jsonResponse({ error: "Current and new PIN must be 4–6 digits" }, 400, req);
       }
-      if (String(currentPin) === String(newPin)) {
+      if (currentPinStr === newPinStr) {
         return jsonResponse({ error: "New PIN must be different from current PIN" }, 400, req);
       }
 
       const { data: row, error: fetchErr } = await db.from("farm_users").select("*").eq("id", sessionUser.id).maybeSingle();
       if (fetchErr || !row) return jsonResponse({ error: "User not found" }, 404, req);
-      if (!(await verifyUserPin(row, String(currentPin)))) {
+      if (!(await verifyUserPin(row, currentPinStr))) {
         return jsonResponse({ error: "Current PIN is incorrect" }, 401, req);
       }
 
       const { data: allUsers } = await db.from("farm_users").select("id, pin_hash, pin").eq("active", true);
       for (const other of allUsers || []) {
         if (other.id === sessionUser.id) continue;
-        if (await verifyUserPin(other, String(newPin))) {
+        if (await verifyUserPin(other, newPinStr)) {
           return jsonResponse({ error: "This PIN is already assigned to another user" }, 400, req);
         }
       }
 
-      const pin_hash = await hashPin(String(newPin));
+      const pin_hash = await hashPin(newPinStr);
       const { error: updateErr } = await db.from("farm_users").update({ pin_hash, pin: null }).eq("id", sessionUser.id);
       if (updateErr) return jsonResponse({ error: updateErr.message }, 500, req);
 

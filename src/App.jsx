@@ -49,6 +49,10 @@ import {
   defaultPermissionsForRole, getUserDeactivateBlockReason, getUserDeleteBlockReason,
   sameUserId, userInitial, validateUserFields, validateUserPin,
 } from "./lib/teamOps";
+import {
+  findLocalUserByPin, sanitizePinInput, validateChangePinForm,
+  validateLoginPin, validateSetupOwnerFields,
+} from "./lib/loginOps";
 import { buildBusinessContext, executeAiActions, resolvePendingAiActions } from "./lib/aiActions";
 import * as db from "./lib/database";
 import { SYNC_ENTITIES } from "./lib/cloudSync";
@@ -396,21 +400,20 @@ function SetupScreen({ onComplete }) {
   const [loading, setLoading] = useState(false);
 
   const handleSetup = async () => {
-    if (!name.trim() || pin.length < 4) {
-      setError("Name and a 4-digit PIN are required.");
-      return;
-    }
-    if (pin !== confirmPin) {
-      setError("PINs do not match.");
+    const check = validateSetupOwnerFields({ name, pin, confirmPin });
+    if (!check.ok) {
+      setError(check.message);
       return;
     }
     setLoading(true);
     setError("");
     try {
-      const result = await auth.setupOwner({ name: name.trim(), pin });
-      onComplete(auth.toAppUser(result.user));
+      const result = await auth.setupOwner({ name: check.name, pin: check.pin, confirmPin: check.pin });
+      const appUser = auth.toAppUser(result.user);
+      if (!appUser) throw new Error("Setup completed but user profile is invalid.");
+      onComplete(appUser);
     } catch (err) {
-      setError(err.message);
+      setError(err.message || "Setup failed.");
     }
     setLoading(false);
   };
@@ -425,8 +428,8 @@ function SetupScreen({ onComplete }) {
         </div>
         <Card className="p-5 sm:p-6 space-y-4">
           <Input label="Owner Name" value={name} onChange={e => setName(e.target.value)} required />
-          <Input label="Choose PIN (4+ digits)" type="password" inputMode="numeric" value={pin} onChange={e => setPin(e.target.value)} required />
-          <Input label="Confirm PIN" type="password" inputMode="numeric" value={confirmPin} onChange={e => setConfirmPin(e.target.value)} required />
+          <Input label="Choose PIN (4–6 digits)" type="password" inputMode="numeric" value={pin} onChange={e => setPin(sanitizePinInput(e.target.value))} required />
+          <Input label="Confirm PIN" type="password" inputMode="numeric" value={confirmPin} onChange={e => setConfirmPin(sanitizePinInput(e.target.value))} required />
           {error && <div className="bg-red-500/20 border border-red-500/30 rounded-lg p-3 text-red-300 text-sm flex items-center gap-2"><AlertTriangle size={14} />{error}</div>}
           <Btn onClick={handleSetup} disabled={loading} className="w-full justify-center" size="lg">{loading ? "Setting up..." : "Create Account →"}</Btn>
         </Card>
@@ -441,19 +444,39 @@ function LoginScreen({ onLogin, users, cloudMode }) {
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
+    const pinCheck = validateLoginPin(pin);
+    if (!pinCheck.ok) {
+      setError(pinCheck.message);
+      return;
+    }
+
     setLoading(true);
     setError("");
     try {
       if (cloudMode) {
-        const result = await auth.loginWithPin(pin);
-        onLogin(auth.toAppUser(result.user));
+        const result = await auth.loginWithPin(pinCheck.pin);
+        const appUser = auth.toAppUser(result.user);
+        if (!appUser) throw new Error("Login succeeded but user profile is invalid.");
+        onLogin(appUser);
       } else {
-        const user = users.find((u) => u.pin === pin && u.active !== false);
-        if (user) {
-          auth.setSession({ token: "local", user: { id: user.id, name: user.name, role: user.role, permissions: user.permissions } });
-          onLogin(auth.toAppUser(user));
+        const match = findLocalUserByPin(users, pinCheck.pin);
+        if (!match.ok) {
+          setError(match.message);
         } else {
-          setError("Incorrect PIN or account inactive.");
+          const user = match.user;
+          auth.setSession({
+            token: "local",
+            user: {
+              id: user.id,
+              name: user.name,
+              role: user.role,
+              permissions: user.permissions,
+              active: user.active !== false,
+            },
+          });
+          const appUser = auth.toAppUser(user);
+          if (!appUser) throw new Error("Login succeeded but user profile is invalid.");
+          onLogin(appUser);
         }
       }
     } catch (err) {
@@ -475,7 +498,7 @@ function LoginScreen({ onLogin, users, cloudMode }) {
         <Card className="p-5 sm:p-6">
           <div className="mb-4">
             <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wide flex items-center gap-1"><Lock size={12} /> PIN Login</label>
-            <input type="password" inputMode="numeric" value={pin} onChange={e => setPin(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="••••"
+            <input type="password" inputMode="numeric" value={pin} onChange={e => setPin(sanitizePinInput(e.target.value))} placeholder="••••"
               onKeyDown={e => { if (e.key === "Enter" && !loading) { e.preventDefault(); handleLogin(); } }}
               className="w-full bg-slate-900/50 border border-slate-600 rounded-xl px-3 py-4 text-white text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 touch-manipulation" />
             <p className="text-xs text-slate-500 mt-2 text-center">Enter your assigned PIN to login</p>
@@ -4249,46 +4272,33 @@ function ChangePinModal({ open, onClose, currentUser, users, setUsers, addNotifi
 
   const handleSave = async () => {
     setError("");
-    if (currentPin.length < 4) {
-      setError("Enter your current PIN.");
-      return;
-    }
-    if (newPin.length < 4) {
-      setError("New PIN must be at least 4 digits.");
-      return;
-    }
-    if (newPin !== confirmPin) {
-      setError("New PINs do not match.");
-      return;
-    }
-    if (currentPin === newPin) {
-      setError("New PIN must be different from your current PIN.");
+    const check = validateChangePinForm({ currentPin, newPin, confirmPin });
+    if (!check.ok) {
+      setError(check.message);
       return;
     }
 
     setSaving(true);
     try {
       if (isSupabaseConfigured) {
-        await auth.changeMyPin({ currentPin, newPin });
+        await auth.changeMyPin({
+          currentPin: check.currentPin,
+          newPin: check.newPin,
+          confirmPin: check.newPin,
+        });
       } else {
         const me = users.find((u) => sameUserId(u.id, currentUser.id));
-        if (!me || me.pin !== currentPin) {
+        if (!me || me.pin !== check.currentPin) {
           setError("Current PIN is incorrect.");
           setSaving(false);
           return;
         }
-        const pinCheck = validateUserPin(newPin, { required: true });
-        if (!pinCheck.ok) {
-          setError(pinCheck.message);
-          setSaving(false);
-          return;
-        }
-        if (users.some((u) => u.pin === newPin && !sameUserId(u.id, currentUser.id))) {
+        if (users.some((u) => u.pin === check.newPin && !sameUserId(u.id, currentUser.id))) {
           setError("This PIN is already assigned to another user.");
           setSaving(false);
           return;
         }
-        setUsers((prev) => prev.map((u) => (sameUserId(u.id, currentUser.id) ? { ...u, pin: newPin } : u)));
+        setUsers((prev) => prev.map((u) => (sameUserId(u.id, currentUser.id) ? { ...u, pin: check.newPin } : u)));
       }
       addNotification({ type: "success", title: "PIN Updated", message: "Your login PIN has been changed successfully." });
       handleClose();
@@ -4306,11 +4316,11 @@ function ChangePinModal({ open, onClose, currentUser, users, setUsers, addNotifi
       </p>
       <div className="space-y-4">
         <Input label="Current PIN" type="password" inputMode="numeric" value={currentPin}
-          onChange={e => setCurrentPin(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="••••" required />
-        <Input label="New PIN (4+ digits)" type="password" inputMode="numeric" value={newPin}
-          onChange={e => setNewPin(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="••••" required />
+          onChange={e => setCurrentPin(sanitizePinInput(e.target.value))} placeholder="••••" required />
+        <Input label="New PIN (4–6 digits)" type="password" inputMode="numeric" value={newPin}
+          onChange={e => setNewPin(sanitizePinInput(e.target.value))} placeholder="••••" required />
         <Input label="Confirm New PIN" type="password" inputMode="numeric" value={confirmPin}
-          onChange={e => setConfirmPin(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="••••" required />
+          onChange={e => setConfirmPin(sanitizePinInput(e.target.value))} placeholder="••••" required />
         {error && (
           <div className="bg-red-500/20 border border-red-500/30 rounded-lg p-3 text-red-300 text-sm flex items-center gap-2">
             <AlertTriangle size={14} />{error}
@@ -6186,10 +6196,24 @@ export default function App() {
   }, [currentUser, activeTab]);
 
   const handleLogin = async (user) => {
+    if (!user || user.active === false) {
+      auth.clearSession();
+      setCurrentUser(null);
+      addNotification({
+        type: "error",
+        title: "Login blocked",
+        message: "This account is inactive. Contact the farm owner.",
+      });
+      return;
+    }
+
     setNeedsSetup(false);
     setCloudHydrated(false);
     if (isSupabaseConfigured) {
       try {
+        if (!auth.getSessionToken()) {
+          throw new Error("Session token missing after login. Please try again.");
+        }
         const data = await db.fetchAllData();
         applyCloudData(data);
         setCloudSync(true);
@@ -6230,9 +6254,16 @@ export default function App() {
   };
 
   const handleSetupComplete = async (user) => {
+    if (!user) {
+      auth.clearSession();
+      return;
+    }
     setNeedsSetup(false);
     setCloudHydrated(false);
     try {
+      if (!auth.getSessionToken()) {
+        throw new Error("Session token missing after setup. Please log in again.");
+      }
       const data = await db.fetchAllData();
       applyCloudData(data);
       setCloudSync(true);
@@ -6245,6 +6276,11 @@ export default function App() {
       setCloudSync(false);
       resetCloudBusinessState();
       setCurrentUser(null);
+      addNotification({
+        type: "error",
+        title: "Could not finish setup",
+        message: err?.message || "Please try logging in again.",
+      });
     }
   };
 
