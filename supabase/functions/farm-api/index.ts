@@ -614,8 +614,23 @@ Deno.serve(async (req) => {
       }
 
       if (entity === "customers") {
-        await upsertSync("customers", (data || []).map((c: Record<string, unknown>) => withTs({
-          id: c.id, name: c.name, phone: c.phone, whatsapp: c.whatsapp, area: c.area,
+        const incoming = (data || []) as Record<string, unknown>[];
+        const CUSTOMER_TIERS = new Set(["Bronze", "Silver", "Gold", "Platinum"]);
+        for (const c of incoming) {
+          if (!String(c.name ?? "").trim()) return J({ error: "Customer name is required" }, 400);
+          const whatsapp = String(c.whatsapp ?? c.phone ?? "").trim();
+          if (!whatsapp) return J({ error: "Customer WhatsApp or phone is required" }, 400);
+          const totalSpent = nullableNumeric(c.totalSpent ?? c.total_spent, -1);
+          if (totalSpent < 0) return J({ error: "Customer total_spent cannot be negative" }, 400);
+          const tier = String(c.tier ?? "Bronze");
+          if (!CUSTOMER_TIERS.has(tier)) return J({ error: `Invalid customer tier: ${tier}` }, 400);
+          const postal = String(c.postalCode ?? c.postal_code ?? "").replace(/\D/g, "");
+          if (postal && postal.length !== 6) {
+            return J({ error: "Singapore postal code must be 6 digits" }, 400);
+          }
+        }
+        await upsertSync("customers", incoming.map((c) => withTs({
+          id: c.id, name: String(c.name ?? "").trim(), phone: c.phone, whatsapp: c.whatsapp, area: c.area,
           postal_code: c.postalCode, address: c.address,
           fish_types: c.fishTypes, tier: c.tier, notes: c.notes, total_spent: c.totalSpent,
         }, c)), "id", syncOpts);

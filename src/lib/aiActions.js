@@ -16,6 +16,9 @@ import {
 } from './productMatch'
 import { isStockTracked } from './productCatalog'
 import { sanitizeInvoiceForSync } from './database'
+import {
+  buildNewCustomerRecord, buildUpdatedCustomerRecord, isDuplicateCustomerName, sameCustomerId,
+} from './customerOps'
 
 const EXPENSE_ALIASES = {
   feed: 'Feed', food: 'Feed', pellets: 'Feed', fishfood: 'Feed',
@@ -730,25 +733,23 @@ export function executeAiAction(name, args, ctx) {
 
       case 'create_customer': {
         if (!canDo(currentUser, 'customers')) return { success: false, error: 'No permission for customers' }
-        const name = a.name?.trim()
-        if (!name) return { success: false, error: 'Customer name required' }
-        const c = touchUpdatedAt({
-          id: Date.now(),
-          name,
-          phone: a.phone || a.whatsapp || '',
-          whatsapp: a.whatsapp || a.phone || '',
-          area: '',
-          postalCode: a.postalCode?.trim() || '',
-          address: a.address?.trim() || '',
-          fishTypes: a.fishTypes || [],
-          tier: 'Bronze',
-          notes: a.notes || '',
-          totalSpent: 0,
+        if (!canEdit(currentUser)) return { success: false, error: 'No edit permission' }
+        const built = buildNewCustomerRecord({
+          name: a.name,
+          whatsapp: a.whatsapp || a.phone,
+          postalCode: a.postalCode,
+          address: a.address,
+          fishTypes: a.fishTypes,
+          notes: a.notes,
         })
-        ctx.setCustomers((prev) => [...prev, c])
-        addNotification?.({ type: 'success', title: 'Customer Added (AI)', message: name })
+        if (!built.ok) return { success: false, error: built.message }
+        if (isDuplicateCustomerName(ctx.customers, built.customer.name)) {
+          return { success: false, error: `Customer "${built.customer.name}" already exists` }
+        }
+        ctx.setCustomers((prev) => [...prev, built.customer])
+        addNotification?.({ type: 'success', title: 'Customer Added (AI)', message: built.customer.name })
         onNavigate?.('customers')
-        return { success: true, message: `Added customer ${name}` }
+        return { success: true, message: `Added customer ${built.customer.name}` }
       }
 
       case 'create_product': {
@@ -968,8 +969,9 @@ export function executeAiAction(name, args, ctx) {
         if (!canEdit(currentUser)) return { success: false, error: 'No edit permission' }
         const customer = findCustomer(ctx, a.name)
         if (!customer) return { success: false, error: `Customer not found: ${a.name}` }
-        const updated = touchUpdatedAt({
+        const built = buildUpdatedCustomerRecord(customer, {
           ...customer,
+          name: a.newName || customer.name,
           whatsapp: a.whatsapp ?? customer.whatsapp,
           phone: a.phone ?? customer.phone,
           postalCode: a.postalCode ?? customer.postalCode,
@@ -977,10 +979,14 @@ export function executeAiAction(name, args, ctx) {
           fishTypes: a.fishTypes ?? customer.fishTypes,
           notes: a.notes ?? customer.notes,
         })
-        ctx.setCustomers((prev) => prev.map((c) => (c.id === customer.id ? updated : c)))
-        addNotification?.({ type: 'success', title: 'Customer Updated (AI)', message: customer.name })
+        if (!built.ok) return { success: false, error: built.message }
+        if (isDuplicateCustomerName(ctx.customers, built.customer.name, built.customer.id)) {
+          return { success: false, error: `Another customer is already named "${built.customer.name}"` }
+        }
+        ctx.setCustomers((prev) => prev.map((c) => (sameCustomerId(c.id, customer.id) ? built.customer : c)))
+        addNotification?.({ type: 'success', title: 'Customer Updated (AI)', message: built.customer.name })
         onNavigate?.('customers')
-        return { success: true, message: `Updated ${customer.name}` }
+        return { success: true, message: `Updated ${built.customer.name}` }
       }
 
       case 'delete_customer': {
@@ -988,7 +994,7 @@ export function executeAiAction(name, args, ctx) {
         if (!canDelete(currentUser)) return { success: false, error: 'No delete permission' }
         const customer = findCustomer(ctx, a.name)
         if (!customer) return { success: false, error: `Customer not found: ${a.name}` }
-        ctx.setCustomers((prev) => prev.filter((c) => c.id !== customer.id))
+        ctx.setCustomers((prev) => prev.filter((c) => !sameCustomerId(c.id, customer.id)))
         markDeleted('customers', customer.id)
         addNotification?.({ type: 'info', title: 'Customer Deleted (AI)', message: customer.name })
         onNavigate?.('customers')

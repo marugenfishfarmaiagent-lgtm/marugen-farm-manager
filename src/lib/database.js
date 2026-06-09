@@ -1,6 +1,7 @@
 import { clearSession, cloudFetch, getAuthHeaders } from './auth'
 import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
 import { normalizeCustomerKoiRecord } from '../data/constants'
+import { normalizeCustomerRecord } from './customerOps'
 import { emptyPondData } from './cloudData'
 import { normalizeImageFieldForSync, storagePaths } from './farmImage'
 import { confirmDeletions, peekDeletions } from './syncDeletions'
@@ -18,7 +19,7 @@ function mapUser(row) {
 }
 
 function mapCustomer(row) {
-  return withUpdatedAt({
+  return withUpdatedAt(normalizeCustomerRecord({
     id: row.id,
     name: row.name,
     phone: row.phone || '',
@@ -30,7 +31,7 @@ function mapCustomer(row) {
     tier: row.tier || 'Bronze',
     notes: row.notes || '',
     totalSpent: Number(row.total_spent ?? row.totalSpent) || 0,
-  })
+  }))
 }
 
 function mapProduct(row) {

@@ -55,6 +55,10 @@ import { mergeRecords, mergePondData, mergeInvoices } from "./lib/cloudMerge";
 import { applyInvoicePins, pinInvoice, unpinInvoice } from "./lib/invoicePins";
 import { touchUpdatedAt } from "./lib/syncMeta";
 import {
+  buildNewCustomerRecord, buildUpdatedCustomerRecord, getCustomerDeleteWarnings,
+  isDuplicateCustomerName, propagateCustomerProfileChange, sameCustomerId,
+} from "./lib/customerOps";
+import {
   FISH_TYPES, PRODUCT_CATEGORIES, LIST_PAGE_SIZE,
   CUSTOMER_TIERS, ALL_PERMISSIONS, DEFAULT_PERMISSIONS, SG_AREAS,
   formatSGD, formatInvoiceDate, today, genId, genInvoiceId, getInvoiceStatus, calcCustomerTier, KOI_STATUS, CUSTOMER_KOI_STATUS,
@@ -2363,7 +2367,10 @@ function InvoiceModule({
 // ─────────────────────────────────────────────
 // CUSTOMER CRM
 // ─────────────────────────────────────────────
-function CustomerModule({ customers, setCustomers, addNotification, currentUser }) {
+function CustomerModule({
+  customers, setCustomers, invoices = [], setInvoices, deliveries = [], setDeliveries,
+  customerKoiList = [], setCustomerKoiList, addNotification, currentUser,
+}) {
   const canEdit = canEditRecords(currentUser);
   const canDelete = canDeleteRecords(currentUser);
   const emptyForm = () => ({
@@ -2429,31 +2436,25 @@ function CustomerModule({ customers, setCustomers, addNotification, currentUser 
   };
 
   const addCustomer = () => {
-    const name = form.name?.trim();
-    const whatsapp = form.whatsapp?.trim();
-    if (!name) {
-      addNotification({ type: "error", title: "Name Required", message: "Enter the customer name." });
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
       return;
     }
-    if (!whatsapp) {
-      addNotification({ type: "error", title: "WhatsApp Required", message: "Enter a WhatsApp number." });
+    const built = buildNewCustomerRecord(form);
+    if (!built.ok) {
+      addNotification({ type: "error", title: "Invalid Customer", message: built.message });
       return;
     }
-    const c = touchUpdatedAt({
-      name,
-      phone: whatsapp,
-      whatsapp,
-      area: "",
-      postalCode: form.postalCode?.trim() || "",
-      address: form.address?.trim() || "",
-      fishTypes: form.fishTypes || [],
-      notes: form.notes?.trim() || "",
-      id: Date.now(),
-      totalSpent: 0,
-      tier: calcCustomerTier(0),
-    });
-    setCustomers((prev) => [...prev, c]);
-    addNotification({ type: "success", title: "Customer Added", message: `${c.name} added to CRM` });
+    if (isDuplicateCustomerName(customers, built.customer.name)) {
+      addNotification({
+        type: "warning",
+        title: "Duplicate Name",
+        message: `A customer named "${built.customer.name}" already exists.`,
+      });
+      return;
+    }
+    setCustomers((prev) => [...prev, built.customer]);
+    addNotification({ type: "success", title: "Customer Added", message: `${built.customer.name} added to CRM` });
     setShowAdd(false);
     setForm(emptyForm());
     addAddressManual.current = false;
@@ -2465,29 +2466,33 @@ function CustomerModule({ customers, setCustomers, addNotification, currentUser 
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
-    const name = editCustomer.name?.trim();
-    const whatsapp = editCustomer.whatsapp?.trim();
-    if (!name) {
-      addNotification({ type: "error", title: "Name Required", message: "Enter the customer name." });
+    const prev = customers.find((c) => sameCustomerId(c.id, editCustomer.id));
+    const built = buildUpdatedCustomerRecord(editCustomer, editCustomer);
+    if (!built.ok) {
+      addNotification({ type: "error", title: "Invalid Customer", message: built.message });
       return;
     }
-    if (!whatsapp) {
-      addNotification({ type: "error", title: "WhatsApp Required", message: "Enter a WhatsApp number." });
+    if (isDuplicateCustomerName(customers, built.customer.name, built.customer.id)) {
+      addNotification({
+        type: "warning",
+        title: "Duplicate Name",
+        message: `Another customer is already named "${built.customer.name}".`,
+      });
       return;
     }
-    const updated = touchUpdatedAt({
-      ...editCustomer,
-      name,
-      phone: whatsapp,
-      whatsapp,
-      area: "",
-      postalCode: editCustomer.postalCode?.trim() || "",
-      address: editCustomer.address?.trim() || "",
-      notes: editCustomer.notes?.trim() || "",
-      fishTypes: editCustomer.fishTypes || [],
-      tier: calcCustomerTier(Number(editCustomer.totalSpent) || 0),
+    const updated = built.customer;
+    setCustomers((prev) => prev.map((c) => (sameCustomerId(c.id, updated.id) ? updated : c)));
+    const related = propagateCustomerProfileChange({
+      customerId: updated.id,
+      prevCustomer: prev,
+      nextCustomer: updated,
+      invoices,
+      deliveries,
+      customerKoiList,
     });
-    setCustomers((prev) => prev.map((c) => (String(c.id) === String(updated.id) ? updated : c)));
+    if (related.invoices && setInvoices) setInvoices(related.invoices);
+    if (related.deliveries && setDeliveries) setDeliveries(related.deliveries);
+    if (related.customerKoiList && setCustomerKoiList) setCustomerKoiList(related.customerKoiList);
     addNotification({ type: "success", title: "Customer Updated", message: `${updated.name} saved` });
     setEditCustomer(null);
     editAddressManual.current = false;
@@ -2528,7 +2533,9 @@ function CustomerModule({ customers, setCustomers, addNotification, currentUser 
         <h2 className="text-xl sm:text-2xl font-black text-white">Customers</h2>
         <p className="text-slate-400 text-sm">{customers.length} registered</p>
       </div>
-      <Fab onClick={() => { setForm(emptyForm()); addAddressManual.current = false; setShowAdd(true); }} label="Add Customer" hidden={showAdd || viewId != null || !!editCustomer || !!deleteCustomer} />
+      {canEdit && (
+        <Fab onClick={() => { setForm(emptyForm()); addAddressManual.current = false; setShowAdd(true); }} label="Add Customer" hidden={showAdd || viewId != null || !!editCustomer || !!deleteCustomer} />
+      )}
 
       <div className="flex flex-wrap gap-3">
         <div className="relative flex-1 min-w-[180px]">
@@ -2604,7 +2611,7 @@ function CustomerModule({ customers, setCustomers, addNotification, currentUser 
         <Textarea label="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="mt-4" rows={2} />
         <div className="modal-actions">
           <Btn variant="secondary" onClick={() => setShowAdd(false)}>Cancel</Btn>
-          <Btn onClick={addCustomer}><Plus size={14} />Add Customer</Btn>
+          <Btn onClick={addCustomer} disabled={!canEdit}><Plus size={14} />Add Customer</Btn>
         </div>
       </Modal>
 
@@ -2673,11 +2680,11 @@ function CustomerModule({ customers, setCustomers, addNotification, currentUser 
             <p className="text-slate-300 text-sm">
               Remove <strong className="text-white">{deleteCustomer.name}</strong> from your customer list? This cannot be undone.
             </p>
-            {(deleteCustomer.totalSpent || 0) > 0 && (
-              <p className="text-amber-300 text-xs bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
-                This customer has {formatSGD(deleteCustomer.totalSpent)} in recorded spending. Past invoices and deliveries may still reference them.
+            {getCustomerDeleteWarnings(deleteCustomer, { invoices, deliveries }).map((warning) => (
+              <p key={warning} className="text-amber-300 text-xs bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+                {warning} — past records may still reference this customer.
               </p>
-            )}
+            ))}
             <div className="modal-actions flex justify-end gap-2">
               <Btn variant="secondary" onClick={() => setDeleteCustomer(null)}>Cancel</Btn>
               <Btn variant="danger" onClick={confirmDeleteCustomer}><Trash2 size={14} />Delete</Btn>
@@ -6200,7 +6207,7 @@ export default function App() {
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} />);
       case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondData} addNotification={addNotification} currentUser={currentUser} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} />);
       case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} />);
-      case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} addNotification={addNotification} currentUser={currentUser} />);
+      case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} invoices={invoices} setInvoices={setInvoices} deliveries={deliveries} setDeliveries={setDeliveries} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpenses} addNotification={addNotification} currentUser={currentUser} />);
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} />);
       case "calendar": return guard("calendar", "Calendar", <CalendarModule events={events} setEvents={setEvents} addNotification={addNotification} currentUser={currentUser} />);
