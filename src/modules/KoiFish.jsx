@@ -4,7 +4,7 @@ import {
 } from 'lucide-react'
 import {
   KOI_VARIETIES, KOI_STATUS, KOI_DEATH_CAUSES, FARM_POND_NAMES, mergePondNames,
-  formatSGD, formatKoiSize, normalizeKoiSizeCm, genId, today, getInvoiceStatus,
+  formatSGD, formatKoiSize, genId, today, getInvoiceStatus,
 } from '../data/constants'
 import { Badge, Btn, Card, Input, Modal, PondNameInput, Select, Textarea } from '../components/ui'
 import Fab from '../components/Fab'
@@ -17,6 +17,10 @@ import * as db from '../lib/database'
 import { isSupabaseConfigured } from '../lib/supabase'
 import { readKoiImageFile } from '../lib/koiImage'
 import { formatKoiInvoiceLineName, findLinkedKoiInvoices } from '../lib/koiInvoice'
+import {
+  buildDeceasedKoiPatch, buildSoldKoiPatch, normalizeKoiSizeField,
+  sameKoiId, validateKoiFormFields, validateKoiSaleForm,
+} from '../lib/koiOps'
 import { isAppVisibleKoiFarm } from '../lib/retention'
 import { touchUpdatedAt } from '../lib/syncMeta'
 
@@ -27,10 +31,9 @@ const STATUS_STYLE = {
   deceased: { badge: 'bg-slate-500/20 text-slate-400', border: 'border-red-500/40' },
 }
 
-const KOI_STATUS_OPTIONS = [
+const KOI_EDIT_STATUS_OPTIONS = [
   { value: KOI_STATUS.AVAILABLE, label: 'Available' },
   { value: KOI_STATUS.SICK, label: 'Sick' },
-  { value: KOI_STATUS.SOLD, label: 'Sold' },
 ]
 
 const STOCK_STATUSES = [KOI_STATUS.AVAILABLE, KOI_STATUS.SICK]
@@ -40,14 +43,14 @@ const emptyKoiForm = () => ({
   pondName: 'A1', price: '', notes: '',
 })
 
-function PhotoPicker({ photo, onPick, label = 'Photo' }) {
+function PhotoPicker({ photo, onPick, onError, label = 'Photo' }) {
   const pick = async (file) => {
     if (!file) return
     try {
       const dataUrl = await readKoiImageFile(file)
       onPick(dataUrl)
     } catch (err) {
-      alert(err.message)
+      onError?.(err?.message || 'Could not process image.')
     }
   }
   return (
@@ -89,7 +92,7 @@ function KoiPhoto({ src, alt, className = '', recordId, field = 'photo', onRefre
 
 export default function KoiFish({
   koiList, setKoiList, customers, invoices = [], onKoiSold, onKoiRefund, onCreateInvoiceFromSale, addNotification,
-  canEdit = false, canRefund = false,
+  registeredPondNames = [], canEdit = false, canRefund = false,
 }) {
   const refreshKoiImage = useCallback(async ({ entity, id, field }) => {
     if (!isSupabaseConfigured) return
@@ -97,7 +100,7 @@ export default function KoiFish({
       const { url } = await db.refreshSignedImage({ entity, id, field })
       if (!url) return
       setKoiList((prev) => prev.map((k) => {
-        if (k.id !== id) return k
+        if (!sameKoiId(k.id, id)) return k
         if (field === 'death_photo') return { ...k, deathPhoto: url }
         return { ...k, photo: url }
       }))
@@ -127,8 +130,8 @@ export default function KoiFish({
   const [refundReason, setRefundReason] = useState('')
 
   const pondNames = useMemo(
-    () => mergePondNames(FARM_POND_NAMES, koiList.map((k) => k.pondName)),
-    [koiList],
+    () => mergePondNames(FARM_POND_NAMES, registeredPondNames, koiList.map((k) => k.pondName)),
+    [koiList, registeredPondNames],
   )
 
   const filteredList = koiList.filter((k) => {
@@ -181,38 +184,28 @@ export default function KoiFish({
     )
     : []
 
-  const parseOptionalSize = (value) => {
-    if (value == null || value === '') return null
-    const sizeCm = normalizeKoiSizeCm(value)
-    if (sizeCm == null) {
-      addNotification({ type: 'error', title: 'Invalid Size', message: 'Enter a valid size in cm, or leave blank.' })
-      return undefined
-    }
-    return sizeCm
+  const notifyImageError = (message) => {
+    addNotification({ type: 'error', title: 'Photo Upload Failed', message })
   }
 
   const addKoi = () => {
-    if (!form.variety || form.price === '') {
-      addNotification({ type: 'error', title: 'Missing Fields', message: 'Enter variety, price, and pond.' })
+    if (!canEdit) {
+      addNotification?.({ type: 'error', title: 'Permission Denied', message: 'You need the "Edit records" permission. Contact the farm owner.' })
       return
     }
-    const sizeCm = parseOptionalSize(form.size)
-    if (sizeCm === undefined) return
-    if (!form.pondName?.trim()) {
-      addNotification({ type: 'error', title: 'Pond Required', message: 'Select or enter a pond name.' })
+    const check = validateKoiFormFields(form)
+    if (!check.ok) {
+      addNotification({ type: 'error', title: 'Invalid Koi', message: check.message })
       return
     }
-    if (+form.price < 0) {
-      addNotification({ type: 'error', title: 'Invalid Price', message: 'Selling price cannot be negative.' })
-      return
-    }
+    const sizeCm = normalizeKoiSizeField(form.size)
     const koi = touchUpdatedAt({
       ...form,
       id: genId('KOI'),
       name: form.name?.trim() || '',
       pondName: form.pondName.trim(),
       size: sizeCm,
-      price: +form.price,
+      price: Number(form.price) || 0,
       dateAdded: today(),
       status: KOI_STATUS.AVAILABLE,
       soldTo: null, soldDate: null, soldPrice: null,
@@ -231,36 +224,43 @@ export default function KoiFish({
       addNotification?.({ type: 'error', title: 'Permission Denied', message: 'You need the "Edit records" permission. Contact the farm owner.' })
       return
     }
-    const sizeCm = parseOptionalSize(editKoi.size)
-    if (sizeCm === undefined) return
-    if (!editKoi.pondName?.trim()) {
-      addNotification({ type: 'error', title: 'Pond Required', message: 'Select or enter a pond name.' })
+    if (editKoi.status === KOI_STATUS.SOLD || editKoi.status === KOI_STATUS.DECEASED) {
+      addNotification({
+        type: 'error',
+        title: 'Cannot Edit',
+        message: 'Sold or deceased fish cannot be edited here. Use Refund or view the death record.',
+      })
       return
     }
-    let updated = {
+    const check = validateKoiFormFields(editKoi)
+    if (!check.ok) {
+      addNotification({ type: 'error', title: 'Invalid Koi', message: check.message })
+      return
+    }
+    const sizeCm = normalizeKoiSizeField(editKoi.size)
+    const updated = touchUpdatedAt({
       ...editKoi,
       name: editKoi.name?.trim() || '',
       pondName: editKoi.pondName.trim(),
       size: sizeCm,
-      price: +editKoi.price || 0,
-    }
-    if (updated.status !== KOI_STATUS.SOLD) {
-      updated = {
-        ...updated,
-        soldTo: null,
-        soldDate: null,
-        soldPrice: null,
-        sellDisposition: null,
-        keepPondName: null,
-      }
-    }
-    setKoiList((prev) => prev.map((k) => (k.id === editKoi.id ? touchUpdatedAt(updated) : k)))
+      price: Number(editKoi.price) || 0,
+      soldTo: null,
+      soldDate: null,
+      soldPrice: null,
+      sellDisposition: null,
+      keepPondName: null,
+    })
+    setKoiList((prev) => prev.map((k) => (sameKoiId(k.id, editKoi.id) ? updated : k)))
     addNotification({ type: 'success', title: 'Updated', message: `${editKoi.id} saved` })
     setEditKoi(null)
   }
 
   const setKoiStatus = (koi, status) => {
-    setKoiList((prev) => prev.map((k) => (k.id === koi.id ? touchUpdatedAt({ ...k, status }) : k)))
+    if (!canEdit) {
+      addNotification?.({ type: 'error', title: 'Permission Denied', message: 'You need the "Edit records" permission. Contact the farm owner.' })
+      return
+    }
+    setKoiList((prev) => prev.map((k) => (sameKoiId(k.id, koi.id) ? touchUpdatedAt({ ...k, status }) : k)))
     if (status === KOI_STATUS.SICK) {
       addNotification({ type: 'warning', title: 'Marked Sick', message: `${koi.name || koi.variety} moved to sick list — use Ship to quarantine if needed.` })
     } else if (status === KOI_STATUS.AVAILABLE) {
@@ -275,6 +275,10 @@ export default function KoiFish({
 
   const confirmShip = () => {
     if (!shipKoi) return
+    if (!canEdit) {
+      addNotification?.({ type: 'error', title: 'Permission Denied', message: 'You need the "Edit records" permission. Contact the farm owner.' })
+      return
+    }
     const to = shipToPond?.trim()
     if (!to) {
       addNotification({ type: 'error', title: 'Destination Required', message: 'Select the pond to move this fish to.' })
@@ -285,39 +289,48 @@ export default function KoiFish({
       return
     }
     const from = shipKoi.pondName
-    setKoiList((prev) => prev.map((k) => (k.id === shipKoi.id ? touchUpdatedAt({ ...k, pondName: to }) : k)))
+    setKoiList((prev) => prev.map((k) => (sameKoiId(k.id, shipKoi.id) ? touchUpdatedAt({ ...k, pondName: to }) : k)))
     addNotification({ type: 'success', title: 'Pond Transfer', message: `${shipKoi.name || shipKoi.variety} moved ${from} → ${to}` })
     setShipKoi(null)
     setShipToPond('')
   }
 
   const confirmSell = () => {
-    if (!sellKoi || !sellForm.customerId) {
-      addNotification({ type: 'error', title: 'Customer Required', message: 'Select a customer to complete the sale.' })
+    if (!canEdit) {
+      addNotification?.({ type: 'error', title: 'Permission Denied', message: 'You need the "Edit records" permission. Contact the farm owner.' })
       return
     }
+    if (!sellKoi) return
+    const currentKoi = koiList.find((k) => sameKoiId(k.id, sellKoi.id)) || sellKoi
     const customer = customers.find((c) => String(c.id) === String(sellForm.customerId))
     if (!customer) {
       addNotification({ type: 'error', title: 'Customer Not Found', message: 'Selected customer is no longer in the list.' })
       return
     }
-    if (sellForm.disposition === 'keep' && !sellForm.keepPondName?.trim()) {
-      addNotification({ type: 'error', title: 'Pond Required', message: 'Select which pond the koi will be kept in.' })
+    const saleCheck = validateKoiSaleForm({
+      customerId: sellForm.customerId,
+      disposition: sellForm.disposition,
+      keepPondName: sellForm.keepPondName,
+      soldPrice: sellForm.soldPrice,
+      soldDate: sellForm.soldDate,
+      koi: currentKoi,
+    })
+    if (!saleCheck.ok) {
+      addNotification({ type: 'error', title: 'Cannot Complete Sale', message: saleCheck.message })
       return
     }
-    const soldPrice = +sellForm.soldPrice || sellKoi.price
-    const soldDate = sellForm.soldDate || today()
+    const soldPrice = saleCheck.soldPrice
+    const soldDate = saleCheck.soldDate
     const keepPondName = sellForm.keepPondName?.trim() || ''
-    setKoiList((prev) => prev.map((k) => (k.id === sellKoi.id ? touchUpdatedAt({
-      ...k,
-      status: KOI_STATUS.SOLD,
-      soldTo: sellForm.customerId,
+    const soldPatch = buildSoldKoiPatch(currentKoi, {
+      customerId: customer.id,
       soldPrice,
       soldDate,
-      sellDisposition: sellForm.disposition,
-      keepPondName: sellForm.disposition === 'keep' ? keepPondName : null,
-    }) : k)))
-    onKoiSold?.(sellKoi, customer, soldPrice, soldDate, {
+      disposition: sellForm.disposition,
+      keepPondName,
+    })
+    setKoiList((prev) => prev.map((k) => (sameKoiId(k.id, currentKoi.id) ? soldPatch : k)))
+    onKoiSold?.(currentKoi, customer, soldPrice, soldDate, {
       disposition: sellForm.disposition,
       keepPondName,
     })
@@ -327,7 +340,7 @@ export default function KoiFish({
     addNotification({
       type: 'success',
       title: 'Koi Sold',
-      message: `${sellKoi.id} sold to ${customer?.name || 'customer'} for ${formatSGD(soldPrice)} (${dispositionNote})`,
+      message: `${currentKoi.id} sold to ${customer?.name || 'customer'} for ${formatSGD(soldPrice)} (${dispositionNote})`,
     })
     if (sellForm.createInvoice) {
       onCreateInvoiceFromSale?.({
@@ -335,17 +348,17 @@ export default function KoiFish({
         customerName: customer.name,
         manualCustomer: false,
         items: [{
-          name: formatKoiInvoiceLineName(sellKoi),
+          name: formatKoiInvoiceLineName(currentKoi),
           qty: 1,
           price: soldPrice,
           productId: '',
           manual: false,
-          koiId: sellKoi.id,
+          koiId: currentKoi.id,
           koiDisposition: sellForm.disposition,
           keepPondName: sellForm.disposition === 'keep' ? keepPondName : '',
           koiAlreadySold: true,
         }],
-        notes: `Koi sale — ${sellKoi.name || sellKoi.variety} (${sellKoi.id})`,
+        notes: `Koi sale — ${currentKoi.name || currentKoi.variety} (${currentKoi.id})`,
         due: soldDate,
         discountType: 'none',
         discountValue: '',
@@ -356,14 +369,27 @@ export default function KoiFish({
 
   const confirmDeath = () => {
     if (!deathKoi) return
-    setKoiList((prev) => prev.map((k) => (k.id === deathKoi.id ? touchUpdatedAt({
-      ...k,
-      status: KOI_STATUS.DECEASED,
-      deathDate: deathForm.deathDate,
-      deathCause: deathForm.deathCause,
-      deathPhoto: deathForm.deathPhoto,
-      notes: deathForm.notes || k.notes,
-    }) : k)))
+    if (!canEdit) {
+      addNotification?.({ type: 'error', title: 'Permission Denied', message: 'You need the "Edit records" permission. Contact the farm owner.' })
+      return
+    }
+    if (deathKoi.status === KOI_STATUS.SOLD) {
+      addNotification({
+        type: 'error',
+        title: 'Cannot Record Death',
+        message: 'This fish is marked sold. Refund the sale first if the fish died after purchase.',
+      })
+      return
+    }
+    if (!deathForm.deathDate?.trim()) {
+      addNotification({ type: 'error', title: 'Date Required', message: 'Choose the date of death.' })
+      return
+    }
+    setKoiList((prev) => prev.map((k) => (
+      sameKoiId(k.id, deathKoi.id)
+        ? buildDeceasedKoiPatch(k, deathForm)
+        : k
+    )))
     addNotification({ type: 'warning', title: 'Death Recorded', message: `${deathKoi.name || deathKoi.variety} recorded as deceased` })
     setDeathKoi(null)
     setDeathForm({ deathDate: today(), deathCause: KOI_DEATH_CAUSES[0], deathPhoto: null, notes: '' })
@@ -480,7 +506,7 @@ export default function KoiFish({
                   ) : (
                     canEdit && <Btn variant="ghost" size="sm" onClick={() => setEditKoi({ ...k })}><Edit2 size={12} />Edit</Btn>
                   )}
-                  {STOCK_STATUSES.includes(k.status) && (
+                  {canEdit && STOCK_STATUSES.includes(k.status) && (
                     <>
                       <Btn variant="secondary" size="sm" onClick={() => openShip(k)}><Truck size={12} />Ship</Btn>
                       <Btn variant="success" size="sm" onClick={() => {
@@ -525,11 +551,11 @@ export default function KoiFish({
 
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Koi" size="lg">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <PhotoPicker photo={form.photo} onPick={(p) => setForm((f) => ({ ...f, photo: p }))} className="sm:col-span-2" />
+          <PhotoPicker photo={form.photo} onPick={(p) => setForm((f) => ({ ...f, photo: p }))} onError={notifyImageError} className="sm:col-span-2" />
           <Input label="Fish name (optional)" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
           <Select label="Variety" value={form.variety} onChange={(e) => setForm((f) => ({ ...f, variety: e.target.value }))} options={KOI_VARIETIES.map((v) => ({ value: v, label: v }))} />
           <Input label="Size (cm, optional)" type="number" value={form.size} onChange={(e) => setForm((f) => ({ ...f, size: e.target.value }))} min="1" step="0.1" placeholder="e.g. 28" />
-          <PondNameInput value={form.pondName} onChange={(e) => setForm((f) => ({ ...f, pondName: e.target.value }))} required />
+          <PondNameInput value={form.pondName} onChange={(e) => setForm((f) => ({ ...f, pondName: e.target.value }))} extraNames={registeredPondNames} required />
           <Input label="Selling price (S$)" type="number" value={form.price} onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))} step="0.01" required />
           <Textarea label="Notes" value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} className="sm:col-span-2" />
         </div>
@@ -543,14 +569,14 @@ export default function KoiFish({
         {editKoi && (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <PhotoPicker photo={editKoi.photo} onPick={(p) => setEditKoi((k) => ({ ...k, photo: p }))} className="sm:col-span-2" />
+              <PhotoPicker photo={editKoi.photo} onPick={(p) => setEditKoi((k) => ({ ...k, photo: p }))} onError={notifyImageError} className="sm:col-span-2" />
               <Input label="Name (optional)" value={editKoi.name} onChange={(e) => setEditKoi((k) => ({ ...k, name: e.target.value }))} />
               <Select label="Variety" value={editKoi.variety} onChange={(e) => setEditKoi((k) => ({ ...k, variety: e.target.value }))}
                 options={KOI_VARIETIES.map((v) => ({ value: v, label: v }))} />
               <Input label="Size (cm, optional)" type="number" value={editKoi.size ?? ''} onChange={(e) => setEditKoi((k) => ({ ...k, size: e.target.value }))} min="1" step="0.1" />
               <Select label="Status" value={editKoi.status} onChange={(e) => setEditKoi((k) => ({ ...k, status: e.target.value }))}
-                options={KOI_STATUS_OPTIONS} />
-              <PondNameInput value={editKoi.pondName} onChange={(e) => setEditKoi((k) => ({ ...k, pondName: e.target.value }))} required />
+                options={KOI_EDIT_STATUS_OPTIONS} />
+              <PondNameInput value={editKoi.pondName} onChange={(e) => setEditKoi((k) => ({ ...k, pondName: e.target.value }))} extraNames={registeredPondNames} required />
               <Input label="Selling price" type="number" value={editKoi.price} onChange={(e) => setEditKoi((k) => ({ ...k, price: e.target.value }))} step="0.01" />
               <Textarea label="Notes" value={editKoi.notes} onChange={(e) => setEditKoi((k) => ({ ...k, notes: e.target.value }))} className="sm:col-span-2" />
             </div>
@@ -580,6 +606,7 @@ export default function KoiFish({
               label="Move to pond"
               value={shipToPond}
               onChange={(e) => setShipToPond(e.target.value)}
+              extraNames={registeredPondNames}
               required
             />
             <p className="text-slate-500 text-xs mt-2">Transfer fish between ponds — e.g. D1 → A1 or to quarantine.</p>
@@ -634,6 +661,7 @@ export default function KoiFish({
                 label="Keep in pond"
                 value={sellForm.keepPondName}
                 onChange={(e) => setSellForm((f) => ({ ...f, keepPondName: e.target.value }))}
+                extraNames={registeredPondNames}
                 className="mt-3"
                 required
               />
@@ -669,7 +697,7 @@ export default function KoiFish({
             <Input label="Date of death" type="date" value={deathForm.deathDate} onChange={(e) => setDeathForm((f) => ({ ...f, deathDate: e.target.value }))} required />
             <Select label="Cause" value={deathForm.deathCause} onChange={(e) => setDeathForm((f) => ({ ...f, deathCause: e.target.value }))}
               options={KOI_DEATH_CAUSES.map((c) => ({ value: c, label: c }))} />
-            <PhotoPicker photo={deathForm.deathPhoto} onPick={(p) => setDeathForm((f) => ({ ...f, deathPhoto: p }))} label="Death photo (optional)" />
+            <PhotoPicker photo={deathForm.deathPhoto} onPick={(p) => setDeathForm((f) => ({ ...f, deathPhoto: p }))} onError={notifyImageError} label="Death photo (optional)" />
             <Textarea label="Notes" value={deathForm.notes} onChange={(e) => setDeathForm((f) => ({ ...f, notes: e.target.value }))} />
             <div className="flex justify-end gap-2">
               <Btn variant="secondary" onClick={() => setDeathKoi(null)}>Cancel</Btn>

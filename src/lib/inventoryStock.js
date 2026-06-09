@@ -1,5 +1,6 @@
 import { today } from '../data/constants'
 import { isStockTracked } from './productCatalog'
+import { genStockLogId, sameProductId } from './inventoryOps'
 import { touchUpdatedAt } from './syncMeta'
 
 export function serializeInvoiceItem(it) {
@@ -51,12 +52,13 @@ function aggregateQtyByProduct(items) {
 export function validateStockForItems(products, items) {
   const qtyByProduct = aggregateQtyByProduct(items)
   for (const [productId, qty] of qtyByProduct) {
-    const p = products.find((x) => String(x.id) === productId)
+    const p = products.find((x) => sameProductId(x.id, productId))
     if (!p) return { ok: false, message: 'One or more invoice products are no longer in inventory.' }
     if (!isStockTracked(p)) continue
     if (qty <= 0) return { ok: false, message: `Invalid quantity for ${p.name}.` }
-    if (qty > p.stock) {
-      return { ok: false, message: `Not enough ${p.name} in stock (${p.stock} ${p.unit || 'unit'} available, need ${qty}).` }
+    const available = Number(p.stock) || 0
+    if (qty > available) {
+      return { ok: false, message: `Not enough ${p.name} in stock (${available} ${p.unit || 'unit'} available, need ${qty}).` }
     }
   }
   return { ok: true }
@@ -68,7 +70,8 @@ function adjustProductsStock(setProducts, items, deltaSign) {
     if (!isStockTracked(p)) return p
     const qty = qtyByProduct.get(String(p.id))
     if (!qty) return p
-    return touchUpdatedAt({ ...p, stock: Math.max(0, p.stock + deltaSign * qty) })
+    const stock = Number(p.stock) || 0
+    return touchUpdatedAt({ ...p, stock: Math.max(0, stock + deltaSign * qty) })
   }))
 }
 
@@ -79,14 +82,14 @@ function appendStockLog(setStockLog, entries) {
 function buildLogEntries(items, products, { invoiceId, by, restore }) {
   const qtyByProduct = aggregateQtyByProduct(items)
   return [...qtyByProduct.entries()]
-    .map(([productId, qty], i) => {
-      const p = products.find((x) => String(x.id) === productId)
+    .map(([productId, qty]) => {
+      const p = products.find((x) => sameProductId(x.id, productId))
       if (p && !isStockTracked(p)) return null
-      const line = (items || []).find((it) => String(it.productId) === productId)
-      const price = +line?.price || p?.price || 0
+      const line = (items || []).find((it) => sameProductId(normalizeInvoiceItemRef(it).productId, productId))
+      const price = +line?.price || Number(p?.price) || 0
       return touchUpdatedAt({
-        id: Date.now() + i,
-        productId,
+        id: genStockLogId(),
+        productId: p?.id ?? productId,
         productName: line?.name || p?.name || 'Product',
         type: restore ? 'restock' : 'sell',
         qty,

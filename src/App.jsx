@@ -9,12 +9,17 @@ import { loadProducts, saveProducts, loadStockLog, saveStockLog } from "./lib/fa
 import {
   clearLocalOnlyStorage, emptyPondData, resolveCloudKoiPayload, resolveCloudWhatsappGroups,
 } from "./lib/cloudData";
-import { deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem } from "./lib/inventoryStock";
+import { deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem, validateStockForItems } from "./lib/inventoryStock";
+import {
+  adjustProductStockInList, buildStockLogEntry, isProductOnActiveInvoice,
+  normalizeProductRecord, parseStockQty, sameProductId, validateProductFields,
+} from "./lib/inventoryOps";
 import { isStockTracked, priceListProducts, stockProducts } from "./lib/productCatalog";
 import {
   applyInvoiceKoiSales, restoreInvoiceKoiSales, availableKoiForInvoice,
   formatKoiInvoiceLineName, validateInvoiceKoiSales, findLinkedKoiInvoices, buildKoiRefundUpdate,
 } from "./lib/koiInvoice";
+import { sameKoiId } from "./lib/koiOps";
 import { PondNameInput } from "./components/ui";
 import BackupExportPanel from "./components/BackupExportPanel";
 import { backupBaseName, downloadFile, expensesToCsv, invoicesToCsv } from "./lib/backupExport";
@@ -22,6 +27,7 @@ import InvoiceDocument from "./components/InvoiceDocument";
 import InvoicePreviewFrame from "./components/InvoicePreviewFrame";
 import { downloadInvoicePdf } from "./lib/generateInvoicePdf";
 import { calcInvoiceAmounts, sortInvoices } from './lib/invoiceDesign';
+import { computeDashboardMetrics, dashboardInvoiceTotal } from './lib/dashboardMetrics';
 import { compressReceiptImage, expenseImageSrc } from "./lib/compressImage";
 import { enrichInvoiceCustomer, findCustomerWhatsApp, formatCustomerAddress, findCustomerRecord, openWhatsAppChat, resolveInvoiceCustomer, resolveInvoiceWhatsApp } from "./lib/invoiceWhatsApp";
 import { lookupSingaporePostalAddress } from "./lib/sgPostalLookup";
@@ -474,108 +480,62 @@ function LoginScreen({ onLogin, users, cloudMode }) {
   );
 }
 
-function monthStartStr() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+/** Apply paid-invoice total to a registered customer's totalSpent + tier (local-only path). */
+function applyCustomerPaidDelta(customers, customerId, paidTotal) {
+  if (customerId == null || customerId === "") return customers;
+  const delta = Number(paidTotal) || 0;
+  if (delta <= 0) return customers;
+  return customers.map((c) => {
+    if (String(c.id) !== String(customerId)) return c;
+    const totalSpent = (Number(c.totalSpent) || 0) + delta;
+    return touchUpdatedAt({ ...c, totalSpent, tier: calcCustomerTier(totalSpent) });
+  });
 }
 
 function Dashboard({ invoices, expenses, customers, products, events, deliveries, koiFishList, customerKoiList, currentUser, onNavigate }) {
-  const can = (perm) => hasPermission(currentUser, perm);
-  const go = (tab) => { if (can(tab)) onNavigate?.(tab); };
+  const can = useCallback((perm) => hasPermission(currentUser, perm), [currentUser]);
+  const go = useCallback((tab) => { if (hasPermission(currentUser, tab)) onNavigate?.(tab); }, [currentUser, onNavigate]);
 
-  const monthStart = monthStartStr();
-  const monthlyRevenue = invoices
-    .filter((i) => i.status === "paid" && (i.date || "") >= monthStart)
-    .reduce((s, i) => s + (Number(i.total) || 0), 0);
-  const openInvoices = invoices.filter((i) => {
-    const status = getInvoiceStatus(i);
-    return status === "pending" || status === "overdue";
+  const metrics = useMemo(
+    () => computeDashboardMetrics({
+      invoices,
+      expenses,
+      customers,
+      products,
+      events,
+      deliveries,
+      koiFishList,
+      customerKoiList,
+      can,
+    }),
+    [invoices, expenses, customers, products, events, deliveries, koiFishList, customerKoiList, can],
+  );
+
+  const {
+    kpiCards,
+    lowStock,
+    todayEvents,
+    scheduledDeliveries,
+    todayDeliveries,
+    recentInvoices,
+    recentCustomers,
+    koiAvailable,
+    koiSold,
+    koiInPond,
+    showKoiSummary,
+    showPendingAccounts,
+    pendingAccountsCount,
+    pendingAccountsTab,
+    pendingAccountsSubtitle,
+  } = metrics;
+
+  const displayDate = new Date().toLocaleDateString("en-SG", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "Asia/Singapore",
   });
-  const pendingRevenue = openInvoices.reduce((s, i) => s + (Number(i.total) || 0), 0);
-  const monthlyExpenses = expenses
-    .filter((e) => (e.date || "") >= monthStart && Number(e.amount) > 0)
-    .reduce((s, e) => s + (Number(e.amount) || 0), 0);
-  const canInvoices = can("invoices");
-  const canExpenses = can("expenses");
-  const canAccounting = can("accounting");
-  const unbookedExpenses = canExpenses ? expenses.filter((e) => !e.booked).length : 0;
-  const unbookedInvoices = canInvoices
-    ? invoices.filter((i) => !i.booked && getInvoiceStatus(i) !== "cancelled").length
-    : 0;
-  const pendingAccountsCount = unbookedExpenses + unbookedInvoices;
-  const pendingAccountsTab = unbookedExpenses > 0 && canExpenses
-    ? "expenses"
-    : unbookedInvoices > 0 && canInvoices
-      ? "invoices"
-      : null;
-  const lowStock = products.filter((p) => isStockTracked(p) && p.minStock > 0 && p.stock <= p.minStock);
-  const todayStr = today();
-  const todayEvents = events
-    .filter((e) => e.date === todayStr)
-    .sort((a, b) => `${a.time || ""}`.localeCompare(`${b.time || ""}`));
-  const scheduledDeliveries = deliveries.filter((d) => d.status === "scheduled").length;
-  const todayDeliveries = deliveries.filter((d) => d.schedule?.startsWith(todayStr)).length;
-  const recentInvoices = [...invoices]
-    .filter(isAppVisibleInvoice)
-    .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
-    .slice(0, 5);
-  const recentCustomers = [...customers].sort((a, b) => (Number(b.totalSpent) || 0) - (Number(a.totalSpent) || 0)).slice(0, 5);
-  const koiAvailable = koiFishList.filter((k) => k.status === KOI_STATUS.AVAILABLE).length;
-  const koiSold = koiFishList.filter((k) => k.status === KOI_STATUS.SOLD).length;
-  const koiInPond = customerKoiList.filter((r) => r.status === CUSTOMER_KOI_STATUS.IN_POND).length;
-  const showKoiSummary = can("koifish") || can("customerkoi");
-
-  const kpiCards = [
-    ...(canInvoices ? [{
-      label: "Revenue This Month",
-      value: formatSGD(monthlyRevenue),
-      subtitle: "Paid invoices",
-      tab: "invoices",
-    }] : []),
-    ...(canInvoices ? [{
-      label: "Outstanding Invoices",
-      value: String(openInvoices.length),
-      subtitle: formatSGD(pendingRevenue),
-      tab: "invoices",
-    }] : []),
-    ...(can("inventory") ? [{
-      label: "Low Stock Alerts",
-      value: String(lowStock.length),
-      subtitle: lowStock.length ? lowStock.slice(0, 2).map((p) => p.name).join(", ") : "All stocked",
-      tab: "inventory",
-    }] : []),
-    ...(can("deliveries") ? [{
-      label: "Deliveries Today",
-      value: String(todayDeliveries),
-      subtitle: `${scheduledDeliveries} scheduled`,
-      tab: "deliveries",
-    }] : []),
-    ...(can("koifish") ? [{
-      label: "Active Koi Fish",
-      value: String(koiAvailable),
-      subtitle: `${koiSold} sold`,
-      tab: "koifish",
-    }] : []),
-    ...(canExpenses ? [{
-      label: "Monthly Expenses",
-      value: monthlyExpenses > 0 ? formatSGD(monthlyExpenses) : `${expenses.filter((e) => (e.date || "") >= monthStart).length} receipts`,
-      subtitle: monthlyExpenses > 0 ? "Legacy amounts" : "Receipt count this month",
-      tab: "expenses",
-    }] : []),
-  ];
-
-  const stats = [
-    ...kpiCards.map((k) => ({ ...k, icon: DollarSign, color: "text-white", bg: "bg-slate-800 border-slate-700" })),
-    ...(canAccounting && (canExpenses || canInvoices) ? [{
-      label: "Pending Accounts",
-      value: String(pendingAccountsCount),
-      icon: BookCheck,
-      color: "text-cyan-400",
-      bg: "bg-cyan-500/10 border-cyan-500/20",
-      tab: pendingAccountsTab,
-      subtitle: "Not entered in accounts",
-    }] : []),
-  ];
 
   const sectionLink = (tab, label) => can(tab) ? (
     <button type="button" onClick={() => go(tab)} className="text-xs text-cyan-400 hover:text-cyan-300 font-semibold touch-manipulation">{label}</button>
@@ -586,9 +546,9 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
       <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-xl sm:text-2xl font-black text-white">Dashboard</h2>
-          <p className="text-slate-400 text-sm mt-0.5">Welcome back, {currentUser.displayName || currentUser.name}</p>
+          <p className="text-slate-400 text-sm mt-0.5">Welcome back, {currentUser?.displayName || currentUser?.name || "there"}</p>
         </div>
-        <p className="text-xs text-slate-500 shrink-0">{new Date().toLocaleDateString("en-SG", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</p>
+        <p className="text-xs text-slate-500 shrink-0">{displayDate}</p>
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
         {kpiCards.length === 0 ? (
@@ -608,15 +568,21 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
           </button>
         ))}
       </div>
-      {stats.filter((s) => s.label === "Pending Accounts").length > 0 && (
+      {showPendingAccounts && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {stats.filter((s) => s.label === "Pending Accounts").map((s) => (
-            <button key={s.label} type="button" onClick={() => s.tab && go(s.tab)} className={`text-left p-4 border rounded-xl transition-colors hover:brightness-110 touch-manipulation ${s.bg}`}>
-              <div className={`w-9 h-9 rounded-lg flex items-center justify-center mb-3 ${s.bg}`}><s.icon size={18} className={s.color} /></div>
-              <p className={`text-xl font-black ${s.color}`}>{s.value}</p>
-              <p className="text-slate-400 text-xs mt-1">{s.label}</p>
-            </button>
-          ))}
+          <button
+            type="button"
+            onClick={() => pendingAccountsTab && go(pendingAccountsTab)}
+            disabled={!pendingAccountsTab}
+            className={`text-left p-4 border rounded-xl transition-colors touch-manipulation bg-cyan-500/10 border-cyan-500/20 ${pendingAccountsTab ? "hover:brightness-110" : "opacity-70 cursor-default"}`}
+          >
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center mb-3 bg-cyan-500/10">
+              <BookCheck size={18} className="text-cyan-400" />
+            </div>
+            <p className="text-xl font-black text-cyan-400">{pendingAccountsCount}</p>
+            <p className="text-slate-400 text-xs mt-1">Pending Accounts</p>
+            <p className="text-cyan-400/80 text-[10px] mt-1 truncate">{pendingAccountsSubtitle}</p>
+          </button>
         </div>
       )}
       {showKoiSummary && (
@@ -670,7 +636,7 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
                     <p className="text-slate-500 text-xs font-mono">{inv.id} · {inv.date || "—"}</p>
                   </div>
                   <div className="text-right shrink-0 ml-3 space-y-1">
-                    <p className="text-emerald-400 font-bold">{formatSGD(inv.total)}</p>
+                    <p className="text-emerald-400 font-bold">{formatSGD(dashboardInvoiceTotal(inv))}</p>
                     <div className="flex flex-wrap justify-end gap-1">
                       <Badge className={statusColor[getInvoiceStatus(inv)]}>{getInvoiceStatus(inv)}</Badge>
                       <BookedBadge booked={inv.booked} bookedBy={inv.bookedBy} />
@@ -785,7 +751,7 @@ function Dashboard({ invoices, expenses, customers, products, events, deliveries
 // ─────────────────────────────────────────────
 const EMPTY_PRODUCT_FORM = { name: "", category: "Fish Food", sku: "", price: "", unit: "kg", stock: "", minStock: "", description: "", trackStock: true };
 
-function InventoryModule({ products, setProducts, stockLog, setStockLog, addNotification, currentUser }) {
+function InventoryModule({ products, setProducts, stockLog, setStockLog, invoices = [], addNotification, currentUser }) {
   const canEdit = canEditRecords(currentUser);
   const canDelete = canDeleteRecords(currentUser);
   const [tab, setTab] = useState("stock");
@@ -825,44 +791,30 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
   const productPage = usePagination(filtered, LIST_PAGE_SIZE, `${tab}-${search}-${catFilter}`);
   const stockLogPage = usePagination(visibleStockLog, LIST_PAGE_SIZE, String(showOlderStockLog));
 
-  const stockLogEntry = (product, type, extra = {}) => touchUpdatedAt({
-    id: Date.now(),
-    productId: product.id,
-    productName: product.name,
-    type,
-    date: today(),
-    by: currentUser?.name || "Staff",
-    ...extra,
-  });
-
   const addProduct = () => {
     if (!canEdit) {
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
     const catalogOnly = addCatalogOnly || form.trackStock === false;
-    if (!form.name?.trim() || form.price === "") {
-      addNotification({ type: "error", title: "Missing Fields", message: "Enter product name and price." });
+    const check = validateProductFields(form, { catalogOnly });
+    if (!check.ok) {
+      addNotification({ type: "error", title: "Invalid Product", message: check.message });
       return;
     }
-    if (!catalogOnly && form.stock === "") {
-      addNotification({ type: "error", title: "Missing Fields", message: "Enter opening stock for inventory items." });
-      return;
+    const normalized = normalizeProductRecord(form, { catalogOnly });
+    const p = touchUpdatedAt({ ...form, ...normalized, id: Date.now() });
+    setProducts((prev) => [...prev, p]);
+    if (!catalogOnly && p.stock > 0) {
+      setStockLog((prev) => [
+        buildStockLogEntry(p, "restock", {
+          qty: p.stock,
+          note: "Opening stock",
+          by: currentUser?.name || "Staff",
+        }),
+        ...prev,
+      ]);
     }
-    if (+form.price < 0 || (!catalogOnly && +form.stock < 0)) {
-      addNotification({ type: "error", title: "Invalid Values", message: "Price and stock cannot be negative." });
-      return;
-    }
-    const p = touchUpdatedAt({
-      ...form,
-      id: Date.now(),
-      name: form.name.trim(),
-      price: +form.price,
-      stock: catalogOnly ? 0 : +form.stock,
-      minStock: catalogOnly ? 0 : (+form.minStock || 0),
-      trackStock: !catalogOnly,
-    });
-    setProducts(prev => [...prev, p]);
     addNotification({
       type: "success",
       title: catalogOnly ? "Price List Item Added" : "Product Added",
@@ -886,31 +838,20 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
-    if (!editProduct?.name?.trim() || editProduct.price === "") {
-      addNotification({ type: "error", title: "Missing Fields", message: "Enter product name and price." });
-      return;
-    }
     const catalogOnly = editProduct.trackStock === false;
-    if (!catalogOnly && editProduct.stock === "") {
-      addNotification({ type: "error", title: "Missing Fields", message: "Enter stock level." });
+    const check = validateProductFields(editProduct, { catalogOnly });
+    if (!check.ok) {
+      addNotification({ type: "error", title: "Invalid Product", message: check.message });
       return;
     }
-    if (+editProduct.price < 0 || (!catalogOnly && +editProduct.stock < 0)) {
-      addNotification({ type: "error", title: "Invalid Values", message: "Price and stock cannot be negative." });
-      return;
-    }
-    const prevName = products.find((p) => p.id === editProduct.id)?.name;
-    const updated = touchUpdatedAt({
-      ...editProduct,
-      name: editProduct.name.trim(),
-      price: +editProduct.price,
-      stock: catalogOnly ? 0 : +editProduct.stock,
-      minStock: catalogOnly ? 0 : (+editProduct.minStock || 0),
-      trackStock: !catalogOnly,
-    });
-    setProducts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+    const prevName = products.find((p) => sameProductId(p.id, editProduct.id))?.name;
+    const normalized = normalizeProductRecord(editProduct, { catalogOnly });
+    const updated = touchUpdatedAt({ ...editProduct, ...normalized });
+    setProducts((prev) => prev.map((p) => (sameProductId(p.id, updated.id) ? updated : p)));
     if (prevName && prevName !== updated.name) {
-      setStockLog((prev) => prev.map((l) => (l.productId === updated.id ? { ...l, productName: updated.name } : l)));
+      setStockLog((prev) => prev.map((l) => (
+        sameProductId(l.productId, updated.id) ? { ...l, productName: updated.name } : l
+      )));
     }
     addNotification({ type: "success", title: "Product Updated", message: `${updated.name} saved` });
     setEditProduct(null);
@@ -922,7 +863,16 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       notifyPermissionDenied(addNotification, "delete");
       return;
     }
-    setProducts((prev) => prev.filter((p) => p.id !== deleteProduct.id));
+    if (isProductOnActiveInvoice(deleteProduct.id, invoices)) {
+      addNotification({
+        type: "error",
+        title: "Cannot Delete",
+        message: `${deleteProduct.name} is on an active invoice. Cancel or edit that invoice first.`,
+      });
+      setDeleteProduct(null);
+      return;
+    }
+    setProducts((prev) => prev.filter((p) => !sameProductId(p.id, deleteProduct.id)));
     markDeleted("products", deleteProduct.id);
     addNotification({ type: "info", title: "Product Deleted", message: `${deleteProduct.name} removed from inventory` });
     setDeleteProduct(null);
@@ -933,11 +883,36 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
-    if (useQty <= 0 || useQty > product.stock) return;
-    setProducts(prev => prev.map(p => p.id === product.id ? touchUpdatedAt({ ...p, stock: p.stock - useQty }) : p));
-    setStockLog((prev) => [stockLogEntry(product, "use", { qty: useQty, note: useNote }), ...prev]);
-    if (product.stock - useQty <= product.minStock) addNotification({ type: "warning", title: "Low Stock", message: `${product.name} stock is low (${product.stock - useQty} ${product.unit} remaining)` });
-    setShowUse(null); setUseQty(1); setUseNote("");
+    const qty = parseStockQty(useQty);
+    const available = Number(product.stock) || 0;
+    if (qty <= 0) {
+      addNotification({ type: "error", title: "Invalid Quantity", message: "Enter a quantity of at least 1." });
+      return;
+    }
+    if (qty > available) {
+      addNotification({
+        type: "error",
+        title: "Insufficient Stock",
+        message: `Only ${available} ${product.unit || "unit"} of ${product.name} available.`,
+      });
+      return;
+    }
+    setProducts((prev) => adjustProductStockInList(prev, product.id, -qty));
+    setStockLog((prev) => [
+      buildStockLogEntry(product, "use", { qty, note: useNote, by: currentUser?.name || "Staff" }),
+      ...prev,
+    ]);
+    const remaining = available - qty;
+    if (product.minStock > 0 && remaining <= product.minStock) {
+      addNotification({
+        type: "warning",
+        title: "Low Stock",
+        message: `${product.name} stock is low (${remaining} ${product.unit} remaining)`,
+      });
+    }
+    setShowUse(null);
+    setUseQty(1);
+    setUseNote("");
   };
 
   const sellStock = (product) => {
@@ -945,12 +920,43 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
-    if (sellQty <= 0 || sellQty > product.stock) return;
-    setProducts(prev => prev.map(p => p.id === product.id ? touchUpdatedAt({ ...p, stock: p.stock - sellQty }) : p));
-    const price = +sellPrice || product.price;
-    setStockLog((prev) => [stockLogEntry(product, "sell", { qty: sellQty, price, total: sellQty * price }), ...prev]);
-    addNotification({ type: "success", title: "Sale Recorded", message: `Sold ${sellQty}x ${product.name} for ${formatSGD(sellQty * price)}` });
-    setShowSell(null); setSellQty(1); setSellPrice("");
+    const qty = parseStockQty(sellQty);
+    const available = Number(product.stock) || 0;
+    if (qty <= 0) {
+      addNotification({ type: "error", title: "Invalid Quantity", message: "Enter a quantity of at least 1." });
+      return;
+    }
+    if (qty > available) {
+      addNotification({
+        type: "error",
+        title: "Insufficient Stock",
+        message: `Only ${available} ${product.unit || "unit"} of ${product.name} available.`,
+      });
+      return;
+    }
+    const price = parseStockQty(sellPrice) || Number(product.price) || 0;
+    if (price < 0) {
+      addNotification({ type: "error", title: "Invalid Price", message: "Selling price cannot be negative." });
+      return;
+    }
+    setProducts((prev) => adjustProductStockInList(prev, product.id, -qty));
+    setStockLog((prev) => [
+      buildStockLogEntry(product, "sell", {
+        qty,
+        price,
+        total: qty * price,
+        by: currentUser?.name || "Staff",
+      }),
+      ...prev,
+    ]);
+    addNotification({
+      type: "success",
+      title: "Sale Recorded",
+      message: `Sold ${qty}x ${product.name} for ${formatSGD(qty * price)}`,
+    });
+    setShowSell(null);
+    setSellQty(1);
+    setSellPrice("");
   };
 
   const restock = (product, qty) => {
@@ -958,9 +964,25 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
-    setProducts(prev => prev.map(p => p.id === product.id ? touchUpdatedAt({ ...p, stock: p.stock + qty }) : p));
-    setStockLog((prev) => [stockLogEntry(product, "restock", { qty, note: "Manual restock" }), ...prev]);
-    addNotification({ type: "info", title: "Restocked", message: `${product.name} restocked by ${qty} ${product.unit}` });
+    const amount = parseStockQty(qty);
+    if (amount <= 0) {
+      addNotification({ type: "error", title: "Invalid Quantity", message: "Enter a quantity of at least 1." });
+      return;
+    }
+    setProducts((prev) => adjustProductStockInList(prev, product.id, amount));
+    setStockLog((prev) => [
+      buildStockLogEntry(product, "restock", {
+        qty: amount,
+        note: "Manual restock",
+        by: currentUser?.name || "Staff",
+      }),
+      ...prev,
+    ]);
+    addNotification({
+      type: "info",
+      title: "Restocked",
+      message: `${product.name} restocked by ${amount} ${product.unit}`,
+    });
   };
 
   const totalStockValue = stockItems.reduce((s, p) => s + p.stock * p.price, 0);
@@ -1210,36 +1232,36 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       {/* Use Stock Modal */}
       <Modal open={!!showUse} onClose={() => setShowUse(null)} title={`Use: ${showUse?.name}`} size="sm">
         <p className="text-slate-400 text-sm mb-4">Available: <span className="text-white font-bold">{showUse?.stock} {showUse?.unit}</span></p>
-        <Input label="Quantity to Use" type="number" value={useQty} onChange={e => setUseQty(+e.target.value)} min="1" className="mb-3" />
+        <Input label="Quantity to Use" type="number" value={useQty} onChange={(e) => setUseQty(parseStockQty(e.target.value) || "")} min="1" className="mb-3" />
         <Textarea label="Note (optional)" value={useNote} onChange={e => setUseNote(e.target.value)} rows={2} className="mb-4" />
         <div className="flex justify-end gap-2">
           <Btn variant="secondary" onClick={() => setShowUse(null)}>Cancel</Btn>
-          <Btn onClick={() => confirmUseStock(showUse)} disabled={useQty <= 0 || useQty > (showUse?.stock || 0)}><Archive size={14} />Confirm Use</Btn>
+          <Btn onClick={() => confirmUseStock(showUse)} disabled={parseStockQty(useQty) <= 0 || parseStockQty(useQty) > (showUse?.stock || 0)}><Archive size={14} />Confirm Use</Btn>
         </div>
       </Modal>
 
       {/* Restock Modal */}
       <Modal open={!!showRestock} onClose={() => setShowRestock(null)} title={`Restock: ${showRestock?.name}`} size="sm">
         <p className="text-slate-400 text-sm mb-4">Current stock: <span className="text-white font-bold">{showRestock?.stock} {showRestock?.unit}</span></p>
-        <Input label="Quantity to Add" type="number" value={restockQty} onChange={e => setRestockQty(+e.target.value)} min="1" className="mb-4" />
+        <Input label="Quantity to Add" type="number" value={restockQty} onChange={(e) => setRestockQty(parseStockQty(e.target.value) || "")} min="1" className="mb-4" />
         <div className="flex justify-end gap-2">
           <Btn variant="secondary" onClick={() => setShowRestock(null)}>Cancel</Btn>
-          <Btn onClick={() => { if (restockQty > 0) { restock(showRestock, restockQty); setShowRestock(null); } }} disabled={restockQty <= 0}><Plus size={14} />Confirm Restock</Btn>
+          <Btn onClick={() => { const q = parseStockQty(restockQty); if (q > 0) { restock(showRestock, q); setShowRestock(null); } }} disabled={parseStockQty(restockQty) <= 0}><Plus size={14} />Confirm Restock</Btn>
         </div>
       </Modal>
 
       {/* Sell Stock Modal */}
       <Modal open={!!showSell} onClose={() => setShowSell(null)} title={`Sell: ${showSell?.name}`} size="sm">
         <p className="text-slate-400 text-sm mb-4">Available: <span className="text-white font-bold">{showSell?.stock} {showSell?.unit}</span></p>
-        <Input label="Quantity to Sell" type="number" value={sellQty} onChange={e => setSellQty(+e.target.value)} min="1" className="mb-3" />
+        <Input label="Quantity to Sell" type="number" value={sellQty} onChange={(e) => setSellQty(parseStockQty(e.target.value) || "")} min="1" className="mb-3" />
         <Input label="Selling Price (S$)" type="number" value={sellPrice} onChange={e => setSellPrice(e.target.value)} step="0.01" className="mb-1" />
         <p className="text-xs text-slate-500 mb-4">Default: {showSell ? formatSGD(showSell.price) : ""} per {showSell?.unit}</p>
         <div className="bg-slate-900/50 rounded-lg p-3 mb-4">
-          <p className="text-sm text-slate-400">Total: <span className="text-emerald-400 font-black text-lg">{formatSGD(sellQty * (+sellPrice || showSell?.price || 0))}</span></p>
+          <p className="text-sm text-slate-400">Total: <span className="text-emerald-400 font-black text-lg">{formatSGD(parseStockQty(sellQty) * (parseStockQty(sellPrice) || Number(showSell?.price) || 0))}</span></p>
         </div>
         <div className="flex justify-end gap-2">
           <Btn variant="secondary" onClick={() => setShowSell(null)}>Cancel</Btn>
-          <Btn variant="success" onClick={() => sellStock(showSell)} disabled={sellQty <= 0 || sellQty > (showSell?.stock || 0)}><ShoppingBag size={14} />Confirm Sale</Btn>
+          <Btn variant="success" onClick={() => sellStock(showSell)} disabled={parseStockQty(sellQty) <= 0 || parseStockQty(sellQty) > (showSell?.stock || 0)}><ShoppingBag size={14} />Confirm Sale</Btn>
         </div>
       </Modal>
     </div>
@@ -1290,6 +1312,9 @@ function InvoiceModule({
 
   useEffect(() => {
     if (!openDraft) return;
+    setForm(buildFormFromDraft(openDraft));
+    setShowNew(true);
+    setFormError("");
     onDraftApplied?.();
   }, [openDraft, onDraftApplied]);
 
@@ -1531,6 +1556,12 @@ function InvoiceModule({
       addNotification({ type: "error", title: "Fish Stock", message: koiValidate.message });
       return;
     }
+    const stockValidate = validateStockForItems(products, invoiceItems);
+    if (!stockValidate.ok) {
+      setFormError(stockValidate.message);
+      addNotification({ type: "error", title: "Insufficient Stock", message: stockValidate.message });
+      return;
+    }
     const stockCheck = deductStockForInvoice(setProducts, setStockLog, products, invoiceItems, {
       invoiceId: invId,
       by: currentUser?.name || "Staff",
@@ -1660,7 +1691,7 @@ function InvoiceModule({
     const invId = String(id);
     const inv = invoices.find((i) => String(i.id) === invId);
     if (!inv) return;
-    if (inv.status === "paid") return;
+    if (getInvoiceStatus(inv) === "paid") return;
     if (!canMarkPaid(inv)) {
       addNotification({ type: "warning", title: "Cannot Mark Paid", message: `${invId} is ${getInvoiceStatus(inv)}.` });
       return;
@@ -5522,19 +5553,14 @@ export default function App() {
     );
     syncStateRef.current = { ...syncStateRef.current, invoices: nextInvoices };
 
-    if (inv.customerId != null && inv.customerId !== "") {
-      setCustomers((prev) => prev.map((c) => {
-        if (String(c.id) !== String(inv.customerId)) return c;
-        const totalSpent = (Number(c.totalSpent) || 0) + paidTotal;
-        return touchUpdatedAt({ ...c, totalSpent, tier: calcCustomerTier(totalSpent) });
-      }));
+    if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) {
+      setCustomers((prev) => applyCustomerPaidDelta(prev, inv.customerId, paidTotal));
+      return;
     }
-
-    if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
 
     syncInFlightRef.current += 1;
     try {
-      const confirmed = await db.markInvoicePaidCloud(invId);
+      const { invoice: confirmed, customer: confirmedCustomer } = await db.markInvoicePaidCloud(invId);
       unpinInvoice(invId);
       const confirmedRow = touchUpdatedAt(db.sanitizeInvoiceForSync(confirmed));
       const finalInvoices = sortInvoices(
@@ -5542,10 +5568,18 @@ export default function App() {
       );
       syncStateRef.current = { ...syncStateRef.current, invoices: finalInvoices };
       setInvoices(finalInvoices);
+      if (confirmedCustomer) {
+        setCustomers((prev) => prev.map((c) => (
+          String(c.id) === String(confirmedCustomer.id) ? confirmedCustomer : c
+        )));
+      } else if (inv.customerId != null && inv.customerId !== "") {
+        setCustomers((prev) => applyCustomerPaidDelta(prev, inv.customerId, paidTotal));
+      }
       setCloudSync(true);
       setCloudError(null);
       touchLastSync();
     } catch (err) {
+      unpinInvoice(invId);
       handleSyncFailure(err);
       throw err;
     } finally {
@@ -5912,7 +5946,7 @@ export default function App() {
     if (!customer || options.disposition !== "keep") return;
     const keepPondName = options.keepPondName?.trim() || "";
     const existing = customerKoiList.find(
-      (r) => r.koiId === koi.id && r.status !== CUSTOMER_KOI_STATUS.DECEASED,
+      (r) => sameKoiId(r.koiId, koi.id) && r.status !== CUSTOMER_KOI_STATUS.DECEASED,
     );
     if (existing) {
       addNotification({
@@ -5964,7 +5998,7 @@ export default function App() {
       removed.forEach((r) => markDeleted("customer_koi", r.id));
       return prev.filter((r) => String(r.koiId) !== String(koi.id));
     });
-    setKoiFishList((prev) => prev.map((k) => (k.id === koi.id ? buildKoiRefundUpdate(k, reason) : k)));
+    setKoiFishList((prev) => prev.map((k) => (sameKoiId(k.id, koi.id) ? buildKoiRefundUpdate(k, reason) : k)));
     const linked = findLinkedKoiInvoices(invoices, koi.id).filter(
       (inv) => !["cancelled", "paid"].includes(getInvoiceStatus(inv)),
     );
@@ -6149,15 +6183,21 @@ export default function App() {
     onKoiSold: handleKoiSold,
     onKoiRefund: handleKoiRefund,
     onCreateInvoiceFromSale: handleCreateInvoiceFromKoiSale,
+    onMarkInvoicePaid: markInvoicePaidCloud,
   };
+
+  const registeredPondNames = useMemo(
+    () => (pondData.ponds || []).map((p) => p.name).filter(Boolean),
+    [pondData.ponds],
+  );
 
   const renderModule = () => {
     const props = { customers, invoices, expenses, products, deliveries, events, koiFishList, customerKoiList, currentUser, addNotification, onNavigate: goToTab };
     switch (effectiveTab) {
       case "dashboard": return guard("dashboard", "Dashboard", <Dashboard {...props} />);
-      case "inventory": return guard("inventory", "Inventory", <InventoryModule products={products} setProducts={setProducts} stockLog={stockLog} setStockLog={setStockLog} addNotification={addNotification} currentUser={currentUser} />);
-      case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
-      case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} addNotification={addNotification} canEdit={canEditRecords(currentUser)} />);
+      case "inventory": return guard("inventory", "Inventory", <InventoryModule products={products} setProducts={setProducts} stockLog={stockLog} setStockLog={setStockLog} invoices={invoices} addNotification={addNotification} currentUser={currentUser} />);
+      case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
+      case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} />);
       case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondData} addNotification={addNotification} currentUser={currentUser} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} />);
       case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} />);
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} addNotification={addNotification} currentUser={currentUser} />);

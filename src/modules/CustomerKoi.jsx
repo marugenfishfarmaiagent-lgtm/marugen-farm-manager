@@ -2,8 +2,13 @@ import { useCallback, useMemo, useState } from 'react'
 import { Fish, Search, Home, Edit2, Eye, Skull, MessageSquare, PackageCheck, X } from 'lucide-react'
 import {
   KOI_VARIETIES, CUSTOMER_KOI_DEATH_CAUSES, CUSTOMER_KOI_STATUS, CUSTOMER_KOI_STATUS_OPTIONS,
-  formatCustomerKoiStatus, formatSGD, formatKoiSize, normalizeKoiSizeCm, genId, today,
+  formatCustomerKoiStatus, formatSGD, formatKoiSize, genId, today,
 } from '../data/constants'
+import {
+  buildCollectedCustomerKoiPatch, buildCustomerKoiDeathPatch, findActiveCustomerKoiByKoiId,
+  normalizeCustomerKoiSizeField, sameRecordId, validateCustomerKoiFields, validateKoiLinkForCustomer,
+} from '../lib/customerKoiOps'
+import { sameKoiId } from '../lib/koiOps'
 import { Badge, Btn, Card, Input, Modal, PondNameInput, Select, Textarea } from '../components/ui'
 import Fab from '../components/Fab'
 import { readKoiImageFile } from '../lib/koiImage'
@@ -39,10 +44,14 @@ const emptyRecord = () => ({
   status: CUSTOMER_KOI_STATUS.IN_POND, collectedDate: null,
 })
 
-function PhotoPicker({ photo, onPick, label = 'Photo' }) {
+function PhotoPicker({ photo, onPick, onError, label = 'Photo' }) {
   const pick = async (file) => {
     if (!file) return
-    try { onPick(await readKoiImageFile(file)) } catch (err) { alert(err.message) }
+    try {
+      onPick(await readKoiImageFile(file))
+    } catch (err) {
+      onError?.(err?.message || 'Could not process image.')
+    }
   }
   return (
     <div>
@@ -63,7 +72,7 @@ function KoiCodeSearch({ linkedId, farmKoiList, customers, onLink, onClear, clas
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
 
-  const linked = farmKoiList.find((k) => k.id === linkedId)
+  const linked = farmKoiList.find((k) => sameKoiId(k.id, linkedId))
   const linkedCustomer = linked?.soldTo
     ? customers.find((c) => String(c.id) === String(linked.soldTo))
     : null
@@ -157,14 +166,14 @@ function statusDetail(rec) {
   return formatCustomerKoiStatus(rec.status)
 }
 
-export default function CustomerKoi({ records, setRecords, customers, farmKoiList, addNotification, canEdit = false }) {
+export default function CustomerKoi({ records, setRecords, customers, farmKoiList, registeredPondNames = [], addNotification, canEdit = false }) {
   const refreshCustomerKoiImage = useCallback(async ({ entity, id, field }) => {
     if (!isSupabaseConfigured) return
     try {
       const { url } = await db.refreshSignedImage({ entity, id, field })
       if (!url) return
       setRecords((prev) => prev.map((r) => {
-        if (r.id !== id) return r
+        if (!sameRecordId(r.id, id)) return r
         if (field === 'death_photo') return { ...r, deathPhoto: url }
         return { ...r, photo: url }
       }))
@@ -177,6 +186,9 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
     title: 'Permission Denied',
     message: 'You need the "Edit records" permission. Contact the farm owner.',
   })
+  const notifyImageError = (message) => {
+    addNotification({ type: 'error', title: 'Photo Upload Failed', message })
+  }
   const [selectedCustomerId, setSelectedCustomerId] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
   const [search, setSearch] = useState('')
@@ -214,45 +226,35 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
   const selectedCustomer = customers.find((c) => String(c.id) === String(selectedCustomerId))
 
   const saveRecord = () => {
+    if (!canEdit) { denyEdit(); return }
     const customer = customers.find((c) => String(c.id) === String(form.customerId))
     if (!customer) {
       addNotification({ type: 'error', title: 'Customer Required', message: 'Select a customer.' })
       return
     }
-    const hasSize = form.size !== '' && form.size != null
-    const sizeCm = hasSize ? normalizeKoiSizeCm(form.size) : null
-    if (hasSize && sizeCm == null) {
-      addNotification({ type: 'error', title: 'Invalid Size', message: 'Enter a valid size in cm, or leave blank.' })
+    const check = validateCustomerKoiFields(form)
+    if (!check.ok) {
+      addNotification({ type: 'error', title: 'Invalid Record', message: check.message })
       return
     }
-    if (form.status === CUSTOMER_KOI_STATUS.IN_POND && !form.pondName?.trim()) {
-      addNotification({ type: 'error', title: 'Pond Required', message: 'Enter which pond the koi is in.' })
+    const linkCheck = validateKoiLinkForCustomer({
+      koiId: form.koiId,
+      customerId: form.customerId,
+      farmKoiList,
+      records,
+    })
+    if (!linkCheck.ok) {
+      addNotification({ type: 'error', title: 'Koi Link Invalid', message: linkCheck.message })
       return
     }
-    if (+form.purchasePrice < 0) {
-      addNotification({ type: 'error', title: 'Invalid Price', message: 'Sale price cannot be negative.' })
-      return
-    }
-    if (form.koiId) {
-      const duplicate = records.find(
-        (r) => r.koiId === form.koiId && r.status !== CUSTOMER_KOI_STATUS.DECEASED,
-      )
-      if (duplicate) {
-        addNotification({
-          type: 'warning',
-          title: 'Koi Already Linked',
-          message: `${form.koiId} is already tracked for ${duplicate.customerName}.`,
-        })
-        return
-      }
-    }
+    const sizeCm = normalizeCustomerKoiSizeField(form.size)
     const rec = touchUpdatedAt({
       ...form,
       id: genId('CKOI'),
       customerName: customer.name,
       fishName: form.fishName?.trim() || '',
       size: sizeCm,
-      purchasePrice: +form.purchasePrice || 0,
+      purchasePrice: check.purchasePrice,
       pondName: form.status === CUSTOMER_KOI_STATUS.IN_POND ? form.pondName.trim() : form.pondName?.trim() || '',
       collectedDate: form.status === CUSTOMER_KOI_STATUS.COLLECTED ? (form.collectedDate || today()) : null,
       deathDate: null, deathCause: null, deathPhoto: null, deathNotes: '',
@@ -266,25 +268,30 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
   const saveEdit = () => {
     if (!editRec) return
     if (!canEdit) { denyEdit(); return }
-    const hasSize = editRec.size !== '' && editRec.size != null
-    const sizeCm = hasSize ? normalizeKoiSizeCm(editRec.size) : null
-    if (hasSize && sizeCm == null) {
-      addNotification({ type: 'error', title: 'Invalid Size', message: 'Enter a valid size in cm, or leave blank.' })
+    const check = validateCustomerKoiFields(editRec, { requireCustomer: false })
+    if (!check.ok) {
+      addNotification({ type: 'error', title: 'Invalid Record', message: check.message })
       return
     }
-    if (editRec.status === CUSTOMER_KOI_STATUS.IN_POND && !editRec.pondName?.trim()) {
-      addNotification({ type: 'error', title: 'Pond Required', message: 'Enter which pond the koi is in.' })
-      return
+    if (editRec.koiId) {
+      const linkCheck = validateKoiLinkForCustomer({
+        koiId: editRec.koiId,
+        customerId: editRec.customerId,
+        farmKoiList,
+        records,
+        excludeRecordId: editRec.id,
+      })
+      if (!linkCheck.ok) {
+        addNotification({ type: 'error', title: 'Koi Link Invalid', message: linkCheck.message })
+        return
+      }
     }
-    if (+editRec.purchasePrice < 0) {
-      addNotification({ type: 'error', title: 'Invalid Price', message: 'Sale price cannot be negative.' })
-      return
-    }
+    const sizeCm = normalizeCustomerKoiSizeField(editRec.size)
     let updated = {
       ...editRec,
       fishName: editRec.fishName?.trim() || '',
       size: sizeCm,
-      purchasePrice: +editRec.purchasePrice || 0,
+      purchasePrice: check.purchasePrice,
       pondName: editRec.pondName?.trim() || '',
       collectedDate: editRec.status === CUSTOMER_KOI_STATUS.COLLECTED
         ? (editRec.collectedDate || today())
@@ -299,10 +306,10 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
         deathNotes: '',
       }
     }
-    if (updated.status === CUSTOMER_KOI_STATUS.COLLECTED && !updated.collectedDate) {
-      updated.collectedDate = today()
+    if (updated.status === CUSTOMER_KOI_STATUS.IN_POND) {
+      updated.collectedDate = null
     }
-    setRecords((prev) => prev.map((r) => (r.id === editRec.id ? touchUpdatedAt(updated) : r)))
+    setRecords((prev) => prev.map((r) => (sameRecordId(r.id, editRec.id) ? touchUpdatedAt(updated) : r)))
     addNotification({ type: 'success', title: 'Updated', message: `${displayFishName(updated)} — ${formatCustomerKoiStatus(updated.status)}` })
     setEditRec(null)
   }
@@ -310,11 +317,23 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
   const confirmCollect = () => {
     if (!collectRec) return
     if (!canEdit) { denyEdit(); return }
-    setRecords((prev) => prev.map((r) => (r.id === collectRec.id ? touchUpdatedAt({
-      ...r,
-      status: CUSTOMER_KOI_STATUS.COLLECTED,
-      collectedDate: collectDate || today(),
-    }) : r)))
+    if (collectRec.status !== CUSTOMER_KOI_STATUS.IN_POND) {
+      addNotification({
+        type: 'error',
+        title: 'Cannot Mark Taken Away',
+        message: 'Only fish currently in pond can be marked as taken away.',
+      })
+      return
+    }
+    if (!collectDate?.trim()) {
+      addNotification({ type: 'error', title: 'Date Required', message: 'Choose the taken away date.' })
+      return
+    }
+    setRecords((prev) => prev.map((r) => (
+      sameRecordId(r.id, collectRec.id)
+        ? buildCollectedCustomerKoiPatch(r, collectDate)
+        : r
+    )))
     addNotification({ type: 'success', title: 'Marked Taken Away', message: `${displayFishName(collectRec)} — customer collected on ${collectDate}` })
     setCollectRec(null)
   }
@@ -322,19 +341,25 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
   const confirmDeath = () => {
     if (!deathRec) return
     if (!canEdit) { denyEdit(); return }
-    setRecords((prev) => prev.map((r) => (r.id === deathRec.id ? touchUpdatedAt({
-      ...r,
-      status: CUSTOMER_KOI_STATUS.DECEASED,
-      ...deathForm,
-    }) : r)))
+    if (deathRec.status === CUSTOMER_KOI_STATUS.DECEASED) {
+      addNotification({ type: 'error', title: 'Already Deceased', message: 'This fish is already recorded as deceased.' })
+      return
+    }
+    if (!deathForm.deathDate?.trim()) {
+      addNotification({ type: 'error', title: 'Date Required', message: 'Choose the date of death.' })
+      return
+    }
+    setRecords((prev) => prev.map((r) => (
+      sameRecordId(r.id, deathRec.id)
+        ? buildCustomerKoiDeathPatch(r, deathForm)
+        : r
+    )))
     addNotification({ type: 'warning', title: 'Death Recorded', message: `${displayFishName(deathRec)} (${deathRec.customerName}) recorded deceased` })
     setDeathRec(null)
   }
 
   const linkFarmKoi = (koi) => {
-    const duplicate = records.find(
-      (r) => r.koiId === koi.id && r.status !== CUSTOMER_KOI_STATUS.DECEASED,
-    )
+    const duplicate = findActiveCustomerKoiByKoiId(records, koi.id)
     if (duplicate) {
       addNotification({
         type: 'warning',
@@ -346,7 +371,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
     const buyer = koi.soldTo
       ? customers.find((c) => String(c.id) === String(koi.soldTo))
       : null
-    const existingRec = records.find((r) => r.koiId === koi.id)
+    const existingRec = records.find((r) => sameKoiId(r.koiId, koi.id))
     const customerFromRecord = existingRec
       ? customers.find((c) => String(c.id) === String(existingRec.customerId))
       : null
@@ -415,7 +440,9 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
         <h2 className="text-xl sm:text-2xl font-black text-white">Customer Koi</h2>
         <p className="text-slate-400 text-sm">Sold koi — track pond, taken away, or deceased</p>
       </div>
-      <Fab onClick={openAdd} label="Add Koi Record" hidden={showAdd || !!editRec || !!viewRec || !!deathRec || !!collectRec} />
+      {canEdit && (
+        <Fab onClick={openAdd} label="Add Koi Record" hidden={showAdd || !!editRec || !!viewRec || !!deathRec || !!collectRec} />
+      )}
 
       <div className="flex flex-col lg:flex-row gap-4 min-h-[480px]">
         <Card className="lg:w-64 shrink-0 p-3 space-y-2 lg:sticky lg:top-4 lg:self-start max-h-[70vh] overflow-y-auto">
@@ -550,14 +577,14 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
             <Select label="Customer" value={form.customerId} onChange={(e) => setForm((f) => ({ ...f, customerId: e.target.value }))} required className="sm:col-span-2"
               options={[{ value: '', label: '-- Select --' }, ...customers.map((c) => ({ value: String(c.id), label: c.name }))]} />
           )}
-          <PhotoPicker photo={form.photo} onPick={(p) => setForm((f) => ({ ...f, photo: p }))} />
+          <PhotoPicker photo={form.photo} onPick={(p) => setForm((f) => ({ ...f, photo: p }))} onError={notifyImageError} />
           <Input label="Fish name (optional)" value={form.fishName} onChange={(e) => setForm((f) => ({ ...f, fishName: e.target.value }))} placeholder="Leave blank to use variety" />
           <Select label="Variety" value={form.variety} onChange={(e) => setForm((f) => ({ ...f, variety: e.target.value }))} options={KOI_VARIETIES.map((v) => ({ value: v, label: v }))} required />
           <Input label="Size (cm, optional)" type="number" value={form.size} onChange={(e) => setForm((f) => ({ ...f, size: e.target.value }))} min="1" step="0.1" placeholder="e.g. 35" />
           <Select label="Status" value={form.status} onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}
             options={CUSTOMER_KOI_STATUS_OPTIONS.filter((o) => o.value !== CUSTOMER_KOI_STATUS.DECEASED)} />
           {form.status === CUSTOMER_KOI_STATUS.IN_POND && (
-            <PondNameInput value={form.pondName} onChange={(e) => setForm((f) => ({ ...f, pondName: e.target.value }))} required className="sm:col-span-2" placeholder="e.g. A3 or customer pond" />
+            <PondNameInput value={form.pondName} onChange={(e) => setForm((f) => ({ ...f, pondName: e.target.value }))} extraNames={registeredPondNames} required className="sm:col-span-2" placeholder="e.g. A3 or customer pond" />
           )}
           {form.status === CUSTOMER_KOI_STATUS.COLLECTED && (
             <Input label="Taken away date" type="date" value={form.collectedDate || today()} onChange={(e) => setForm((f) => ({ ...f, collectedDate: e.target.value }))} className="sm:col-span-2" />
@@ -576,14 +603,14 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
         </div>
         <div className="modal-actions mt-4 flex justify-end gap-2">
           <Btn variant="secondary" onClick={() => setShowAdd(false)}>Cancel</Btn>
-          <Btn onClick={saveRecord} disabled={customers.length === 0}>Save</Btn>
+          <Btn onClick={saveRecord} disabled={customers.length === 0 || !canEdit}>Save</Btn>
         </div>
       </Modal>
 
       <Modal open={!!editRec} onClose={() => setEditRec(null)} title="Edit Record" size="md">
         {editRec && (
           <>
-            <PhotoPicker photo={editRec.photo} onPick={(p) => setEditRec((r) => ({ ...r, photo: p }))} />
+            <PhotoPicker photo={editRec.photo} onPick={(p) => setEditRec((r) => ({ ...r, photo: p }))} onError={notifyImageError} />
             <Input label="Fish name (optional)" value={editRec.fishName} onChange={(e) => setEditRec((r) => ({ ...r, fishName: e.target.value }))} className="mt-3" placeholder="Leave blank to use variety" />
             <Select label="Variety" value={editRec.variety} onChange={(e) => setEditRec((r) => ({ ...r, variety: e.target.value }))} className="mt-3"
               options={KOI_VARIETIES.map((v) => ({ value: v, label: v }))} />
@@ -598,7 +625,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
                 ? CUSTOMER_KOI_STATUS_OPTIONS
                 : CUSTOMER_KOI_STATUS_OPTIONS.filter((o) => o.value !== CUSTOMER_KOI_STATUS.DECEASED)} />
             {editRec.status === CUSTOMER_KOI_STATUS.IN_POND && (
-              <PondNameInput value={editRec.pondName} onChange={(e) => setEditRec((r) => ({ ...r, pondName: e.target.value }))} className="mt-3" required placeholder="e.g. A3 or customer pond" />
+              <PondNameInput value={editRec.pondName} onChange={(e) => setEditRec((r) => ({ ...r, pondName: e.target.value }))} extraNames={registeredPondNames} className="mt-3" required placeholder="e.g. A3 or customer pond" />
             )}
             {editRec.status === CUSTOMER_KOI_STATUS.COLLECTED && (
               <Input label="Taken away date" type="date" value={editRec.collectedDate || today()} onChange={(e) => setEditRec((r) => ({ ...r, collectedDate: e.target.value }))} className="mt-3" />
@@ -634,7 +661,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
             <Input label="Date of death" type="date" value={deathForm.deathDate} onChange={(e) => setDeathForm((f) => ({ ...f, deathDate: e.target.value }))} required />
             <Select label="Cause" value={deathForm.deathCause} onChange={(e) => setDeathForm((f) => ({ ...f, deathCause: e.target.value }))}
               options={CUSTOMER_KOI_DEATH_CAUSES.map((c) => ({ value: c, label: c }))} />
-            <PhotoPicker photo={deathForm.deathPhoto} onPick={(p) => setDeathForm((f) => ({ ...f, deathPhoto: p }))} label="Death photo" />
+            <PhotoPicker photo={deathForm.deathPhoto} onPick={(p) => setDeathForm((f) => ({ ...f, deathPhoto: p }))} onError={notifyImageError} label="Death photo" />
             <Textarea label="Death notes" value={deathForm.deathNotes} onChange={(e) => setDeathForm((f) => ({ ...f, deathNotes: e.target.value }))} />
             <div className="flex justify-end gap-2">
               <Btn variant="secondary" onClick={() => setDeathRec(null)}>Cancel</Btn>

@@ -1,4 +1,5 @@
 import { KOI_STATUS, formatKoiSize, today } from '../data/constants'
+import { buildSoldKoiPatch, canSellKoiStatus, sameKoiId } from './koiOps'
 import { touchUpdatedAt } from './syncMeta'
 import { markDeleted } from './syncDeletions'
 
@@ -27,9 +28,9 @@ export function validateInvoiceKoiSales({ items, koiList, customerId, customers 
   }
 
   for (const it of koiItems) {
-    const koi = koiList.find((k) => String(k.id) === String(it.koiId))
+    const koi = koiList.find((k) => sameKoiId(k.id, it.koiId))
     if (!koi) return { ok: false, message: `Koi ${it.koiId} is no longer in stock.` }
-    if (![KOI_STATUS.AVAILABLE, KOI_STATUS.SICK].includes(koi.status)) {
+    if (!canSellKoiStatus(koi.status)) {
       return { ok: false, message: `${koi.id} is not available (${koi.status}).` }
     }
     if ((it.koiDisposition || 'taken') === 'keep' && !(it.keepPondName?.trim())) {
@@ -57,23 +58,20 @@ export function applyInvoiceKoiSales({
   )
 
   setKoiList((prev) => prev.map((k) => {
-    const it = koiItems.find((i) => String(i.koiId) === String(k.id))
+    const it = koiItems.find((i) => sameKoiId(i.koiId, k.id))
     if (!it || it.koiAlreadySold || !soldIds.has(String(k.id))) return k
-    const soldPrice = +it.price || k.price
     const disposition = it.koiDisposition || 'taken'
-    return touchUpdatedAt({
-      ...k,
-      status: KOI_STATUS.SOLD,
-      soldTo: customerId,
-      soldPrice,
+    return buildSoldKoiPatch(k, {
+      customerId,
+      soldPrice: Number(it.price) || k.price,
       soldDate,
-      sellDisposition: disposition,
-      keepPondName: disposition === 'keep' ? (it.keepPondName?.trim() || k.pondName) : null,
+      disposition,
+      keepPondName: it.keepPondName,
     })
   }))
 
   koiItems.filter((it) => !it.koiAlreadySold).forEach((it) => {
-    const koi = koiList.find((k) => String(k.id) === String(it.koiId))
+    const koi = koiList.find((k) => sameKoiId(k.id, it.koiId))
     if (!koi) return
     if ((it.koiDisposition || 'taken') === 'keep') {
       onKoiSold?.(koi, customer, +it.price || koi.price, soldDate, {
@@ -115,16 +113,16 @@ export function restoreInvoiceKoiSales(items, setKoiList, setCustomerKoiList) {
   }))
   if (setCustomerKoiList) {
     setCustomerKoiList((prev) => {
-      const removed = prev.filter((r) => ids.has(String(r.koiId)))
+      const removed = prev.filter((r) => koiItems.some((it) => sameKoiId(it.koiId, r.koiId)))
       removed.forEach((r) => markDeleted('customer_koi', r.id))
-      return prev.filter((r) => !ids.has(String(r.koiId)))
+      return prev.filter((r) => !koiItems.some((it) => sameKoiId(it.koiId, r.koiId)))
     })
   }
 }
 
 export function findLinkedKoiInvoices(invoices, koiId) {
   return (invoices || []).filter((inv) =>
-    (inv.items || []).some((it) => String(it.koiId) === String(koiId)),
+    (inv.items || []).some((it) => sameKoiId(it.koiId, koiId)),
   )
 }
 

@@ -3,6 +3,7 @@ import { Calculator, Droplets, Beaker } from 'lucide-react'
 import {
   POND_DIM_UNITS, calcPondVolume, calcSaltToAdd, formatVolumeNumber, tonsToLitres,
 } from '../lib/pondCalculator'
+import { samePondId } from '../lib/pondOps'
 import { Card, Input, Select } from '../components/ui'
 
 const emptyDims = () => ({ length: '', width: '', height: '', unit: 'm' })
@@ -26,7 +27,7 @@ export default function PondCalculator({ ponds = [] }) {
     [dims],
   )
 
-  const selectedPond = ponds.find((p) => p.id === pondId)
+  const selectedPond = ponds.find((p) => samePondId(p.id, pondId))
 
   const activeVolumeLitres = useMemo(() => {
     if (volumeSource === 'pond' && selectedPond?.volume) {
@@ -51,7 +52,7 @@ export default function PondCalculator({ ponds = [] }) {
 
   const onPondSelect = (id) => {
     setPondId(id)
-    const pond = ponds.find((p) => p.id === id)
+    const pond = ponds.find((p) => samePondId(p.id, id))
     if (pond) {
       if (pond.lastSalt != null && pond.lastSalt !== '') setCurrentSalt(String(pond.lastSalt))
       setVolumeSource('pond')

@@ -1,6 +1,6 @@
-import { useId } from 'react'
+import { useId, useMemo } from 'react'
 import { X } from 'lucide-react'
-import { FARM_POND_GROUPS, FARM_POND_NAMES } from '../data/constants'
+import { FARM_POND_GROUPS, FARM_POND_NAMES, mergePondNames } from '../data/constants'
 
 const fieldClass = 'w-full max-w-full min-w-0 box-border bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-3 sm:py-2.5 text-white text-base sm:text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 transition-all'
 
@@ -31,8 +31,9 @@ export function Modal({ open, onClose, title, children, size = 'md' }) {
   )
 }
 
-export function PondNameInput({ label = 'Pond name', value, onChange, className = '', required, placeholder = 'Select or type pond name' }) {
+export function PondNameInput({ label = 'Pond name', value, onChange, className = '', required, placeholder = 'Select or type pond name', extraNames = [] }) {
   const listId = useId()
+  const datalistNames = useMemo(() => mergePondNames(FARM_POND_NAMES, extraNames), [extraNames])
   const quickVal = FARM_POND_NAMES.includes(value) ? value : ''
 
   return (
@@ -65,7 +66,7 @@ export function PondNameInput({ label = 'Pond name', value, onChange, className 
           className={`flex-1 min-w-0 ${fieldClass}`}
         />
         <datalist id={listId}>
-          {FARM_POND_NAMES.map((n) => <option key={n} value={n} />)}
+          {datalistNames.map((n) => <option key={n} value={n} />)}
         </datalist>
       </div>
     </div>

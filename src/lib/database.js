@@ -402,7 +402,10 @@ export async function syncInvoices(invoices, options) {
 export async function markInvoicePaidCloud(id) {
   if (!isSupabaseConfigured) throw new Error('Cloud sync is not configured')
   const data = await apiCall({ action: 'mark_invoice_paid', id: String(id) })
-  return mapInvoice(data.invoice)
+  return {
+    invoice: mapInvoice(data.invoice),
+    customer: data.customer ? mapCustomer(data.customer) : null,
+  }
 }
 
 /** Atomically cancel one invoice on the server (avoids full-list sync timestamp races). */

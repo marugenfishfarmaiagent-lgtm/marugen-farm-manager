@@ -275,8 +275,16 @@ export const INITIAL_POND_DATA = {
   treatmentGuides: [],
 }
 
+/** Farm operates in Singapore — all date filters use this timezone (not UTC). */
+const APP_TIMEZONE = 'Asia/Singapore'
+
 export function today() {
-  return new Date().toISOString().split('T')[0]
+  return new Date().toLocaleDateString('en-CA', { timeZone: APP_TIMEZONE })
+}
+
+/** First calendar day of the current month in APP_TIMEZONE (YYYY-MM-01). */
+export function monthStart() {
+  return `${today().slice(0, 7)}-01`
 }
 
 export function genId(prefix) {

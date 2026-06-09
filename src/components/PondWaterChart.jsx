@@ -1,11 +1,12 @@
 import { useMemo } from 'react'
 import { format } from 'date-fns'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts'
+import { samePondId } from '../lib/pondOps'
 
 function buildParamHistory(logs, pondId, limit = 30) {
   return logs
     .filter((l) => {
-      if (pondId && pondId !== 'all' && l.pondId !== pondId) return false
+      if (pondId && pondId !== 'all' && !samePondId(l.pondId, pondId)) return false
       return [l.pH, l.ammonia, l.nitrite].some((v) => v !== '' && v != null)
     })
     .sort((a, b) => (a.date || '').localeCompare(b.date || ''))

@@ -11,6 +11,10 @@ import Fab from '../components/Fab'
 import PondWaterChart from '../components/PondWaterChart'
 import EmptyState from '../components/ui/EmptyState'
 import { filterPondLogsForApp } from '../lib/retention'
+import {
+  applyMaintenanceToPond, buildMaintenanceLogEntry, findPondById, isDuplicatePondName,
+  samePondId, validateMaintenanceForm, validatePondFields, validateReminderForm, validateTreatmentForm,
+} from '../lib/pondOps'
 import { touchPondData } from '../lib/syncMeta'
 
 const POND_TYPE_COLOR = { koi: 'bg-cyan-500/20 text-cyan-300', arowana: 'bg-amber-500/20 text-amber-300', quarantine: 'bg-red-500/20 text-red-300', display: 'bg-purple-500/20 text-purple-300' }
@@ -65,78 +69,73 @@ export default function PondManagement({ pondData, setPondData, addNotification,
 
   const ensureGuidesMutable = () => (treatmentGuides.length ? treatmentGuides : [...DEFAULT_TREATMENT_GUIDES])
 
-  const pondSaltLevel = (pond) => pond.lastSalt ?? pond.lastTemp
+  const pondSaltLevel = (pond) => pond.lastSalt
 
   const syncPondNameInLogs = (pondId, pondName) => ({
-    maintenanceLogs: maintenanceLogs.map((l) => (l.pondId === pondId ? { ...l, pondName } : l)),
-    treatmentLogs: treatmentLogs.map((l) => (l.pondId === pondId ? { ...l, pondName } : l)),
-    reminders: reminders.map((r) => (r.pondId === pondId ? { ...r, pondName } : r)),
+    maintenanceLogs: maintenanceLogs.map((l) => (samePondId(l.pondId, pondId) ? { ...l, pondName } : l)),
+    treatmentLogs: treatmentLogs.map((l) => (samePondId(l.pondId, pondId) ? { ...l, pondName } : l)),
+    reminders: reminders.map((r) => (samePondId(r.pondId, pondId) ? { ...r, pondName } : r)),
   })
 
   const addPond = () => {
-    const name = pondForm.name?.trim()
-    if (!name) {
-      addNotification({ type: 'error', title: 'Pond Name Required', message: 'Select or enter a pond name.' })
+    if (!canEdit) { denyEdit(); return }
+    const check = validatePondFields(pondForm)
+    if (!check.ok) {
+      addNotification({ type: 'error', title: 'Invalid Pond', message: check.message })
       return
     }
-    if (ponds.some((p) => p.name.trim().toLowerCase() === name.toLowerCase())) {
-      addNotification({ type: 'warning', title: 'Duplicate Pond', message: `${name} is already in the pond list.` })
+    if (isDuplicatePondName(ponds, check.name)) {
+      addNotification({ type: 'warning', title: 'Duplicate Pond', message: `${check.name} is already in the pond list.` })
       return
     }
-    if (+pondForm.volume < 0) {
-      addNotification({ type: 'error', title: 'Invalid Volume', message: 'Volume cannot be negative.' })
-      return
-    }
-    update({ ponds: [...ponds, { ...pondForm, name, id: genId('POND'), volume: +pondForm.volume || 0, lastpH: null, lastAmmonia: null, lastNitrite: null, lastSalt: null, lastChecked: null }] })
-    addNotification({ type: 'success', title: 'Pond Added', message: `${name} added to pond list.` })
+    update({ ponds: [...ponds, { ...pondForm, name: check.name, id: genId('POND'), volume: check.volume, lastpH: null, lastAmmonia: null, lastNitrite: null, lastSalt: null, lastChecked: null }] })
+    addNotification({ type: 'success', title: 'Pond Added', message: `${check.name} added to pond list.` })
     setShowAddPond(false)
     setPondForm({ name: '', type: 'koi', volume: '', notes: '' })
   }
 
   const saveMaint = () => {
+    if (!canEdit) { denyEdit(); return }
     if (!hasPonds) {
       addNotification({ type: 'error', title: 'No Ponds', message: 'Add a pond before logging maintenance.' })
       return
     }
-    const pond = ponds.find((p) => p.id === maintForm.pondId)
-    if (!pond) {
-      addNotification({ type: 'error', title: 'Pond Required', message: 'Select which pond this maintenance is for.' })
+    const check = validateMaintenanceForm(maintForm)
+    if (!check.ok) {
+      addNotification({ type: 'error', title: 'Invalid Maintenance', message: check.message })
       return
     }
-    const log = { ...maintForm, id: genId('MAINT'), pondName: pond.name, performedBy: currentUser?.name || '' }
-    let nextPonds = ponds
-    const hasParams = maintForm.showParams && [maintForm.pH, maintForm.ammonia, maintForm.nitrite, maintForm.saltLevel].some((v) => v !== '' && v != null)
-    if (hasParams) {
-      nextPonds = ponds.map((p) => (p.id === pond.id ? {
-        ...p,
-        lastpH: maintForm.pH !== '' ? +maintForm.pH : p.lastpH,
-        lastAmmonia: maintForm.ammonia !== '' ? +maintForm.ammonia : p.lastAmmonia,
-        lastNitrite: maintForm.nitrite !== '' ? +maintForm.nitrite : p.lastNitrite,
-        lastSalt: maintForm.saltLevel !== '' ? +maintForm.saltLevel : p.lastSalt,
-        lastChecked: maintForm.date,
-      } : p))
+    const pond = findPondById(ponds, maintForm.pondId)
+    if (!pond) {
+      addNotification({ type: 'error', title: 'Pond Not Found', message: 'Selected pond is no longer in the list.' })
+      return
     }
+    const log = buildMaintenanceLogEntry(
+      { ...maintForm, id: genId('MAINT') },
+      { pond, performedBy: currentUser?.name || '' },
+    )
+    const nextPonds = ponds.map((p) => (
+      samePondId(p.id, pond.id) ? applyMaintenanceToPond(p, maintForm) : p
+    ))
     update({ ponds: nextPonds, maintenanceLogs: [log, ...maintenanceLogs] })
     addNotification({ type: 'success', title: 'Logged', message: `Maintenance recorded for ${pond.name}` })
     setMaintModal(null)
   }
 
   const saveTreatment = () => {
+    if (!canEdit) { denyEdit(); return }
     if (!hasPonds) {
       addNotification({ type: 'error', title: 'No Ponds', message: 'Add a pond before logging treatment.' })
       return
     }
-    const pond = ponds.find((p) => p.id === treatForm.pondId)
+    const check = validateTreatmentForm(treatForm)
+    if (!check.ok) {
+      addNotification({ type: 'error', title: 'Invalid Treatment', message: check.message })
+      return
+    }
+    const pond = findPondById(ponds, treatForm.pondId)
     if (!pond) {
-      addNotification({ type: 'error', title: 'Pond Required', message: 'Select which pond to treat.' })
-      return
-    }
-    if (!treatForm.medicine?.trim()) {
-      addNotification({ type: 'error', title: 'Medicine Required', message: 'Enter the medicine or treatment name.' })
-      return
-    }
-    if (treatForm.endDate && treatForm.startDate && treatForm.endDate < treatForm.startDate) {
-      addNotification({ type: 'error', title: 'Invalid Dates', message: 'End date cannot be before start date.' })
+      addNotification({ type: 'error', title: 'Pond Not Found', message: 'Selected pond is no longer in the list.' })
       return
     }
     const log = { ...treatForm, medicine: treatForm.medicine.trim(), id: genId('TREAT'), pondName: pond.name, performedBy: currentUser?.name || '' }
@@ -146,17 +145,19 @@ export default function PondManagement({ pondData, setPondData, addNotification,
   }
 
   const saveReminder = () => {
+    if (!canEdit) { denyEdit(); return }
     if (!hasPonds) {
       addNotification({ type: 'error', title: 'No Ponds', message: 'Add a pond before creating a reminder.' })
       return
     }
-    const pond = ponds.find((p) => p.id === remindForm.pondId)
-    if (!pond) {
-      addNotification({ type: 'error', title: 'Pond Required', message: 'Select which pond this reminder is for.' })
+    const check = validateReminderForm(remindForm)
+    if (!check.ok) {
+      addNotification({ type: 'error', title: 'Invalid Reminder', message: check.message })
       return
     }
-    if (!remindForm.dueDate) {
-      addNotification({ type: 'error', title: 'Date Required', message: 'Choose a due date for the reminder.' })
+    const pond = findPondById(ponds, remindForm.pondId)
+    if (!pond) {
+      addNotification({ type: 'error', title: 'Pond Not Found', message: 'Selected pond is no longer in the list.' })
       return
     }
     update({ reminders: [...reminders, { ...remindForm, id: genId('REM'), pondName: pond.name, status: 'pending' }] })
@@ -217,7 +218,7 @@ export default function PondManagement({ pondData, setPondData, addNotification,
     addNotification({ type: 'info', title: 'Guide Removed', message: 'Treatment guide deleted.' })
   }
 
-  const filteredLogs = visiblePond.maintenanceLogs.filter((l) => pondFilter === 'all' || l.pondId === pondFilter)
+  const filteredLogs = visiblePond.maintenanceLogs.filter((l) => pondFilter === 'all' || samePondId(l.pondId, pondFilter))
 
   const openNewMaint = () => {
     setMaintForm({ pondId: ponds[0]?.id || '', type: 'water_test', date: today(), notes: '', showParams: true, pH: '', ammonia: '', nitrite: '', saltLevel: '' })
@@ -237,39 +238,38 @@ export default function PondManagement({ pondData, setPondData, addNotification,
   const saveEditPond = () => {
     if (!editPond) return
     if (!canEdit) { denyEdit(); return }
-    const name = editPond.name?.trim()
-    if (!name) {
-      addNotification({ type: 'error', title: 'Pond Name Required', message: 'Enter a pond name.' })
+    const check = validatePondFields(editPond)
+    if (!check.ok) {
+      addNotification({ type: 'error', title: 'Invalid Pond', message: check.message })
       return
     }
-    const duplicate = ponds.some((p) => p.id !== editPond.id && p.name.trim().toLowerCase() === name.toLowerCase())
-    if (duplicate) {
-      addNotification({ type: 'warning', title: 'Duplicate Pond', message: `${name} is already in the pond list.` })
+    if (isDuplicatePondName(ponds, check.name, editPond.id)) {
+      addNotification({ type: 'warning', title: 'Duplicate Pond', message: `${check.name} is already in the pond list.` })
       return
     }
-    const prev = ponds.find((p) => p.id === editPond.id)
+    const prev = findPondById(ponds, editPond.id)
     const updated = {
       ...editPond,
-      name,
-      volume: +editPond.volume || 0,
+      name: check.name,
+      volume: check.volume,
       notes: editPond.notes?.trim() || '',
     }
     const patch = {
-      ponds: ponds.map((p) => (p.id === editPond.id ? updated : p)),
-      ...(prev && prev.name !== name ? syncPondNameInLogs(editPond.id, name) : {}),
+      ponds: ponds.map((p) => (samePondId(p.id, editPond.id) ? updated : p)),
+      ...(prev && prev.name !== check.name ? syncPondNameInLogs(editPond.id, check.name) : {}),
     }
     update(patch)
-    addNotification({ type: 'success', title: 'Pond Updated', message: `${name} saved` })
+    addNotification({ type: 'success', title: 'Pond Updated', message: `${check.name} saved` })
     setEditPond(null)
   }
 
   const tabs = ['ponds', 'calculator', 'maintenance', 'treatments', 'reminders', 'guide']
 
   const fabByTab = {
-    ponds: { onClick: () => setShowAddPond(true), label: 'Add Pond' },
-    maintenance: { onClick: openNewMaint, label: 'Log Maintenance', disabled: !hasPonds },
-    treatments: { onClick: openNewTreatment, label: 'Log Treatment', disabled: !hasPonds },
-    reminders: { onClick: openNewReminder, label: 'Add Reminder', disabled: !hasPonds, icon: Bell },
+    ponds: canEdit ? { onClick: () => setShowAddPond(true), label: 'Add Pond' } : null,
+    maintenance: canEdit ? { onClick: openNewMaint, label: 'Log Maintenance', disabled: !hasPonds } : null,
+    treatments: canEdit ? { onClick: openNewTreatment, label: 'Log Treatment', disabled: !hasPonds } : null,
+    reminders: canEdit ? { onClick: openNewReminder, label: 'Add Reminder', disabled: !hasPonds, icon: Bell } : null,
     guide: canEdit ? { onClick: openAddGuide, label: 'Add Guide' } : null,
   }
   const fabAction = fabByTab[tab]
@@ -333,10 +333,14 @@ export default function PondManagement({ pondData, setPondData, addNotification,
                 </div>
                 {days > 7 && <p className="text-amber-400 text-xs flex items-center gap-1 mb-2"><AlertTriangle size={12} />Last checked {days} days ago</p>}
                 <div className="flex flex-wrap gap-2">
-                  <Btn variant="secondary" size="sm" onClick={() => { setMaintModal(p.id); setMaintForm((f) => ({ ...f, pondId: p.id, date: today() })) }}>Maintenance</Btn>
-                  <Btn variant="secondary" size="sm" onClick={() => { setTreatModal(p.id); setTreatForm((f) => ({ ...f, pondId: p.id })) }}>Treatment</Btn>
-                  <Btn variant="ghost" size="sm" onClick={() => { setRemindModal(p.id); setRemindForm((f) => ({ ...f, pondId: p.id })) }}><Bell size={12} /></Btn>
-                  {canEdit && <Btn variant="ghost" size="sm" onClick={() => setEditPond({ ...p })}>Edit</Btn>}
+                  {canEdit && (
+                    <>
+                      <Btn variant="secondary" size="sm" onClick={() => { setMaintModal(p.id); setMaintForm((f) => ({ ...f, pondId: p.id, date: today() })) }}>Maintenance</Btn>
+                      <Btn variant="secondary" size="sm" onClick={() => { setTreatModal(p.id); setTreatForm((f) => ({ ...f, pondId: p.id })) }}>Treatment</Btn>
+                      <Btn variant="ghost" size="sm" onClick={() => { setRemindModal(p.id); setRemindForm((f) => ({ ...f, pondId: p.id })) }}><Bell size={12} /></Btn>
+                      <Btn variant="ghost" size="sm" onClick={() => setEditPond({ ...p })}>Edit</Btn>
+                    </>
+                  )}
                 </div>
               </Card>
             )
@@ -358,7 +362,7 @@ export default function PondManagement({ pondData, setPondData, addNotification,
             <PondWaterChart
               logs={visiblePond.maintenanceLogs}
               pondId={pondFilter}
-              pondName={pondFilter !== 'all' ? ponds.find((p) => p.id === pondFilter)?.name : null}
+              pondName={pondFilter !== 'all' ? findPondById(ponds, pondFilter)?.name : null}
             />
           </Card>
           <Card className="overflow-hidden">
@@ -434,7 +438,10 @@ export default function PondManagement({ pondData, setPondData, addNotification,
               {overdueReminders.map((r) => (
                 <div key={r.id} className="flex justify-between items-center py-2 text-sm">
                   <span className="text-white">{r.pondName} — {r.note || r.type} ({r.dueDate})</span>
-                  <Btn variant="success" size="sm" onClick={() => update({ reminders: reminders.map((x) => (x.id === r.id ? { ...x, status: 'done' } : x)) })}><Check size={12} /></Btn>
+                  <Btn variant="success" size="sm" onClick={() => {
+                    if (!canEdit) { denyEdit(); return }
+                    update({ reminders: reminders.map((x) => (x.id === r.id ? { ...x, status: 'done' } : x)) })
+                  }}><Check size={12} /></Btn>
                 </div>
               ))}
             </Card>
@@ -446,7 +453,10 @@ export default function PondManagement({ pondData, setPondData, addNotification,
             <Card key={r.id} className="p-3 flex justify-between items-center text-sm">
               <span className="text-white">{r.pondName} · {r.dueDate} {r.dueTime}</span>
               <div className="flex gap-2">
-                <Btn variant="success" size="sm" onClick={() => update({ reminders: reminders.map((x) => (x.id === r.id ? { ...x, status: 'done' } : x)) })}>Done</Btn>
+                <Btn variant="success" size="sm" onClick={() => {
+                  if (!canEdit) { denyEdit(); return }
+                  update({ reminders: reminders.map((x) => (x.id === r.id ? { ...x, status: 'done' } : x)) })
+                }}>Done</Btn>
                 {canDelete && (
                   <Btn variant="ghost" size="sm" onClick={() => {
                     if (!canDelete) { denyDelete(); return }
@@ -485,18 +495,18 @@ export default function PondManagement({ pondData, setPondData, addNotification,
 
       <Modal open={showAddPond} onClose={() => setShowAddPond(false)} title="Add Pond">
         <div className="grid grid-cols-2 gap-3">
-          <PondNameInput value={pondForm.name} onChange={(e) => setPondForm((f) => ({ ...f, name: e.target.value }))} className="col-span-2" required />
+          <PondNameInput value={pondForm.name} onChange={(e) => setPondForm((f) => ({ ...f, name: e.target.value }))} extraNames={ponds.map((p) => p.name)} className="col-span-2" required />
           <Select label="Type" value={pondForm.type} onChange={(e) => setPondForm((f) => ({ ...f, type: e.target.value }))} options={POND_TYPES} />
           <Input label="Volume (ton)" type="number" value={pondForm.volume} onChange={(e) => setPondForm((f) => ({ ...f, volume: e.target.value }))} min="0" step="0.1" />
           <Textarea label="Notes" value={pondForm.notes} onChange={(e) => setPondForm((f) => ({ ...f, notes: e.target.value }))} className="col-span-2" />
         </div>
-        <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setShowAddPond(false)}>Cancel</Btn><Btn onClick={addPond}>Save</Btn></div>
+        <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setShowAddPond(false)}>Cancel</Btn><Btn onClick={addPond} disabled={!canEdit}>Save</Btn></div>
       </Modal>
 
       <Modal open={!!editPond} onClose={() => setEditPond(null)} title="Edit Pond">
         {editPond && (
           <>
-            <PondNameInput value={editPond.name} onChange={(e) => setEditPond((p) => ({ ...p, name: e.target.value }))} required />
+            <PondNameInput value={editPond.name} onChange={(e) => setEditPond((p) => ({ ...p, name: e.target.value }))} extraNames={ponds.map((p) => p.name)} required />
             <Select label="Type" value={editPond.type} onChange={(e) => setEditPond((p) => ({ ...p, type: e.target.value }))} options={POND_TYPES} className="mt-3" />
             <Input label="Volume (ton)" type="number" value={editPond.volume} onChange={(e) => setEditPond((p) => ({ ...p, volume: e.target.value }))} className="mt-3" min="0" step="0.1" />
             <Textarea label="Notes" value={editPond.notes || ''} onChange={(e) => setEditPond((p) => ({ ...p, notes: e.target.value }))} className="mt-3" />
@@ -525,7 +535,7 @@ export default function PondManagement({ pondData, setPondData, addNotification,
             <Input label="Salt level (%)" type="number" step="0.1" value={maintForm.saltLevel} onChange={(e) => setMaintForm((f) => ({ ...f, saltLevel: e.target.value }))} placeholder="e.g. 0.3" />
           </div>
         )}
-        <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setMaintModal(null)}>Cancel</Btn><Btn onClick={saveMaint}>Save</Btn></div>
+        <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setMaintModal(null)}>Cancel</Btn><Btn onClick={saveMaint} disabled={!canEdit}>Save</Btn></div>
       </Modal>
 
       <Modal open={!!treatModal} onClose={() => setTreatModal(null)} title="Log Treatment" size="lg">
@@ -541,7 +551,7 @@ export default function PondManagement({ pondData, setPondData, addNotification,
         <label className="flex items-center gap-2 mt-3 text-sm text-slate-300">
           <input type="checkbox" checked={treatForm.waterChangeBefore} onChange={(e) => setTreatForm((f) => ({ ...f, waterChangeBefore: e.target.checked }))} />Water change before treatment
         </label>
-        <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setTreatModal(null)}>Cancel</Btn><Btn onClick={saveTreatment}>Start</Btn></div>
+        <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setTreatModal(null)}>Cancel</Btn><Btn onClick={saveTreatment} disabled={!canEdit}>Start</Btn></div>
       </Modal>
 
       <Modal open={!!remindModal} onClose={() => setRemindModal(null)} title="Add Reminder">
@@ -551,7 +561,7 @@ export default function PondManagement({ pondData, setPondData, addNotification,
         <Input label="Due date" type="date" value={remindForm.dueDate} onChange={(e) => setRemindForm((f) => ({ ...f, dueDate: e.target.value }))} className="mt-3" />
         <Input label="Time" type="time" value={remindForm.dueTime} onChange={(e) => setRemindForm((f) => ({ ...f, dueTime: e.target.value }))} className="mt-3" />
         <Textarea label="Note" value={remindForm.note} onChange={(e) => setRemindForm((f) => ({ ...f, note: e.target.value }))} className="mt-3" />
-        <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setRemindModal(null)}>Cancel</Btn><Btn onClick={saveReminder}>Save</Btn></div>
+        <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setRemindModal(null)}>Cancel</Btn><Btn onClick={saveReminder} disabled={!canEdit}>Save</Btn></div>
       </Modal>
 
       <Modal

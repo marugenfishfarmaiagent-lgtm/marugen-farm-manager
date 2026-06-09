@@ -7,7 +7,9 @@ import { markDeleted } from './syncDeletions'
 import { touchUpdatedAt } from './syncMeta'
 import { formatCustomerAddress, resolveInvoiceCustomer } from './invoiceWhatsApp'
 import { deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem } from './inventoryStock'
+import { adjustProductStockInList, buildStockLogEntry } from './inventoryOps'
 import { formatKoiInvoiceLineName, restoreInvoiceKoiSales } from './koiInvoice'
+import { buildSoldKoiPatch, sameKoiId, validateKoiSaleForm } from './koiOps'
 import { actionConfirmKey, describeRiskyAction, isRiskyAiAction } from './aiRisk'
 import {
   findProductCandidates, findProductInList, formatProductCatalogEntry, productMatchHint,
@@ -246,16 +248,10 @@ function buildProductFromArgs(a, id) {
 function addProductToInventory(ctx, product, { by, note = 'AI initial stock' } = {}) {
   ctx.setProducts((prev) => [...prev, product])
   if (product.stock > 0) {
-    ctx.setStockLog((prev) => [touchUpdatedAt({
-      id: Date.now() + Math.floor(Math.random() * 1000),
-      productId: product.id,
-      productName: product.name,
-      type: 'restock',
-      qty: product.stock,
-      note,
-      date: today(),
-      by: by || 'Staff',
-    }), ...prev])
+    ctx.setStockLog((prev) => [
+      buildStockLogEntry(product, 'restock', { qty: product.stock, note, by: by || 'Staff' }),
+      ...prev,
+    ])
   }
 }
 
@@ -415,7 +411,9 @@ export function buildBusinessContext(ctx) {
   const paid = can('invoices') ? invoices.filter((i) => getInvoiceStatus(i) === 'paid') : []
   const pending = can('invoices') ? invoices.filter((i) => getInvoiceStatus(i) === 'pending') : []
   const overdue = can('invoices') ? invoices.filter((i) => getInvoiceStatus(i) === 'overdue') : []
-  const lowStock = can('inventory') ? products.filter((p) => isStockTracked(p) && p.stock <= p.minStock) : []
+  const lowStock = can('inventory')
+    ? products.filter((p) => isStockTracked(p) && p.minStock > 0 && p.stock <= p.minStock)
+    : []
   const now = today()
   const koiAvailable = can('koifish') ? koiFishList.filter((k) => k.status !== KOI_STATUS.SOLD) : []
   const koiSold = can('koifish') ? koiFishList.filter((k) => k.status === KOI_STATUS.SOLD) : []
@@ -481,7 +479,7 @@ ${isOwner ? 'Owner — full access.' : `Staff permissions: ${perms.join(', ') ||
 Today: ${now}
 
 Snapshot: ${snapshotParts.join(' · ') || 'limited access — use get_business_data for permitted modules'}
-${can('invoices') ? `Pending invoices: ${pending.length} · Overdue: ${overdue.length}\nRevenue (paid): ${formatSGD(paid.reduce((s, i) => s + (i.total || i.amount || 0), 0))}` : ''}
+${can('invoices') ? `Pending invoices: ${pending.length} · Overdue: ${overdue.length}\nRevenue (paid): ${formatSGD(paid.reduce((s, i) => s + calcInvoiceAmounts(i).total, 0))}` : ''}
 ${can('expenses') ? `Expense receipts: ${expenses.length}` : ''}
 ${can('inventory') ? `Low stock: ${lowStock.length ? lowStock.map((p) => p.name).join(', ') : 'none'}` : ''}
 
@@ -538,18 +536,18 @@ export function executeAiAction(name, args, ctx) {
         }
         const data = {}
         if ((q === 'summary' || q === 'low_stock') && canDo(currentUser, 'inventory')) {
-          data.lowStock = ctx.products.filter((p) => isStockTracked(p) && p.stock <= p.minStock).map((p) => ({
+          data.lowStock = ctx.products.filter((p) => isStockTracked(p) && p.minStock > 0 && p.stock <= p.minStock).map((p) => ({
             name: p.name, stock: p.stock, minStock: p.minStock, unit: p.unit,
           }))
         }
         if ((q === 'summary' || q === 'pending_invoices') && canDo(currentUser, 'invoices')) {
           data.pendingInvoices = ctx.invoices.filter((i) => getInvoiceStatus(i) === 'pending').map((i) => ({
-            id: i.id, customer: i.customerName, total: i.total, due: i.due,
+            id: i.id, customer: i.customerName, total: calcInvoiceAmounts(i).total, due: i.due,
           }))
         }
         if ((q === 'summary' || q === 'overdue_invoices') && canDo(currentUser, 'invoices')) {
           data.overdueInvoices = ctx.invoices.filter((i) => getInvoiceStatus(i) === 'overdue').map((i) => ({
-            id: i.id, customer: i.customerName, total: i.total, due: i.due,
+            id: i.id, customer: i.customerName, total: calcInvoiceAmounts(i).total, due: i.due,
           }))
         }
         if ((q === 'summary' || q === 'today_deliveries') && canDo(currentUser, 'deliveries')) {
@@ -611,7 +609,9 @@ export function executeAiAction(name, args, ctx) {
             data.totals.koiStock = (ctx.koiFishList || []).filter((k) => k.status !== KOI_STATUS.SOLD).length
           }
           if (canDo(currentUser, 'invoices')) {
-            data.totals.revenue = ctx.invoices.filter((i) => getInvoiceStatus(i) === 'paid').reduce((s, i) => s + (i.total || 0), 0)
+            data.totals.revenue = ctx.invoices
+              .filter((i) => getInvoiceStatus(i) === 'paid')
+              .reduce((s, i) => s + calcInvoiceAmounts(i).total, 0)
           }
           if (canDo(currentUser, 'expenses')) data.totals.expenseReceipts = ctx.expenses.length
         }
@@ -694,20 +694,38 @@ export function executeAiAction(name, args, ctx) {
         const inv = findInvoice(ctx, a)
         if (!inv) return { success: false, error: 'No matching unpaid invoice found' }
         if (getInvoiceStatus(inv) === 'paid') return { success: false, error: `${inv.id} is already paid` }
+        if (!['pending', 'overdue'].includes(getInvoiceStatus(inv))) {
+          return { success: false, error: `${inv.id} cannot be marked paid (${getInvoiceStatus(inv)})` }
+        }
 
+        const paidTotal = calcInvoiceAmounts(inv).total
+        const optimistic = touchUpdatedAt(sanitizeInvoiceForSync({ ...inv, status: 'paid' }))
         ctx.setInvoices((prev) => prev.map((i) => (
-          i.id === inv.id ? touchUpdatedAt(sanitizeInvoiceForSync({ ...i, status: 'paid' })) : i
+          String(i.id) === String(inv.id) ? optimistic : i
         )))
-        if (inv.customerId != null && inv.customerId !== '') {
+
+        if (ctx.onMarkInvoicePaid) {
+          ctx.onMarkInvoicePaid(inv, paidTotal).catch((err) => {
+            ctx.setInvoices((prev) => prev.map((i) => (
+              String(i.id) === String(inv.id) ? inv : i
+            )))
+            addNotification?.({
+              type: 'error',
+              title: 'Mark Paid Failed',
+              message: err?.message || `${inv.id} could not be saved to cloud.`,
+            })
+          })
+        } else if (inv.customerId != null && inv.customerId !== '') {
           ctx.setCustomers((prev) => prev.map((c) => {
-            if (c.id !== inv.customerId) return c
-            const totalSpent = (Number(c.totalSpent) || 0) + (Number(inv.total) || 0)
+            if (String(c.id) !== String(inv.customerId)) return c
+            const totalSpent = (Number(c.totalSpent) || 0) + paidTotal
             return touchUpdatedAt({ ...c, totalSpent, tier: calcCustomerTier(totalSpent) })
           }))
         }
-        addNotification?.({ type: 'success', title: 'Payment Received (AI)', message: `${inv.id} — ${formatSGD(inv.total)}` })
+
+        addNotification?.({ type: 'success', title: 'Payment Received (AI)', message: `${inv.id} — ${formatSGD(paidTotal)}` })
         onNavigate?.('invoices')
-        return { success: true, message: `Marked ${inv.id} (${inv.customerName}) as paid — ${formatSGD(inv.total)}` }
+        return { success: true, message: `Marked ${inv.id} (${inv.customerName}) as paid — ${formatSGD(paidTotal)}` }
       }
 
       case 'create_customer': {
@@ -783,14 +801,9 @@ export function executeAiAction(name, args, ctx) {
           catalog.push(product)
           newProducts.push(product)
           if (product.stock > 0) {
-            newLogEntries.push(touchUpdatedAt({
-              id: idBase + i + 50000,
-              productId: product.id,
-              productName: product.name,
-              type: 'restock',
+            newLogEntries.push(buildStockLogEntry(product, 'restock', {
               qty: product.stock,
               note: 'AI receipt import',
-              date: today(),
               by: currentUser.name,
             }))
           }
@@ -839,17 +852,11 @@ export function executeAiAction(name, args, ctx) {
         const qty = parseQuantity(a.quantity)
         if (!qty || qty <= 0) return { success: false, error: 'How much stock to add?' }
 
-        ctx.setProducts((prev) => prev.map((p) => (p.id === product.id ? touchUpdatedAt({ ...p, stock: p.stock + qty }) : p)))
-        ctx.setStockLog((prev) => [touchUpdatedAt({
-          id: Date.now(),
-          productId: product.id,
-          productName: product.name,
-          type: 'restock',
-          qty,
-          note: 'AI restock',
-          date: today(),
-          by: currentUser.name,
-        }), ...prev])
+        ctx.setProducts((prev) => adjustProductStockInList(prev, product.id, qty))
+        ctx.setStockLog((prev) => [
+          buildStockLogEntry(product, 'restock', { qty, note: 'AI restock', by: currentUser.name }),
+          ...prev,
+        ])
         addNotification?.({ type: 'info', title: 'Restocked (AI)', message: `${product.name} +${qty} ${product.unit}` })
         onNavigate?.('inventory')
         const matched = productMatchHint(a.productName, product)
@@ -1002,30 +1009,32 @@ export function executeAiAction(name, args, ctx) {
 
       case 'sell_koi': {
         if (!canDo(currentUser, 'koifish')) return { success: false, error: 'No permission for Koi Fish' }
+        if (!canEdit(currentUser)) return { success: false, error: 'No edit permission' }
         const customer = findCustomer(ctx, a.customerName)
         if (!customer) return { success: false, error: `Customer not found: ${a.customerName}` }
         const koi = findKoi(ctx, a)
         if (!koi) return { success: false, error: 'Koi not found in stock' }
-        if (koi.status === KOI_STATUS.SOLD) return { success: false, error: `${koi.id} is already sold` }
-        if (![KOI_STATUS.AVAILABLE, KOI_STATUS.SICK].includes(koi.status)) {
-          return { success: false, error: `${koi.id} cannot be sold (status: ${koi.status})` }
-        }
         const disposition = a.disposition === 'keep' ? 'keep' : 'taken'
         const keepPondName = a.keepPondName?.trim() || koi.pondName || ''
-        if (disposition === 'keep' && !keepPondName) {
-          return { success: false, error: 'Pond name required when fish is kept at farm' }
-        }
-        const soldPrice = parseQuantity(a.soldPrice) || koi.price || 0
-        const soldDate = a.soldDate || today()
-        ctx.setKoiFishList((prev) => prev.map((k) => (k.id === koi.id ? touchUpdatedAt({
-          ...k,
-          status: KOI_STATUS.SOLD,
-          soldTo: customer.id,
+        const saleCheck = validateKoiSaleForm({
+          customerId: customer.id,
+          disposition,
+          keepPondName,
+          soldPrice: a.soldPrice ?? koi.price,
+          soldDate: a.soldDate || today(),
+          koi,
+        })
+        if (!saleCheck.ok) return { success: false, error: saleCheck.message }
+        const soldPrice = saleCheck.soldPrice
+        const soldDate = saleCheck.soldDate
+        const soldPatch = buildSoldKoiPatch(koi, {
+          customerId: customer.id,
           soldPrice,
           soldDate,
-          sellDisposition: disposition,
-          keepPondName: disposition === 'keep' ? keepPondName : null,
-        }) : k)))
+          disposition,
+          keepPondName,
+        })
+        ctx.setKoiFishList((prev) => prev.map((k) => (sameKoiId(k.id, koi.id) ? soldPatch : k)))
         ctx.onKoiSold?.(koi, customer, soldPrice, soldDate, { disposition, keepPondName })
         const dispositionNote = disposition === 'keep' ? `kept at ${keepPondName}` : 'taken away'
         addNotification?.({

@@ -67,6 +67,13 @@ function invoiceCustomerId(i: Record<string, unknown>): number | null {
   return nullableBigint(i.customerId ?? i.customer_id);
 }
 
+function calcCustomerTier(totalSpent: number): string {
+  if (totalSpent >= 10000) return "Platinum";
+  if (totalSpent >= 5000) return "Gold";
+  if (totalSpent >= 2000) return "Silver";
+  return "Bronze";
+}
+
 function sanitizeInvoiceItems(items: unknown): unknown[] {
   if (!Array.isArray(items)) return [];
   return items.map((raw) => {
@@ -408,7 +415,7 @@ Deno.serve(async (req) => {
       const { data: existing, error: fetchErr } = await db.from("invoices").select("*").eq("id", id).maybeSingle();
       if (fetchErr) throw fetchErr;
       if (!existing) return J({ error: "Invoice not found" }, 404);
-      if (existing.status === "paid") return J({ ok: true, invoice: existing });
+      if (existing.status === "paid") return J({ ok: true, invoice: existing, customer: null });
       if (existing.status === "cancelled") {
         return J({ error: "Cancelled invoices cannot be marked paid" }, 400);
       }
@@ -420,7 +427,32 @@ Deno.serve(async (req) => {
         .select("*")
         .single();
       if (error) throw error;
-      return J({ ok: true, invoice: data });
+
+      let customerRow: Record<string, unknown> | null = null;
+      if (existing.customer_id != null) {
+        const { data: cust, error: custErr } = await db.from("customers")
+          .select("*")
+          .eq("id", existing.customer_id)
+          .maybeSingle();
+        if (custErr) throw custErr;
+        if (cust) {
+          const paidTotal = Number(existing.total) || 0;
+          const totalSpent = (Number(cust.total_spent) || 0) + paidTotal;
+          const { data: updatedCust, error: updErr } = await db.from("customers")
+            .update({
+              total_spent: totalSpent,
+              tier: calcCustomerTier(totalSpent),
+              updated_at: now,
+            })
+            .eq("id", existing.customer_id)
+            .select("*")
+            .single();
+          if (updErr) throw updErr;
+          customerRow = updatedCust;
+        }
+      }
+
+      return J({ ok: true, invoice: data, customer: customerRow });
     }
 
     if (body.action === "cancel_invoice") {
@@ -459,6 +491,18 @@ Deno.serve(async (req) => {
       const id = String(incoming.id || "").trim();
       if (!id) return J({ error: "Invoice id required" }, 400);
 
+      const items = sanitizeInvoiceItems(incoming.items);
+      if (!items.length) return J({ error: "At least one invoice item is required" }, 400);
+      const customerName = String(incoming.customerName ?? incoming.customer_name ?? "").trim();
+      if (!customerName) return J({ error: "Customer name is required" }, 400);
+      const incomingStatus = String(incoming.status ?? "pending");
+      if (incomingStatus === "paid") {
+        return J({ error: "Create invoices as pending; use mark_invoice_paid to record payment" }, 400);
+      }
+      if (incomingStatus === "cancelled") {
+        return J({ error: "Use cancel_invoice to void an invoice" }, 400);
+      }
+
       const now = new Date().toISOString();
       const row = {
         id,
@@ -467,9 +511,9 @@ Deno.serve(async (req) => {
         customer_phone: incoming.customerPhone ?? incoming.customer_phone ?? "",
         customer_whatsapp: incoming.customerWhatsapp ?? incoming.customer_whatsapp ?? "",
         customer_address: incoming.customerAddress ?? incoming.customer_address ?? "",
-        items: sanitizeInvoiceItems(incoming.items),
+        items,
         total: nullableNumeric(incoming.total),
-        status: incoming.status ?? "pending",
+        status: incomingStatus,
         date: nullableDate(incoming.date),
         due_date: nullableDate(incoming.due ?? incoming.due_date),
         notes: incoming.notes ?? "",
@@ -576,9 +620,23 @@ Deno.serve(async (req) => {
           fish_types: c.fishTypes, tier: c.tier, notes: c.notes, total_spent: c.totalSpent,
         }, c)), "id", syncOpts);
       } else if (entity === "products") {
-        await upsertSync("products", (data || []).map((p: Record<string, unknown>) => withTs({
-          id: p.id, name: p.name, category: p.category, sku: p.sku, price: p.price,
-          cost: p.cost ?? 0, unit: p.unit, stock: p.stock, min_stock: p.minStock, description: p.description,
+        const incoming = (data || []) as Record<string, unknown>[];
+        for (const p of incoming) {
+          if (!String(p.name ?? "").trim()) return J({ error: "Product name is required" }, 400);
+          const price = nullableNumeric(p.price, -1);
+          if (price < 0) return J({ error: "Product price cannot be negative" }, 400);
+          const trackStock = p.trackStock !== false;
+          if (trackStock) {
+            const stock = nullableNumeric(p.stock, -1);
+            if (stock < 0) return J({ error: "Product stock cannot be negative" }, 400);
+            const minStock = nullableNumeric(p.minStock ?? p.min_stock, -1);
+            if (minStock < 0) return J({ error: "Min stock cannot be negative" }, 400);
+          }
+        }
+        await upsertSync("products", incoming.map((p) => withTs({
+          id: p.id, name: String(p.name ?? "").trim(), category: p.category, sku: p.sku, price: nullableNumeric(p.price),
+          cost: nullableNumeric(p.cost ?? 0), unit: p.unit, stock: nullableNumeric(p.stock),
+          min_stock: nullableNumeric(p.minStock ?? p.min_stock), description: p.description,
           track_stock: p.trackStock !== false,
         }, p)), "id", syncOpts);
       } else if (entity === "invoices") {
@@ -642,12 +700,39 @@ Deno.serve(async (req) => {
           created_by: e.createdBy ?? "",
         }, e)), "id", syncOpts);
       } else if (entity === "stock_activity") {
-        await upsertSync("stock_activity", (data || []).map((l: Record<string, unknown>) => withTs({
-          id: l.id, product_id: nullableBigint(l.productId), product_name: l.productName, type: l.type,
-          qty: l.qty, value: l.value ?? l.total ?? null, note: l.note || "", date: l.date, added_by: l.by || "",
+        const incoming = (data || []) as Record<string, unknown>[];
+        const allowedTypes = new Set(["sell", "use", "restock"]);
+        for (const l of incoming) {
+          const type = String(l.type ?? "").toLowerCase();
+          if (!allowedTypes.has(type)) return J({ error: `Invalid stock activity type: ${l.type}` }, 400);
+          const qty = nullableNumeric(l.qty, 0);
+          if (qty <= 0) return J({ error: "Stock activity quantity must be greater than zero" }, 400);
+          if (!String(l.productName ?? l.product_name ?? "").trim() && !nullableBigint(l.productId ?? l.product_id)) {
+            return J({ error: "Stock activity requires product id or name" }, 400);
+          }
+        }
+        await upsertSync("stock_activity", incoming.map((l) => withTs({
+          id: l.id, product_id: nullableBigint(l.productId ?? l.product_id), product_name: l.productName ?? l.product_name ?? "",
+          type: String(l.type ?? "").toLowerCase(),
+          qty: nullableNumeric(l.qty), value: l.value ?? l.total ?? null, note: l.note || "",
+          date: nullableDate(l.date), added_by: l.by ?? l.added_by ?? "",
         }, l)), "id", syncOpts);
       } else if (entity === "koi_fish") {
         const incoming = (data || []) as Record<string, unknown>[];
+        const KOI_STATUSES = new Set(["available", "sold", "sick", "deceased"]);
+        for (const k of incoming) {
+          if (!String(k.id ?? "").trim()) return J({ error: "Koi id is required" }, 400);
+          if (!String(k.variety ?? "").trim() && !String(k.name ?? "").trim()) {
+            return J({ error: "Koi variety or name is required" }, 400);
+          }
+          const price = nullableNumeric(k.price, -1);
+          if (price < 0) return J({ error: "Koi price cannot be negative" }, 400);
+          const status = String(k.status ?? "available").toLowerCase();
+          if (!KOI_STATUSES.has(status)) return J({ error: `Invalid koi status: ${status}` }, 400);
+          if (status === "sold" && k.soldTo == null && k.sold_to == null) {
+            return J({ error: "Sold koi must include soldTo (customer id)" }, 400);
+          }
+        }
         const rows = await Promise.all(incoming.map(async (k) => withTs({
           id: k.id,
           photo: await resolveKoiFishPhoto(db, k.id, k.photo),
@@ -675,6 +760,21 @@ Deno.serve(async (req) => {
         });
       } else if (entity === "customer_koi") {
         const incoming = (data || []) as Record<string, unknown>[];
+        const CKOI_STATUSES = new Set(["in_pond", "collected", "deceased"]);
+        for (const r of incoming) {
+          if (!String(r.id ?? "").trim()) return J({ error: "Customer koi id is required" }, 400);
+          if (r.customerId == null && r.customer_id == null) {
+            return J({ error: "Customer id is required" }, 400);
+          }
+          if (!String(r.variety ?? "").trim()) return J({ error: "Koi variety is required" }, 400);
+          const price = nullableNumeric(r.purchasePrice ?? r.purchase_price, -1);
+          if (price < 0) return J({ error: "Purchase price cannot be negative" }, 400);
+          const status = String(r.status ?? "in_pond").toLowerCase();
+          if (!CKOI_STATUSES.has(status)) return J({ error: `Invalid customer koi status: ${status}` }, 400);
+          if (status === "in_pond" && !String(r.pondName ?? r.pond_name ?? "").trim()) {
+            return J({ error: "Pond name is required when status is in_pond" }, 400);
+          }
+        }
         const rows = await Promise.all(incoming.map(async (r) => withTs({
           id: r.id,
           customer_id: nullableBigint(r.customerId),
@@ -701,6 +801,17 @@ Deno.serve(async (req) => {
         });
       } else if (entity === "farm_pond_data") {
         const raw = data && typeof data === "object" ? { ...(data as Record<string, unknown>) } : {};
+        const ponds = Array.isArray(raw.ponds) ? raw.ponds as Record<string, unknown>[] : [];
+        const POND_TYPES = new Set(["koi", "arowana", "quarantine", "display"]);
+        for (const p of ponds) {
+          if (!String(p.id ?? "").trim()) return J({ error: "Pond id is required" }, 400);
+          if (!String(p.name ?? "").trim()) return J({ error: "Pond name is required" }, 400);
+          const vol = nullableNumeric(p.volume, -1);
+          if (vol < 0) return J({ error: "Pond volume cannot be negative" }, 400);
+          if (p.type && !POND_TYPES.has(String(p.type))) {
+            return J({ error: `Invalid pond type: ${p.type}` }, 400);
+          }
+        }
         const clientTs = raw.updatedAt ?? raw.updated_at;
         delete raw.updatedAt;
         delete raw.updated_at;
