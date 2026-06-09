@@ -55,6 +55,18 @@ function nullableTimestamptz(value: unknown): string | null {
   return Number.isFinite(t) ? s : null;
 }
 
+function nullableDate(value: unknown): string | null {
+  if (value == null || value === "") return null;
+  const s = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const t = new Date(s).getTime();
+  return Number.isFinite(t) ? new Date(s).toISOString().slice(0, 10) : null;
+}
+
+function invoiceCustomerId(i: Record<string, unknown>): number | null {
+  return nullableBigint(i.customerId ?? i.customer_id);
+}
+
 function sanitizeInvoiceItems(items: unknown): unknown[] {
   if (!Array.isArray(items)) return [];
   return items.map((raw) => {
@@ -484,16 +496,16 @@ Deno.serve(async (req) => {
         const incoming = (data || []) as Record<string, unknown>[];
         await upsertSync("invoices", incoming.map((i) => withTs({
           id: i.id,
-          customer_id: nullableBigint(i.customerId),
-          customer_name: i.customerName ?? "",
-          customer_phone: i.customerPhone ?? "",
-          customer_whatsapp: i.customerWhatsapp ?? "",
-          customer_address: i.customerAddress ?? "",
+          customer_id: invoiceCustomerId(i),
+          customer_name: i.customerName ?? i.customer_name ?? "",
+          customer_phone: i.customerPhone ?? i.customer_phone ?? "",
+          customer_whatsapp: i.customerWhatsapp ?? i.customer_whatsapp ?? "",
+          customer_address: i.customerAddress ?? i.customer_address ?? "",
           items: sanitizeInvoiceItems(i.items),
           total: nullableNumeric(i.total),
           status: i.status ?? "pending",
-          date: i.date,
-          due_date: i.due,
+          date: nullableDate(i.date),
+          due_date: nullableDate(i.due ?? i.due_date),
           notes: i.notes ?? "",
           discount_type: i.discountType ?? "none",
           discount_value: nullableNumeric(i.discountValue),

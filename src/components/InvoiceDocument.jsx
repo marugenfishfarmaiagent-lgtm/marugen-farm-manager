@@ -12,6 +12,8 @@ const statusLabel = {
 
 export default function InvoiceDocument({ invoice, className = '' }) {
   const data = computeInvoiceTotals(invoice)
+  const isPaid = data.status === 'paid'
+  const isCancelled = data.status === 'cancelled'
   const badge = statusLabel[data.status] || statusLabel.pending
 
   return (
@@ -141,9 +143,9 @@ export default function InvoiceDocument({ invoice, className = '' }) {
             </div>
             <div
               className="flex justify-between items-center rounded-md px-3 py-2.5 mt-2 text-white font-bold text-[13px]"
-              style={{ backgroundColor: THEME.maroon }}
+              style={{ backgroundColor: isPaid ? '#047857' : isCancelled ? '#6b7280' : THEME.maroon }}
             >
-              <span>Amount due</span>
+              <span>{isPaid ? 'Amount paid' : isCancelled ? 'Cancelled' : 'Amount due'}</span>
               <span>{formatSGD(data.total)}</span>
             </div>
           </div>
@@ -157,24 +159,31 @@ export default function InvoiceDocument({ invoice, className = '' }) {
         )}
 
         {/* Payment */}
-        <div className="mt-auto pt-10 border-t border-gray-200">
-          <div className="flex flex-col sm:flex-row justify-between gap-6 items-start sm:items-end">
-            <div className="text-[11px] text-gray-600 space-y-1">
-              <p className="font-bold text-[12px]" style={{ color: THEME.maroon }}>Payment instructions</p>
-              <p>Pay via PayNow using the QR code or enter the UEN in your banking app.</p>
-              <p><span className="font-semibold text-gray-800">UEN:</span> {PAYNOW_UEN}</p>
-              <p><span className="font-semibold text-gray-800">Amount:</span> {formatSGD(data.total)}</p>
-              <p><span className="font-semibold text-gray-800">Reference:</span> {data.invoiceId}</p>
+        {!isPaid && !isCancelled && (
+          <div className="mt-auto pt-10 border-t border-gray-200">
+            <div className="flex flex-col sm:flex-row justify-between gap-6 items-start sm:items-end">
+              <div className="text-[11px] text-gray-600 space-y-1">
+                <p className="font-bold text-[12px]" style={{ color: THEME.maroon }}>Payment instructions</p>
+                <p>Pay via PayNow using the QR code or enter the UEN in your banking app.</p>
+                <p><span className="font-semibold text-gray-800">UEN:</span> {PAYNOW_UEN}</p>
+                <p><span className="font-semibold text-gray-800">Amount:</span> {formatSGD(data.total)}</p>
+                <p><span className="font-semibold text-gray-800">Reference:</span> {data.invoiceId}</p>
+              </div>
+              <div className="text-center shrink-0">
+                <img src={paynowQr} alt="PayNow QR" className="w-[108px] h-[108px] rounded-lg" />
+                <p className="text-[9px] text-gray-400 mt-1.5">Scan to pay</p>
+              </div>
             </div>
-            <div className="text-center shrink-0">
-              <img src={paynowQr} alt="PayNow QR" className="w-[108px] h-[108px] rounded-lg" />
-              <p className="text-[9px] text-gray-400 mt-1.5">Scan to pay</p>
-            </div>
+            <p className="text-center text-[10px] text-gray-400 italic mt-8">
+              Thank you for your business — {data.company.phone} | {data.company.email}
+            </p>
           </div>
-          <p className="text-center text-[10px] text-gray-400 italic mt-8">
+        )}
+        {(isPaid || isCancelled) && (
+          <p className="mt-auto pt-10 border-t border-gray-200 text-center text-[10px] text-gray-400 italic">
             Thank you for your business — {data.company.phone} | {data.company.email}
           </p>
-        </div>
+        )}
       </div>
     </div>
   )

@@ -51,7 +51,16 @@ function mapProduct(row) {
 
 function normalizeBigintId(value) {
   if (value == null || value === '') return null
-  return value
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+function normalizeDateField(value) {
+  if (value == null || value === '') return null
+  const s = String(value).trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
+  const t = new Date(s).getTime()
+  return Number.isFinite(t) ? new Date(s).toISOString().split('T')[0] : null
 }
 
 function sanitizeInvoiceItems(items) {
@@ -74,8 +83,8 @@ function sanitizeInvoiceItems(items) {
 export function sanitizeInvoiceForSync(inv) {
   if (!inv || typeof inv !== 'object') return inv
   const bookedAt = inv.bookedAt ?? inv.booked_at
-  return {
-    ...inv,
+  const clean = {
+    id: inv.id,
     customerId: normalizeBigintId(inv.customerId ?? inv.customer_id),
     customerName: inv.customerName ?? inv.customer_name ?? '',
     customerPhone: inv.customerPhone ?? inv.customer_phone ?? '',
@@ -84,8 +93,8 @@ export function sanitizeInvoiceForSync(inv) {
     items: sanitizeInvoiceItems(inv.items),
     total: Number(inv.total) || 0,
     status: inv.status || 'pending',
-    date: inv.date,
-    due: inv.due ?? inv.due_date,
+    date: normalizeDateField(inv.date),
+    due: normalizeDateField(inv.due ?? inv.due_date),
     notes: inv.notes || '',
     discountType: inv.discountType ?? inv.discount_type ?? 'none',
     discountValue: Number(inv.discountValue ?? inv.discount_value) || 0,
@@ -94,6 +103,8 @@ export function sanitizeInvoiceForSync(inv) {
     bookedBy: inv.bookedBy ?? inv.booked_by ?? '',
     createdBy: inv.createdBy ?? inv.created_by ?? '',
   }
+  if (inv.updatedAt) clean.updatedAt = inv.updatedAt
+  return clean
 }
 
 function mapInvoice(row) {

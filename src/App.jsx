@@ -19,6 +19,7 @@ import { PondNameInput } from "./components/ui";
 import BackupExportPanel from "./components/BackupExportPanel";
 import { backupBaseName, downloadFile, expensesToCsv, invoicesToCsv } from "./lib/backupExport";
 import InvoiceDocument from "./components/InvoiceDocument";
+import InvoicePreviewFrame from "./components/InvoicePreviewFrame";
 import { downloadInvoicePdf } from "./lib/generateInvoicePdf";
 import { calcInvoiceAmounts } from "./lib/invoiceDesign";
 import { compressReceiptImage, expenseImageSrc } from "./lib/compressImage";
@@ -44,7 +45,7 @@ import {
 import { isSupabaseConfigured } from "./lib/supabase";
 import * as auth from "./lib/auth";
 import { markDeleted, clearAllDeletions, peekDeletions } from "./lib/syncDeletions";
-import { mergeRecords, mergePondData } from "./lib/cloudMerge";
+import { mergeRecords, mergePondData, mergeInvoices } from "./lib/cloudMerge";
 import { touchUpdatedAt } from "./lib/syncMeta";
 import {
   FISH_TYPES, PRODUCT_CATEGORIES, LIST_PAGE_SIZE,
@@ -118,6 +119,23 @@ function AccountsMarkConfirmModal({ open, recordLabel, currentlyBooked, onCancel
         <Btn variant="secondary" onClick={onCancel}>Cancel</Btn>
         <Btn variant={currentlyBooked ? "danger" : "success"} onClick={onSubmit}>
           <BookCheck size={14} />{currentlyBooked ? "Remove mark" : "Submit"}
+        </Btn>
+      </div>
+    </Modal>
+  );
+}
+
+function InvoiceCancelConfirmModal({ open, invoiceId, customerName, onCancel, onConfirm }) {
+  return (
+    <Modal open={open} onClose={onCancel} title="Cancel invoice?" size="sm">
+      <p className="text-slate-300 text-sm mb-4">
+        Cancel <strong className="text-white">{invoiceId}</strong> for <strong className="text-white">{customerName}</strong>?
+        Inventory and fish stock will be restored where applicable. This cannot be undone.
+      </p>
+      <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+        <Btn variant="secondary" onClick={onCancel} className="w-full sm:w-auto justify-center">Keep invoice</Btn>
+        <Btn variant="danger" onClick={onConfirm} className="w-full sm:w-auto justify-center">
+          <XCircle size={14} />Cancel invoice
         </Btn>
       </div>
     </Modal>
@@ -1219,7 +1237,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
 function InvoiceModule({
   invoices, setInvoices, setCustomers, setProducts, setStockLog, customers, products,
   koiFishList, setKoiFishList, onKoiSold, setCustomerKoiList,
-  addNotification, currentUser, openDraft, onDraftApplied,
+  addNotification, currentUser, openDraft, onDraftApplied, syncInvoicesNow,
 }) {
   const emptyItem = () => ({ name: "", qty: 1, price: "", productId: "", manual: true });
   const buildFormFromDraft = (draft) => ({
@@ -1243,6 +1261,7 @@ function InvoiceModule({
   const [bookedFilter, setBookedFilter] = useState("all");
   const [showOlderInvoices, setShowOlderInvoices] = useState(false);
   const [bookedConfirm, setBookedConfirm] = useState(null);
+  const [cancelConfirm, setCancelConfirm] = useState(null);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [formError, setFormError] = useState("");
   const [showWhatsappInput, setShowWhatsappInput] = useState(false);
@@ -1264,7 +1283,19 @@ function InvoiceModule({
   const hiddenInvoiceCount = invoices.filter((i) => !isAppVisibleInvoice(i)).length;
   const unbookedInvoiceCount = invoices.filter((i) => !i.booked && getInvoiceStatus(i) !== "cancelled").length;
   const invoicePage = usePagination(filtered, LIST_PAGE_SIZE, `${filter}-${bookedFilter}-${showOlderInvoices}`);
-  const activeViewInv = viewInv ? invoices.find((i) => i.id === viewInv.id) || viewInv : null;
+  const activeViewInv = useMemo(() => {
+    if (!viewInv) return null;
+    const fromList = invoices.find((i) => String(i.id) === String(viewInv.id));
+    if (!fromList) return viewInv;
+    const listTs = fromList.updatedAt ? new Date(fromList.updatedAt).getTime() : 0;
+    const viewTs = viewInv.updatedAt ? new Date(viewInv.updatedAt).getTime() : 0;
+    if (listTs === viewTs) {
+      const terminal = (s) => s === "paid" || s === "cancelled";
+      if (terminal(fromList.status) && !terminal(viewInv.status)) return fromList;
+      if (terminal(viewInv.status) && !terminal(fromList.status)) return viewInv;
+    }
+    return listTs >= viewTs ? fromList : viewInv;
+  }, [viewInv, invoices]);
   const canCancelInvoice = (inv) => ["pending", "overdue"].includes(getInvoiceStatus(inv));
   const canMarkPaid = (inv) => ["pending", "overdue"].includes(getInvoiceStatus(inv));
 
@@ -1538,7 +1569,17 @@ function InvoiceModule({
     }
     const inv = invoices.find((i) => i.id === id);
     if (!inv || !canCancelInvoice(inv)) return;
-    if (!confirm(`Cancel ${id} for ${inv.customerName}? This cannot be undone.`)) return;
+    setCancelConfirm({ id, customerName: inv.customerName });
+  };
+
+  const confirmCancelInvoice = () => {
+    const id = cancelConfirm?.id;
+    if (!id) return;
+    const inv = invoices.find((i) => i.id === id);
+    if (!inv || !canCancelInvoice(inv)) {
+      setCancelConfirm(null);
+      return;
+    }
     restoreStockForInvoice(setProducts, setStockLog, products, inv.items || [], {
       invoiceId: id,
       by: currentUser?.name || "Staff",
@@ -1548,6 +1589,7 @@ function InvoiceModule({
       i.id === id ? touchUpdatedAt(db.sanitizeInvoiceForSync({ ...i, status: "cancelled" })) : i
     )));
     setViewInv((prev) => (prev?.id === id ? null : prev));
+    setCancelConfirm(null);
     addNotification({ type: "info", title: "Invoice Cancelled", message: `${id} has been cancelled. Inventory and fish stock restored where applicable.` });
   };
 
@@ -1563,7 +1605,9 @@ function InvoiceModule({
     setInvoices((prev) => prev.map((i) => (
       i.id === id ? touchUpdatedAt(db.sanitizeInvoiceForSync({ ...i, status: "paid" })) : i
     )));
-    setViewInv((prev) => (prev?.id === id ? { ...prev, status: "paid" } : prev));
+    setViewInv((prev) => (
+      prev?.id === id ? touchUpdatedAt(db.sanitizeInvoiceForSync({ ...prev, status: "paid" })) : prev
+    ));
     if (inv.customerId != null && inv.customerId !== "") {
       setCustomers((prev) => prev.map((c) => {
         if (String(c.id) !== String(inv.customerId)) return c;
@@ -1571,6 +1615,7 @@ function InvoiceModule({
         return touchUpdatedAt({ ...c, totalSpent, tier: calcCustomerTier(totalSpent) });
       }));
     }
+    syncInvoicesNow?.().catch(() => {});
     addNotification({ type: "success", title: "Payment Received", message: `${id} marked as paid - ${formatSGD(paidTotal)}` });
   };
 
@@ -2143,8 +2188,10 @@ function InvoiceModule({
                 </div>
               </Card>
             )}
-            <div className="no-print rounded-xl border border-slate-600 bg-[#d4d4d4] p-4 sm:p-6 overflow-y-auto max-h-[min(80vh,920px)]">
-              <InvoiceDocument invoice={docInv} className="shadow-2xl" />
+            <div className="no-print rounded-xl border border-slate-600 bg-[#d4d4d4] p-3 sm:p-6 overflow-y-auto max-h-[min(80vh,920px)]">
+              <InvoicePreviewFrame>
+                <InvoiceDocument invoice={docInv} className="shadow-2xl" />
+              </InvoicePreviewFrame>
             </div>
             <p className="no-print text-xs text-slate-500 text-center">
               Open WhatsApp goes straight to the customer chat. Send your own message and attach the invoice with Download PDF.
@@ -2159,6 +2206,14 @@ function InvoiceModule({
         currentlyBooked={!!bookedConfirm?.currentlyBooked}
         onCancel={() => setBookedConfirm(null)}
         onSubmit={applyInvoiceBookedConfirm}
+      />
+
+      <InvoiceCancelConfirmModal
+        open={!!cancelConfirm}
+        invoiceId={cancelConfirm?.id || ""}
+        customerName={cancelConfirm?.customerName || ""}
+        onCancel={() => setCancelConfirm(null)}
+        onConfirm={confirmCancelInvoice}
       />
     </div>
   );
@@ -3620,8 +3675,10 @@ function DeliveryModule({
           const inv = invoices.find((i) => String(i.id) === String(invoicePreviewId));
           if (!inv) return <p className="text-slate-400 text-sm">Invoice not found.</p>;
           return (
-            <div className="rounded-xl border border-slate-600 bg-[#d4d4d4] p-4 sm:p-6 overflow-y-auto max-h-[min(80vh,920px)]">
-              <InvoiceDocument invoice={enrichInvoiceCustomer(inv, customers)} className="shadow-2xl" />
+            <div className="rounded-xl border border-slate-600 bg-[#d4d4d4] p-3 sm:p-6 overflow-y-auto max-h-[min(80vh,920px)]">
+              <InvoicePreviewFrame>
+                <InvoiceDocument invoice={enrichInvoiceCustomer(inv, customers)} className="shadow-2xl" />
+              </InvoicePreviewFrame>
             </div>
           );
         })()}
@@ -5019,6 +5076,7 @@ export default function App() {
   const syncTimersRef = useRef({});
   const syncInFlightRef = useRef(0);
   const syncStateRef = useRef({});
+  const invoicesNormalizedRef = useRef(false);
 
   const [users, setUsers] = useState(isSupabaseConfigured ? [] : LOCAL_DEMO_USERS);
   const [customers, setCustomers] = useState(INITIAL_CUSTOMERS);
@@ -5109,7 +5167,7 @@ export default function App() {
       users: data.users,
       customers: data.customers || [],
       products: data.products || [],
-      invoices: data.invoices || [],
+      invoices: (data.invoices || []).map(db.sanitizeInvoiceForSync),
       expenses: data.expenses || [],
       deliveries: data.deliveries || [],
       events: data.events || [],
@@ -5125,7 +5183,7 @@ export default function App() {
     if (merge) {
       setCustomers((prev) => mergeRecords(prev, cleaned.customers, peekDeletions("customers")));
       setProducts((prev) => mergeRecords(prev, cleaned.products, peekDeletions("products")));
-      setInvoices((prev) => mergeRecords(prev, cleaned.invoices, peekDeletions("invoices")));
+      setInvoices((prev) => mergeInvoices(prev, cleaned.invoices, peekDeletions("invoices")));
       setExpenses((prev) => mergeRecords(prev, cleaned.expenses, peekDeletions("expenses")));
       setDeliveries((prev) => mergeRecords(prev, cleaned.deliveries, peekDeletions("deliveries")));
       setEvents((prev) => mergeRecords(prev, cleaned.events, peekDeletions("events")));
@@ -5266,8 +5324,20 @@ export default function App() {
     syncStateRef.current = syncState;
   }, [syncState]);
 
+  const ensureCloudSyncReady = useCallback(async () => {
+    if (!isSupabaseConfigured || !auth.hasCloudSession()) return false;
+    if (auth.getSessionToken()) return true;
+    if (!auth.sessionNeedsRefresh()) return false;
+    try {
+      return await auth.bootstrapCloudSession();
+    } catch {
+      return false;
+    }
+  }, []);
+
   const flushPendingCloudSync = useCallback(async () => {
     if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
+    if (!(await ensureCloudSyncReady())) return;
     Object.values(syncTimersRef.current).forEach((t) => clearTimeout(t));
     syncTimersRef.current = {};
     const tasks = SYNC_ENTITIES.filter((e) => hasPermission(currentUser, e.perm));
@@ -5283,7 +5353,30 @@ export default function App() {
     } finally {
       syncInFlightRef.current -= 1;
     }
-  }, [cloudHydrated, currentUser, handleSyncFailure, touchLastSync]);
+  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync]);
+
+  const syncInvoicesNow = useCallback(async () => {
+    if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
+    if (!hasPermission(currentUser, "invoices")) return;
+    const timerKey = "invoices:Invoices";
+    if (syncTimersRef.current[timerKey]) {
+      clearTimeout(syncTimersRef.current[timerKey]);
+      delete syncTimersRef.current[timerKey];
+    }
+    if (!(await ensureCloudSyncReady())) return;
+    syncInFlightRef.current += 1;
+    try {
+      await db.syncInvoices(syncStateRef.current.invoices);
+      setCloudSync(true);
+      setCloudError(null);
+      touchLastSync();
+    } catch (err) {
+      handleSyncFailure(err);
+      throw err;
+    } finally {
+      syncInFlightRef.current -= 1;
+    }
+  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync]);
 
   const syncDebounced = useCallback((perm, label, fn, data) => {
     if (!dataReady || !cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
@@ -5293,7 +5386,13 @@ export default function App() {
     syncTimersRef.current[key] = setTimeout(() => {
       delete syncTimersRef.current[key];
       syncInFlightRef.current += 1;
-      fn(data)
+      (async () => {
+        const ready = await ensureCloudSyncReady();
+        if (!ready) {
+          throw new Error("Session needs refresh. Log out and log in again.");
+        }
+        await fn(data);
+      })()
         .then(() => {
           setCloudSync(true);
           setCloudError(null);
@@ -5311,12 +5410,15 @@ export default function App() {
       if (syncTimersRef.current[key]) clearTimeout(syncTimersRef.current[key]);
       delete syncTimersRef.current[key];
     };
-  }, [dataReady, cloudHydrated, currentUser, handleSyncFailure, touchLastSync]);
+  }, [dataReady, cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync]);
 
   const retryCloudSync = useCallback(async () => {
     if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser || !cloudHydrated) return;
     setCloudRetrying(true);
     try {
+      if (!(await ensureCloudSyncReady())) {
+        throw new Error("Session needs refresh. Log out and log in again.");
+      }
       const tasks = SYNC_ENTITIES.filter((e) => hasPermission(currentUser, e.perm));
       const results = await Promise.allSettled(
         tasks.map((e) => e.sync(syncState[e.key])),
@@ -5348,7 +5450,7 @@ export default function App() {
       setCloudRetrying(false);
     }
   }, [
-    currentUser, cloudHydrated, syncState, handleSyncFailure, dismissToast, showProminentToast, touchLastSync,
+    currentUser, cloudHydrated, syncState, ensureCloudSyncReady, handleSyncFailure, dismissToast, showProminentToast, touchLastSync,
   ]);
 
   const refreshFromCloud = useCallback(async ({ force = false, quiet = false } = {}) => {
@@ -5413,6 +5515,12 @@ export default function App() {
       window.removeEventListener("pageshow", onPageShow);
     };
   }, [currentUser, refreshFromCloud, flushPendingCloudSync]);
+
+  useEffect(() => {
+    if (!cloudHydrated || invoicesNormalizedRef.current) return;
+    invoicesNormalizedRef.current = true;
+    setInvoices((prev) => prev.map((inv) => db.sanitizeInvoiceForSync(inv)));
+  }, [cloudHydrated]);
 
   useEffect(() => syncDebounced("customers", "Customers", db.syncCustomers, customers), [customers, syncDebounced]);
   useEffect(() => syncDebounced("inventory", "Inventory", db.syncProducts, products), [products, syncDebounced]);
@@ -5682,7 +5790,7 @@ export default function App() {
       case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} addNotification={addNotification} canEdit={canEditRecords(currentUser)} />);
       case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondData} addNotification={addNotification} currentUser={currentUser} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} />);
-      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} />);
+      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} syncInvoicesNow={syncInvoicesNow} />);
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} addNotification={addNotification} currentUser={currentUser} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpenses} addNotification={addNotification} currentUser={currentUser} />);
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} />);
