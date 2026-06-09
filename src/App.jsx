@@ -4927,13 +4927,25 @@ export default function App() {
           setDataReady(true);
           return;
         }
-        const sessionUser = auth.getSession()?.user;
+        let sessionUser = auth.getSession()?.user;
         if (!sessionUser) {
           setCurrentUser(null);
           setCloudSync(true);
           setCloudError(null);
           setDataReady(true);
           return;
+        }
+        if (auth.sessionNeedsRefresh()) {
+          const booted = await auth.bootstrapCloudSession();
+          sessionUser = auth.getSession()?.user;
+          if (!booted || !sessionUser) {
+            auth.clearSession();
+            setCurrentUser(null);
+            setCloudSync(true);
+            setCloudError(null);
+            setDataReady(true);
+            return;
+          }
         }
         const data = await db.fetchAllData();
         applyCloudData(data);
@@ -5114,11 +5126,16 @@ export default function App() {
       }
     };
     const onOnline = () => refreshFromCloud({ quiet: true });
+    const onPageShow = (event) => {
+      if (event.persisted) refreshFromCloud({ quiet: true });
+    };
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("online", onOnline);
+    window.addEventListener("pageshow", onPageShow);
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("online", onOnline);
+      window.removeEventListener("pageshow", onPageShow);
     };
   }, [currentUser, refreshFromCloud, flushPendingCloudSync]);
 

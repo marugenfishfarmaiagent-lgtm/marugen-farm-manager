@@ -2,6 +2,12 @@ import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
 
 const SESSION_KEY = 'marugen_session'
 
+export function isInstalledPwa() {
+  if (typeof window === 'undefined') return false
+  return window.matchMedia('(display-mode: standalone)').matches
+    || window.navigator.standalone === true
+}
+
 export function getAuthHeaders(extraHeaders = {}) {
   const headers = {
     apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
@@ -26,29 +32,39 @@ export function cloudFetch(url, options = {}) {
   })
 }
 
+function mirrorSessionStorage(raw) {
+  if (!raw) return
+  try {
+    sessionStorage.setItem(SESSION_KEY, raw)
+  } catch {
+    /* private mode */
+  }
+}
+
+function mirrorLocalStorage(raw) {
+  if (!raw) return
+  try {
+    localStorage.setItem(SESSION_KEY, raw)
+  } catch {
+    /* quota or private mode */
+  }
+}
+
 function readSessionRaw() {
   if (isSupabaseConfigured) {
-    const fromSession = sessionStorage.getItem(SESSION_KEY)
     const fromLocal = localStorage.getItem(SESSION_KEY)
-    if (fromLocal && !fromSession) {
-      try {
-        sessionStorage.setItem(SESSION_KEY, fromLocal)
-      } catch {
-        /* private mode */
-      }
+    const fromSession = sessionStorage.getItem(SESSION_KEY)
+    const raw = fromLocal || fromSession
+    if (raw) {
+      mirrorSessionStorage(raw)
+      mirrorLocalStorage(raw)
     }
-    return fromSession || fromLocal
+    return raw
   }
   const fromLocal = localStorage.getItem(SESSION_KEY)
   if (fromLocal) return fromLocal
   const fromSession = sessionStorage.getItem(SESSION_KEY)
-  if (fromSession) {
-    try {
-      localStorage.setItem(SESSION_KEY, fromSession)
-    } catch {
-      /* quota or private mode */
-    }
-  }
+  if (fromSession) mirrorLocalStorage(fromSession)
   return fromSession
 }
 
@@ -64,12 +80,8 @@ export function getSession() {
 export function setSession({ token, user }) {
   const payload = { user, ...(token ? { token } : {}) }
   const json = JSON.stringify(payload)
-  sessionStorage.setItem(SESSION_KEY, json)
-  try {
-    localStorage.setItem(SESSION_KEY, json)
-  } catch {
-    /* quota or private mode */
-  }
+  mirrorSessionStorage(json)
+  mirrorLocalStorage(json)
 }
 
 export function clearSession() {
@@ -86,11 +98,33 @@ export function hasCloudSession() {
   return Boolean(getSession()?.user)
 }
 
+/** True when user is stored but mobile/PWA auth token is missing (needs one re-login or bootstrap). */
+export function sessionNeedsRefresh() {
+  if (!isSupabaseConfigured) return false
+  const session = getSession()
+  return Boolean(session?.user && !session?.token)
+}
+
+function applyAuthBootstrap(data) {
+  if (!data?.authenticated || !data?.user || !data?.sessionToken) return false
+  setSession({ user: data.user, token: data.sessionToken })
+  return true
+}
+
+export async function bootstrapCloudSession() {
+  if (!isSupabaseConfigured) return false
+  const res = await cloudFetch(`${getFunctionsUrl()}/auth-login`)
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Auth status failed')
+  return applyAuthBootstrap(data)
+}
+
 export async function authStatus() {
   if (!isSupabaseConfigured) return { needsSetup: false, hasUsers: true, cloud: false }
   const res = await cloudFetch(`${getFunctionsUrl()}/auth-login`)
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Auth status failed')
+  applyAuthBootstrap(data)
   return { ...data, cloud: true }
 }
 

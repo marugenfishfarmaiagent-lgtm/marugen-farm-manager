@@ -1,4 +1,4 @@
-import { clearSession, getAuthHeaders } from './auth'
+import { clearSession, cloudFetch, getAuthHeaders } from './auth'
 import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
 import { normalizeCustomerKoiRecord } from '../data/constants'
 import { emptyPondData } from './cloudData'
@@ -262,10 +262,7 @@ export function mapPublicUsers(rows) {
 
 export async function isDatabaseEmpty() {
   if (!isSupabaseConfigured) return false
-  const res = await fetch(`${getFunctionsUrl()}/auth-login`, {
-    credentials: 'include',
-    headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY },
-  })
+  const res = await cloudFetch(`${getFunctionsUrl()}/auth-login`)
   const data = await res.json()
   return data.needsSetup === true
 }

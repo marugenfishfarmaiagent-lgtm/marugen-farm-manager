@@ -1,9 +1,12 @@
 {
+  "id": "/",
   "name": "Marugen Farm Manager",
   "short_name": "Marugen",
   "description": "Marugen Koi & Arowana Farm management",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "browser"],
   "background_color": "#020617",
   "theme_color": "#020617",
   "icons": [

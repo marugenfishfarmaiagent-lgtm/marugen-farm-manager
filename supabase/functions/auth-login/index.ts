@@ -90,6 +90,25 @@ Deno.serve(async (req) => {
       if (!(await checkRateLimit(db, `auth-status:${clientIp(req)}`, 60, 60_000))) {
         return jsonResponse({ error: "Too many requests" }, 429, req);
       }
+
+      const existingToken = sessionTokenFrom(req);
+      const sessionUser = await validateSession(existingToken);
+      if (sessionUser) {
+        const { data: row } = await db.from("farm_users")
+          .select("id, name, role, active, permissions, is_system")
+          .eq("id", sessionUser.id)
+          .maybeSingle();
+        if (row && row.active !== false) {
+          return jsonResponse({
+            authenticated: true,
+            user: publicUser(row),
+            sessionToken: existingToken,
+            needsSetup: false,
+            hasUsers: true,
+          }, 200, req);
+        }
+      }
+
       const { count } = await db.from("farm_users").select("*", { count: "exact", head: true });
       return jsonResponse({
         needsSetup: count === 0,
