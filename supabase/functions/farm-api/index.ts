@@ -42,6 +42,14 @@ function nullableBigint(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** expenses.id is BIGINT — reject string ids like EXP-xxx from older clients. */
+function resolveExpenseId(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.trunc(n);
+}
+
 function nullableNumeric(value: unknown, fallback = 0): number {
   if (value == null || value === "") return fallback;
   const n = Number(value);
@@ -347,12 +355,13 @@ Deno.serve(async (req) => {
         return J({ error: "Permission denied (expenses)" }, 403);
       }
       const { expenseId, imageData, imageName } = body;
-      if (expenseId == null) return J({ error: "expenseId required" }, 400);
+      const id = resolveExpenseId(expenseId);
+      if (id == null) return J({ error: "Valid numeric expenseId required" }, 400);
       if (!imageData || typeof imageData !== "string" || !imageData.startsWith("data:image/")) {
         return J({ error: "Valid image data required" }, 400);
       }
-      const path = await uploadExpenseReceiptImage(db, expenseId, imageData);
-      const imageUrl = await signExpenseReceiptUrl(db, path, expenseId);
+      const path = await uploadExpenseReceiptImage(db, id, imageData);
+      const imageUrl = await signExpenseReceiptUrl(db, path, id);
       return J({ imageUrl, imagePath: path, imageName: imageName || "" });
     }
 
@@ -751,8 +760,9 @@ Deno.serve(async (req) => {
           "Medicine", "Packaging", "Marketing", "Other",
         ]);
         for (const e of incoming) {
-          if (e.id == null || String(e.id).trim() === "") {
-            return J({ error: "Expense id is required" }, 400);
+          const expenseId = resolveExpenseId(e.id);
+          if (expenseId == null) {
+            return J({ error: `Invalid expense id: ${e.id}` }, 400);
           }
           if (!String(e.date ?? "").trim()) return J({ error: "Expense date is required" }, 400);
           if (e.amount != null && e.amount !== "") {
@@ -764,16 +774,17 @@ Deno.serve(async (req) => {
           }
         }
         const rows = await Promise.all(incoming.map(async (e) => {
-          let imagePath = normalizeImageUrlForStorage(String(e.imageUrl ?? ""), e.id);
+          const expenseId = resolveExpenseId(e.id)!;
+          let imagePath = normalizeImageUrlForStorage(String(e.imageUrl ?? ""), expenseId);
           let imageData = e.imageData ?? null;
           if (imageData && typeof imageData === "string" && imageData.startsWith("data:image/")) {
-            imagePath = await uploadExpenseReceiptImage(db, e.id, imageData);
+            imagePath = await uploadExpenseReceiptImage(db, expenseId, imageData);
             imageData = null;
           } else if (imagePath) {
             imageData = null;
           }
           return withTs({
-            id: e.id, category: e.category ?? null, amount: e.amount ?? null, date: e.date, note: e.note,
+            id: expenseId, category: e.category ?? null, amount: e.amount ?? null, date: e.date, note: e.note,
             image_data: imageData, image_name: e.imageName ?? "", image_url: imagePath,
             added_by: e.addedBy,
             booked: Boolean(e.booked), booked_at: e.bookedAt ?? null, booked_by: e.bookedBy ?? "",

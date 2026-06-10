@@ -15,6 +15,7 @@ import { readKoiImageFile } from '../lib/koiImage'
 import { openWhatsAppChat } from '../lib/invoiceWhatsApp'
 import { isAppVisibleCustomerKoi } from '../lib/retention'
 import { uploadInlinePhotoIfNeeded } from '../lib/farmImage'
+import { persistCustomerKoiList } from '../lib/imageUploadOps'
 import { touchUpdatedAt } from '../lib/syncMeta'
 import StoredImage from '../components/StoredImage'
 import EmptyState from '../components/ui/EmptyState'
@@ -45,21 +46,39 @@ const emptyRecord = () => ({
   status: CUSTOMER_KOI_STATUS.IN_POND, collectedDate: null,
 })
 
-function PhotoPicker({ photo, onPick, onError, label = 'Photo' }) {
+function PhotoPicker({ photo, onPick, onError, label = 'Photo', disabled = false }) {
+  const [compressing, setCompressing] = useState(false)
   const pick = async (file) => {
-    if (!file) return
+    if (!file || disabled || compressing) return
     try {
+      setCompressing(true)
       onPick(await readKoiImageFile(file))
     } catch (err) {
       onError?.(err?.message || 'Could not process image.')
+    } finally {
+      setCompressing(false)
     }
   }
   return (
     <div>
       <p className="text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wide">{label}</p>
-      <label className="block cursor-pointer rounded-xl border-2 border-dashed border-slate-600 p-4 text-center">
-        {photo ? <img src={photo} alt="" className="w-40 h-40 mx-auto object-cover rounded-lg" /> : <p className="text-slate-500 text-sm py-6">Upload photo — large files auto-compressed</p>}
-        <input type="file" accept="image/*" className="hidden" onChange={(e) => pick(e.target.files?.[0])} />
+      <label className={`block rounded-xl border-2 border-dashed border-slate-600 p-4 text-center transition-colors ${disabled || compressing ? 'opacity-60 pointer-events-none' : 'cursor-pointer hover:border-cyan-500/50'}`}>
+        {photo ? <img src={photo} alt="" className="w-40 h-40 mx-auto object-cover rounded-lg" /> : (
+          <p className="text-slate-500 text-sm py-6">
+            {compressing ? 'Compressing photo…' : 'Upload photo — large files auto-compressed'}
+          </p>
+        )}
+        <input
+          type="file"
+          accept="image/*"
+          className="hidden"
+          disabled={disabled || compressing}
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            e.target.value = ''
+            pick(file)
+          }}
+        />
       </label>
     </div>
   )
@@ -270,7 +289,9 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
         collectedDate: form.status === CUSTOMER_KOI_STATUS.COLLECTED ? (form.collectedDate || today()) : null,
         deathDate: null, deathCause: null, deathPhoto: null, deathNotes: '',
       })
-      setRecords((prev) => [...prev, rec])
+      const nextList = [...records, rec]
+      await persistCustomerKoiList(nextList)
+      setRecords(nextList)
       addNotification({ type: 'success', title: 'Record Added', message: `${displayFishName(rec)} added for ${customer.name}` })
       setShowAdd(false)
       setForm(emptyRecord())
@@ -333,7 +354,9 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
         (data) => db.uploadCustomerKoiPhoto(editRec.id, data, 'photo'),
       )
       updated = touchUpdatedAt({ ...updated, photo })
-      setRecords((prev) => prev.map((r) => (sameRecordId(r.id, editRec.id) ? updated : r)))
+      const nextList = records.map((r) => (sameRecordId(r.id, editRec.id) ? updated : r))
+      await persistCustomerKoiList(nextList)
+      setRecords(nextList)
       addNotification({ type: 'success', title: 'Updated', message: `${displayFishName(updated)} — ${formatCustomerKoiStatus(updated.status)}` })
       setEditRec(null)
     } catch (err) {
@@ -386,9 +409,9 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
         (data) => db.uploadCustomerKoiPhoto(deathRec.id, data, 'death_photo'),
       )
       const patch = buildCustomerKoiDeathPatch(deathRec, { ...deathForm, deathPhoto })
-      setRecords((prev) => prev.map((r) => (
-        sameRecordId(r.id, deathRec.id) ? patch : r
-      )))
+      const nextList = records.map((r) => (sameRecordId(r.id, deathRec.id) ? patch : r))
+      await persistCustomerKoiList(nextList)
+      setRecords(nextList)
       addNotification({ type: 'warning', title: 'Death Recorded', message: `${displayFishName(deathRec)} (${deathRec.customerName}) recorded deceased` })
       setDeathRec(null)
     } catch (err) {

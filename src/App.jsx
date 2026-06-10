@@ -29,6 +29,7 @@ import { downloadInvoicePdf } from "./lib/generateInvoicePdf";
 import { calcInvoiceAmounts, sortInvoices } from './lib/invoiceDesign';
 import { computeDashboardMetrics, dashboardInvoiceTotal } from './lib/dashboardMetrics';
 import { compressReceiptImage, expenseImageSrc } from "./lib/compressImage";
+import { persistExpenseList } from "./lib/imageUploadOps";
 import { enrichInvoiceCustomer, findCustomerWhatsApp, formatCustomerAddress, findCustomerRecord, openWhatsAppChat, resolveInvoiceCustomer, resolveInvoiceWhatsApp } from "./lib/invoiceWhatsApp";
 import { lookupSingaporePostalAddress } from "./lib/sgPostalLookup";
 import {
@@ -2945,7 +2946,9 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
         const { imageUrl } = await db.uploadExpenseReceipt(e.id, e.imageData, e.imageName);
         e = { ...e, imageUrl: imageUrl || "", imageData: "" };
       }
-      setExpenses((prev) => [...prev, e]);
+      const nextList = [...expenses, e];
+      await persistExpenseList(nextList);
+      setExpenses(nextList);
       addNotification({
         type: "success",
         title: "Receipt Saved",

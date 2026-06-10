@@ -1,5 +1,6 @@
 /** Client helpers for private Storage paths and signed URL sync. */
 
+import { hasCloudSession } from './auth'
 import { isSupabaseConfigured } from './supabase'
 
 export function isInlineImage(src) {
@@ -10,8 +11,13 @@ export function isInlineImage(src) {
 export async function uploadInlinePhotoIfNeeded(src, uploadFn) {
   if (!src || !isInlineImage(src)) return src ?? null
   if (!isSupabaseConfigured) return src
+  if (!hasCloudSession()) {
+    throw new Error('Session expired. Log out and log in again, then retry.')
+  }
   const result = await uploadFn(src)
-  return result?.url || result?.imageUrl || src
+  const url = result?.url || result?.imageUrl
+  if (!url) throw new Error('Cloud photo upload failed. Check connection and try again.')
+  return url
 }
 
 export function isSignedHttpUrl(src) {

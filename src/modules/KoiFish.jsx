@@ -23,6 +23,7 @@ import {
 } from '../lib/koiOps'
 import { isAppVisibleKoiFarm } from '../lib/retention'
 import { uploadInlinePhotoIfNeeded } from '../lib/farmImage'
+import { persistKoiFishList } from '../lib/imageUploadOps'
 import { touchUpdatedAt } from '../lib/syncMeta'
 
 const STATUS_STYLE = {
@@ -44,31 +45,45 @@ const emptyKoiForm = () => ({
   pondName: 'A1', price: '', notes: '',
 })
 
-function PhotoPicker({ photo, onPick, onError, label = 'Photo' }) {
+function PhotoPicker({ photo, onPick, onError, label = 'Photo', disabled = false }) {
+  const [compressing, setCompressing] = useState(false)
   const pick = async (file) => {
-    if (!file) return
+    if (!file || disabled || compressing) return
     try {
+      setCompressing(true)
       const dataUrl = await readKoiImageFile(file)
       onPick(dataUrl)
     } catch (err) {
       onError?.(err?.message || 'Could not process image.')
+    } finally {
+      setCompressing(false)
     }
   }
   return (
     <div>
       <p className="text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wide">{label}</p>
-      <label className="block cursor-pointer rounded-xl border-2 border-dashed border-slate-600 hover:border-cyan-500/50 p-3 text-center transition-colors">
+      <label className={`block rounded-xl border-2 border-dashed border-slate-600 hover:border-cyan-500/50 p-3 text-center transition-colors ${disabled || compressing ? 'opacity-60 pointer-events-none' : 'cursor-pointer'}`}>
         <div className="w-full max-w-xs mx-auto aspect-square bg-slate-900 rounded-lg flex items-center justify-center overflow-hidden">
           {photo ? (
             <img src={photo} alt="Preview" className="w-full h-full object-contain" />
           ) : (
             <div className="py-8 text-slate-500">
               <ImagePlus size={32} className="mx-auto mb-2 text-cyan-400" />
-              <p className="text-sm">Click to upload — large photos auto-compressed</p>
+              <p className="text-sm">{compressing ? 'Compressing photo…' : 'Click to upload — large photos auto-compressed'}</p>
             </div>
           )}
         </div>
-        <input type="file" accept="image/*" className="hidden" onChange={(e) => pick(e.target.files?.[0])} />
+        <input
+          type="file"
+          accept="image/*"
+          className="hidden"
+          disabled={disabled || compressing}
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            e.target.value = ''
+            pick(file)
+          }}
+        />
       </label>
     </div>
   )
@@ -223,7 +238,9 @@ export default function KoiFish({
         sellDisposition: null, keepPondName: null,
         deathDate: null, deathCause: null, deathPhoto: null,
       })
-      setKoiList((prev) => [...prev, koi])
+      const nextList = [...koiList, koi]
+      await persistKoiFishList(nextList)
+      setKoiList(nextList)
       addNotification({ type: 'success', title: 'Koi Added', message: `${koi.variety} added to ${koi.pondName}` })
       setShowAdd(false)
       setForm(emptyKoiForm())
@@ -274,7 +291,9 @@ export default function KoiFish({
         sellDisposition: null,
         keepPondName: null,
       })
-      setKoiList((prev) => prev.map((k) => (sameKoiId(k.id, editKoi.id) ? updated : k)))
+      const nextList = koiList.map((k) => (sameKoiId(k.id, editKoi.id) ? updated : k))
+      await persistKoiFishList(nextList)
+      setKoiList(nextList)
       addNotification({ type: 'success', title: 'Updated', message: `${editKoi.id} saved` })
       setEditKoi(null)
     } catch (err) {
@@ -422,9 +441,9 @@ export default function KoiFish({
         (data) => db.uploadKoiFishPhoto(deathKoi.id, data, 'death_photo'),
       )
       const patch = buildDeceasedKoiPatch(deathKoi, { ...deathForm, deathPhoto })
-      setKoiList((prev) => prev.map((k) => (
-        sameKoiId(k.id, deathKoi.id) ? patch : k
-      )))
+      const nextList = koiList.map((k) => (sameKoiId(k.id, deathKoi.id) ? patch : k))
+      await persistKoiFishList(nextList)
+      setKoiList(nextList)
       addNotification({ type: 'warning', title: 'Death Recorded', message: `${deathKoi.name || deathKoi.variety} recorded as deceased` })
       setDeathKoi(null)
       setDeathForm({ deathDate: today(), deathCause: KOI_DEATH_CAUSES[0], deathPhoto: null, notes: '' })

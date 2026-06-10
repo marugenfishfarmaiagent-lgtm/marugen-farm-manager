@@ -1,7 +1,12 @@
-import { EXPENSE_CATEGORIES, genId } from '../data/constants'
+import { EXPENSE_CATEGORIES } from '../data/constants'
 import { touchUpdatedAt } from './syncMeta'
 
 const NOTE_MAX_LEN = 500
+
+/** Postgres expenses.id is BIGINT — must be numeric, not EXP-xxx strings. */
+export function genExpenseId() {
+  return Date.now() + Math.floor(Math.random() * 10000)
+}
 
 export function sameExpenseId(a, b) {
   if (a == null || b == null) return false
@@ -65,7 +70,7 @@ export function buildExpenseReceiptRecord({
   return {
     ok: true,
     expense: touchUpdatedAt(normalizeExpenseRecord({
-      id: genId('EXP'),
+      id: genExpenseId(),
       category: null,
       amount: null,
       date: date.trim(),

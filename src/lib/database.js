@@ -278,14 +278,32 @@ function mapWhatsappGroup(row) {
 
 async function apiCall(body) {
   const headers = getAuthHeaders({ 'Content-Type': 'application/json' })
+  let res
+  try {
+    res = await fetch(`${getFunctionsUrl()}/farm-api`, {
+      method: 'POST',
+      credentials: 'omit',
+      headers,
+      body: JSON.stringify(body),
+    })
+  } catch (err) {
+    const msg = err?.message || 'Network request failed'
+    if (/load failed|failed to fetch|networkerror/i.test(msg)) {
+      throw new Error('Cannot reach the server. Check your connection and try again.')
+    }
+    throw new Error(msg)
+  }
 
-  const res = await fetch(`${getFunctionsUrl()}/farm-api`, {
-    method: 'POST',
-    credentials: 'omit',
-    headers,
-    body: JSON.stringify(body),
-  })
-  const data = await res.json()
+  const raw = await res.text()
+  let data = {}
+  if (raw) {
+    try {
+      data = JSON.parse(raw)
+    } catch {
+      throw new Error(raw.slice(0, 180) || `API error: ${res.status}`)
+    }
+  }
+
   if (res.status === 401) {
     clearSession()
     throw new Error('Session expired. Please log in again.')

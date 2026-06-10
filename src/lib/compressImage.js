@@ -13,13 +13,51 @@ export const IMAGE_COMPRESS = {
   MIN_DIMENSION: 640,
 }
 
+const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp|heic|heif)$/i
+
+export function isLikelyImageFile(file) {
+  if (!file) return false
+  if (file.type?.startsWith('image/')) return true
+  return IMAGE_EXT.test(file.name || '')
+}
+
 function validateImageFile(file, maxInputBytes) {
-  if (!file?.type?.startsWith('image/')) {
+  if (!isLikelyImageFile(file)) {
     throw new Error('Please choose an image file (JPG, PNG, etc.).')
   }
   if (file.size > maxInputBytes) {
     const mb = Math.round(maxInputBytes / (1024 * 1024))
     throw new Error(`Image is too large. Please use a photo under ${mb} MB.`)
+  }
+}
+
+function loadHtmlImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('Could not read this image format. Try JPG or PNG.'))
+    img.src = url
+  })
+}
+
+/** createImageBitmap first; fall back to <img> for HEIC / odd mobile formats. */
+async function loadImageBitmap(file) {
+  try {
+    return await createImageBitmap(file)
+  } catch {
+    const url = URL.createObjectURL(file)
+    try {
+      const img = await loadHtmlImage(url)
+      const canvas = document.createElement('canvas')
+      canvas.width = img.naturalWidth || img.width
+      canvas.height = img.naturalHeight || img.height
+      const ctx = canvas.getContext('2d')
+      if (!ctx) throw new Error('Could not process image.')
+      ctx.drawImage(img, 0, 0)
+      return await createImageBitmap(canvas)
+    } finally {
+      URL.revokeObjectURL(url)
+    }
   }
 }
 
@@ -76,7 +114,7 @@ export async function compressImageFile(file, {
 } = {}) {
   validateImageFile(file, maxInputBytes)
 
-  const bitmap = await createImageBitmap(file)
+  const bitmap = await loadImageBitmap(file)
   let limitW = maxWidth
   let limitH = maxHeight
   let bestBlob = null
