@@ -74,7 +74,9 @@ export default function PondManagement({
   const [editingGuideId, setEditingGuideId] = useState(null)
   const [editingTreatmentId, setEditingTreatmentId] = useState(null)
   const [completingReminderId, setCompletingReminderId] = useState(null)
+  const [savingReminder, setSavingReminder] = useState(false)
   const completingReminderRef = useRef(null)
+  const savingReminderRef = useRef(false)
 
   const todayStr = today()
   const activeTreatments = visiblePond.treatmentLogs.filter((t) => t.startDate <= todayStr && (!t.endDate || t.endDate >= todayStr))
@@ -262,6 +264,7 @@ export default function PondManagement({
 
   const saveReminder = async () => {
     if (!canEdit) { denyEdit(); return }
+    if (savingReminderRef.current) return
     if (!hasPonds) {
       addNotification({ type: 'error', title: 'No Ponds', message: 'Add a pond before creating a reminder.' })
       return
@@ -291,6 +294,8 @@ export default function PondManagement({
       return nextPond
     })
     setRemindModal(null)
+    savingReminderRef.current = true
+    setSavingReminder(true)
     try {
       await onPersistPondData?.(nextPond)
       await onSyncReminderCalendar?.('upsert', newReminder)
@@ -314,6 +319,9 @@ export default function PondManagement({
         title: 'Save failed',
         message: 'Reminder could not be saved to cloud. Try again.',
       })
+    } finally {
+      savingReminderRef.current = false
+      setSavingReminder(false)
     }
   }
 
@@ -748,7 +756,7 @@ export default function PondManagement({
         <Input label="Due date" type="date" value={remindForm.dueDate} onChange={(e) => setRemindForm((f) => ({ ...f, dueDate: e.target.value }))} className="mt-3" />
         <Input label="Time" type="time" value={remindForm.dueTime} onChange={(e) => setRemindForm((f) => ({ ...f, dueTime: e.target.value }))} className="mt-3" />
         <Textarea label="Note" value={remindForm.note} onChange={(e) => setRemindForm((f) => ({ ...f, note: e.target.value }))} className="mt-3" />
-        <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setRemindModal(null)}>Cancel</Btn><Btn onClick={saveReminder} disabled={!canEdit}>Save</Btn></div>
+        <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setRemindModal(null)} disabled={savingReminder}>Cancel</Btn><Btn onClick={saveReminder} disabled={!canEdit || savingReminder}>{savingReminder ? 'Saving…' : 'Save'}</Btn></div>
       </Modal>
 
       <Modal

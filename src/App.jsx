@@ -5446,6 +5446,7 @@ export default function App() {
   const lastUserActivityAt = useRef(Date.now());
   const syncTimersRef = useRef({});
   const syncInFlightRef = useRef(0);
+  const pondSyncChainRef = useRef(Promise.resolve());
   const syncStateRef = useRef({});
   const inventorySyncPendingRef = useRef(false);
   const handleKoiSoldRef = useRef(() => {});
@@ -5602,7 +5603,8 @@ export default function App() {
       setDeliveries((prev) => mergeRecords(prev, cleaned.deliveries, peekDeletions("deliveries")));
       let mergedPondReminders = cleaned.pondData?.reminders;
       setPondDataWithRef((prev) => {
-        const merged = mergePondData(prev, cleaned.pondData);
+        const base = syncStateRef.current.pondData || prev;
+        const merged = mergePondData(base, cleaned.pondData);
         mergedPondReminders = merged.reminders;
         return merged;
       });
@@ -5835,52 +5837,63 @@ export default function App() {
       throw new Error("Permission denied (ponds).");
     }
 
+    if (pondOverride) {
+      const touched = touchPondData(pondOverride);
+      syncStateRef.current = { ...syncStateRef.current, pondData: touched };
+    }
+
     const timerKey = "ponds:Pond data";
     if (syncTimersRef.current[timerKey]) {
       clearTimeout(syncTimersRef.current[timerKey]);
       delete syncTimersRef.current[timerKey];
     }
 
-    let waited = 0;
-    while (syncInFlightRef.current > 0 && waited < 3000) {
-      await new Promise((r) => setTimeout(r, 100));
-      waited += 100;
-    }
-
-    let payload = touchPondData(pondOverride ?? syncStateRef.current.pondData);
-    syncStateRef.current = { ...syncStateRef.current, pondData: payload };
-
-    syncInFlightRef.current += 1;
-    try {
-      if (!(await ensureCloudSyncReady())) {
-        throw new Error("Session needs refresh. Log out and log in again.");
+    const runPondSync = async () => {
+      let waited = 0;
+      while (syncInFlightRef.current > 0 && waited < 3000) {
+        await new Promise((r) => setTimeout(r, 100));
+        waited += 100;
       }
 
-      let result = await db.syncPondData(payload);
-      if (result?.skipped) {
-        const remote = await db.fetchAllData();
-        if (remote?.pondData) {
-          payload = touchPondData(mergePondData(payload, remote.pondData));
-          syncStateRef.current = { ...syncStateRef.current, pondData: payload };
-          setPondDataWithRef((prev) => mergePondData(prev, remote.pondData));
-          result = await db.syncPondData(payload);
+      let payload = touchPondData(syncStateRef.current.pondData);
+      syncStateRef.current = { ...syncStateRef.current, pondData: payload };
+
+      syncInFlightRef.current += 1;
+      try {
+        if (!(await ensureCloudSyncReady())) {
+          throw new Error("Session needs refresh. Log out and log in again.");
+        }
+
+        let result = await db.syncPondData(payload);
+        if (result?.skipped) {
+          const remote = await db.fetchAllData();
+          if (remote?.pondData) {
+            const latest = syncStateRef.current.pondData;
+            payload = touchPondData(mergePondData(latest, remote.pondData));
+            syncStateRef.current = { ...syncStateRef.current, pondData: payload };
+            setPondDataWithRef(payload);
+            result = await db.syncPondData(payload);
+          }
+          if (result?.skipped) {
+            result = await db.syncPondData(payload, { force: true });
+          }
         }
         if (result?.skipped) {
-          result = await db.syncPondData(payload, { force: true });
+          throw new Error("Could not save pond reminder — cloud data was newer. Refresh and try again.");
         }
-      }
-      if (result?.skipped) {
-        throw new Error("Could not save pond reminder — cloud data was newer. Refresh and try again.");
-      }
 
-      resetSyncHealth();
-      touchLastSync();
-    } catch (err) {
-      handleSyncFailure(err);
-      throw err;
-    } finally {
-      syncInFlightRef.current -= 1;
-    }
+        resetSyncHealth();
+        touchLastSync();
+      } catch (err) {
+        handleSyncFailure(err);
+        throw err;
+      } finally {
+        syncInFlightRef.current -= 1;
+      }
+    };
+
+    pondSyncChainRef.current = pondSyncChainRef.current.then(runPondSync, runPondSync);
+    return pondSyncChainRef.current;
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
   const syncEventsNow = useCallback(async (eventsOverride) => {
@@ -6193,7 +6206,9 @@ export default function App() {
         if (!ready) {
           throw new Error("Session needs refresh. Log out and log in again.");
         }
-        await fn(data);
+        const refKey = perm === "ponds" ? "pondData" : perm === "calendar" ? "events" : null;
+        const payload = refKey ? (syncStateRef.current[refKey] ?? data) : data;
+        await fn(payload);
       })()
         .then(() => {
           resetSyncHealth();
