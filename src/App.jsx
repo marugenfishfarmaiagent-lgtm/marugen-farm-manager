@@ -69,6 +69,7 @@ import {
   countIncomingTeamChanges,
   TEAM_SYNC_EVENT_THROTTLE_MS,
   TEAM_SYNC_POLL_THROTTLE_MS,
+  TEAM_SYNC_USER_IDLE_MS,
 } from "./lib/teamSyncDetect";
 import { applyInvoicePins, pinInvoice, unpinInvoice } from "./lib/invoicePins";
 import { touchUpdatedAt } from "./lib/syncMeta";
@@ -5356,6 +5357,7 @@ export default function App() {
   const lowStockNotified = useRef(false);
   const lastSyncWarnRef = useRef(0);
   const lastCloudPullAt = useRef(0);
+  const lastUserActivityAt = useRef(Date.now());
   const syncTimersRef = useRef({});
   const syncInFlightRef = useRef(0);
   const syncStateRef = useRef({});
@@ -6046,7 +6048,15 @@ export default function App() {
         ? TEAM_SYNC_POLL_THROTTLE_MS
         : TEAM_SYNC_EVENT_THROTTLE_MS;
     if (!force && now - lastCloudPullAt.current < throttleMs) return;
-    setCloudPulling(true);
+
+    const pendingPush = Object.keys(syncTimersRef.current).length > 0;
+    if (source === "poll") {
+      if (pendingPush || syncInFlightRef.current > 0) return;
+      if (now - lastUserActivityAt.current < TEAM_SYNC_USER_IDLE_MS) return;
+    }
+
+    const showBlockingPullUi = source === "manual" || !quiet;
+    if (showBlockingPullUi) setCloudPulling(true);
     try {
       let waited = 0;
       while (syncInFlightRef.current > 0 && waited < 3000) {
@@ -6055,20 +6065,22 @@ export default function App() {
       }
       if (syncInFlightRef.current > 0) return;
 
-      const pendingPush = Object.keys(syncTimersRef.current).length > 0;
-      if (pendingPush) {
+      if (pendingPush && source !== "poll") {
         await flushPendingCloudSync();
       }
 
       const data = await db.fetchAllData();
-      const teamChanges = source === "poll"
-        && cloudHydrated
-        && !pendingPush
-        && syncInFlightRef.current === 0
+      const teamChanges = source === "poll" && cloudHydrated
         ? countIncomingTeamChanges(syncStateRef.current, data, peekDeletions)
         : 0;
 
       lastCloudPullAt.current = Date.now();
+
+      if (source === "poll" && cloudHydrated && teamChanges === 0) {
+        resetSyncHealth();
+        return;
+      }
+
       applyCloudData(data, { mode: cloudHydrated ? "merge" : "replace" });
       resetSyncHealth();
       touchLastSync();
@@ -6094,12 +6106,22 @@ export default function App() {
     } catch (err) {
       handleSyncFailure(err);
     } finally {
-      setCloudPulling(false);
+      if (showBlockingPullUi) setCloudPulling(false);
     }
   }, [
     currentUser, cloudHydrated, applyCloudData, handleSyncFailure, dismissToast,
     showProminentToast, flushPendingCloudSync, touchLastSync, resetSyncHealth, addNotification,
   ]);
+
+  useEffect(() => {
+    const markActive = () => { lastUserActivityAt.current = Date.now(); };
+    window.addEventListener("pointerdown", markActive, { passive: true });
+    window.addEventListener("keydown", markActive, { passive: true });
+    return () => {
+      window.removeEventListener("pointerdown", markActive);
+      window.removeEventListener("keydown", markActive);
+    };
+  }, []);
 
   useTeamSyncPoll({
     enabled: isSupabaseConfigured && Boolean(currentUser) && cloudHydrated && cloudSync,
