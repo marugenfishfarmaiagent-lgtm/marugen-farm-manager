@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import { format } from "date-fns";
 import { Users, Fish, FishSymbol, Contact, Droplets, FileText, TrendingUp, Truck, Calendar, MessageSquare, Bell, LogOut, Plus, Search, X, Check, AlertTriangle, Home, Menu, DollarSign, Boxes, Eye, Send, Phone, MapPin, Navigation, Star, Zap, Clock, CheckCircle, XCircle, Info, Archive, ShoppingBag, Shield, UserCog, UserPlus, Edit2, Trash2, Lock, Printer, BookCheck, ImagePlus, Images, Camera, ScanLine, RefreshCw, Download, Loader2 } from "lucide-react";
 import KoiFish from "./modules/KoiFish";
@@ -4067,6 +4067,49 @@ function DeliveryModule({
 // ─────────────────────────────────────────────
 // CALENDAR MODULE
 // ─────────────────────────────────────────────
+function CalendarEventCard({ e, canEdit, canDelete, onEdit, onDelete, onNavigateToPonds }) {
+  const isPondLinked = Boolean(e.pondReminderId);
+  return (
+    <div className={`p-3 rounded-xl border ${eventTypeColor[e.type] || eventTypeColor.other} flex items-start justify-between gap-3`}>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2 mb-1">
+          {isPondLinked && (
+            <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-cyan-300 bg-cyan-500/10 border border-cyan-500/30 rounded-full px-2 py-0.5">
+              <Droplets size={10} />Pond reminder
+            </span>
+          )}
+        </div>
+        <p className="font-bold text-sm">{e.time && `${e.time} · `}{e.title}</p>
+        <p className="text-xs opacity-70">{e.date}{e.type ? ` · ${e.type}` : ""}</p>
+        {e.note && <p className="text-xs mt-1 opacity-60">{e.note}</p>}
+        {e.createdBy && <p className="text-[10px] mt-1 opacity-50">Added by {e.createdBy}</p>}
+      </div>
+      <div className="flex flex-col gap-1 shrink-0">
+        {isPondLinked ? (
+          onNavigateToPonds && (
+            <button type="button" onClick={onNavigateToPonds} className="opacity-60 hover:opacity-100 touch-manipulation text-[10px] text-cyan-400 font-semibold" title="Open Pond Management">
+              Pond →
+            </button>
+          )
+        ) : (
+          <>
+            {canEdit && (
+              <button type="button" onClick={() => onEdit(e)} className="opacity-60 hover:opacity-100 touch-manipulation" title="Edit event">
+                <Edit2 size={12} className="text-cyan-400" />
+              </button>
+            )}
+            {canDelete && (
+              <button type="button" onClick={() => onDelete(e)} className="opacity-60 hover:opacity-100 touch-manipulation" title="Delete event">
+                <Trash2 size={12} className="text-red-400" />
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification, currentUser }) {
   const emptyEventForm = () => ({ title: "", date: today(), time: "09:00", type: "other", note: "" });
   const eventToForm = (e) => ({
@@ -4182,47 +4225,6 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
   const upcoming = sorted.filter((e) => e.date > todayStr);
   const past = sorted.filter((e) => e.date < todayStr && isAppVisibleEvent(e));
   const visiblePast = showAllPast ? past : past.slice(-5).reverse();
-  const isPondLinkedEvent = (e) => Boolean(e.pondReminderId);
-
-  const EventCard = ({ e }) => (
-    <div className={`p-3 rounded-xl border ${eventTypeColor[e.type] || eventTypeColor.other} flex items-start justify-between gap-3`}>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2 mb-1">
-          {isPondLinkedEvent(e) && (
-            <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-cyan-300 bg-cyan-500/10 border border-cyan-500/30 rounded-full px-2 py-0.5">
-              <Droplets size={10} />Pond reminder
-            </span>
-          )}
-        </div>
-        <p className="font-bold text-sm">{e.time && `${e.time} · `}{e.title}</p>
-        <p className="text-xs opacity-70">{e.date}{e.type ? ` · ${e.type}` : ""}</p>
-        {e.note && <p className="text-xs mt-1 opacity-60">{e.note}</p>}
-        {e.createdBy && <p className="text-[10px] mt-1 opacity-50">Added by {e.createdBy}</p>}
-      </div>
-      <div className="flex flex-col gap-1 shrink-0">
-        {isPondLinkedEvent(e) ? (
-          onNavigateToPonds && (
-            <button type="button" onClick={onNavigateToPonds} className="opacity-60 hover:opacity-100 touch-manipulation text-[10px] text-cyan-400 font-semibold" title="Open Pond Management">
-              Pond →
-            </button>
-          )
-        ) : (
-          <>
-            {canEdit && (
-              <button type="button" onClick={() => openEditEvent(e)} className="opacity-60 hover:opacity-100 touch-manipulation" title="Edit event">
-                <Edit2 size={12} className="text-cyan-400" />
-              </button>
-            )}
-            {canDelete && (
-              <button type="button" onClick={() => requestDeleteEvent(e)} className="opacity-60 hover:opacity-100 touch-manipulation" title="Delete event">
-                <Trash2 size={12} className="text-red-400" />
-              </button>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  );
 
   return (
     <div className="space-y-4 pb-20 lg:pb-12">
@@ -4249,14 +4251,18 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
           {todayEvents.length > 0 && (
             <Card className="p-4 border-cyan-500/30 bg-cyan-500/5">
               <h3 className="text-sm font-bold text-cyan-400 mb-3 flex items-center gap-2"><Zap size={14} />Today</h3>
-              <div className="space-y-2">{todayEvents.map((e) => <EventCard key={e.id} e={e} />)}</div>
+              <div className="space-y-2">{todayEvents.map((e) => (
+                <CalendarEventCard key={e.id} e={e} canEdit={canEdit} canDelete={canDelete} onEdit={openEditEvent} onDelete={requestDeleteEvent} onNavigateToPonds={onNavigateToPonds} />
+              ))}</div>
             </Card>
           )}
 
           {upcoming.length > 0 && (
             <Card className="p-4">
               <h3 className="text-sm font-bold text-white mb-3">Upcoming</h3>
-              <div className="space-y-2">{upcoming.map((e) => <EventCard key={e.id} e={e} />)}</div>
+              <div className="space-y-2">{upcoming.map((e) => (
+                <CalendarEventCard key={e.id} e={e} canEdit={canEdit} canDelete={canDelete} onEdit={openEditEvent} onDelete={requestDeleteEvent} onNavigateToPonds={onNavigateToPonds} />
+              ))}</div>
             </Card>
           )}
 
@@ -4274,7 +4280,9 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
                   </button>
                 )}
               </div>
-              <div className="space-y-2 opacity-50">{visiblePast.map((e) => <EventCard key={e.id} e={e} />)}</div>
+              <div className="space-y-2 opacity-50">{visiblePast.map((e) => (
+                <CalendarEventCard key={e.id} e={e} canEdit={canEdit} canDelete={canDelete} onEdit={openEditEvent} onDelete={requestDeleteEvent} onNavigateToPonds={onNavigateToPonds} />
+              ))}</div>
             </Card>
           )}
         </>
@@ -5442,6 +5450,11 @@ export default function App() {
   const inventorySyncPendingRef = useRef(false);
   const handleKoiSoldRef = useRef(() => {});
   const invoicesNormalizedRef = useRef(false);
+  const currentUserRef = useRef(currentUser);
+
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
 
   const [users, setUsers] = useState(isSupabaseConfigured ? [] : LOCAL_DEMO_USERS);
   const [customers, setCustomers] = useState(INITIAL_CUSTOMERS);
@@ -5534,6 +5547,17 @@ export default function App() {
   useEffect(() => { if (!isSupabaseConfigured) saveProducts(products) }, [products]);
   useEffect(() => { if (!isSupabaseConfigured) saveStockLog(stockLog) }, [stockLog]);
 
+  const enrichCalendarEvents = useCallback((eventsList, reminders) => {
+    const user = currentUserRef.current;
+    if (!user || !hasPermission(user, "calendar") || !hasPermission(user, "ponds")) {
+      return eventsList || [];
+    }
+    return backfillCalendarEventsForReminders(eventsList, reminders, {
+      createdBy: user.name || "Staff",
+      pondsReady: true,
+    });
+  }, []);
+
   const applyCloudData = useCallback((data, { mode = "replace" } = {}) => {
     if (!data) return;
 
@@ -5562,11 +5586,17 @@ export default function App() {
       setInvoices((prev) => applyInvoicePins(mergeInvoices(prev, cleaned.invoices, peekDeletions("invoices"))));
       setExpenses((prev) => mergeRecords(prev, cleaned.expenses, peekDeletions("expenses")));
       setDeliveries((prev) => mergeRecords(prev, cleaned.deliveries, peekDeletions("deliveries")));
-      setEvents((prev) => mergeRecords(prev, cleaned.events, peekDeletions("events")));
+      setPondData((prev) => mergePondData(prev, cleaned.pondData));
+      setEvents((prev) => {
+        const mergedPond = mergePondData(syncStateRef.current.pondData, cleaned.pondData);
+        return enrichCalendarEvents(
+          mergeRecords(prev, cleaned.events, peekDeletions("events")),
+          mergedPond.reminders,
+        );
+      });
       setStockLog((prev) => mergeRecords(prev, cleaned.stockLog, peekDeletions("stock_activity")));
       setKoiFishList((prev) => mergeKoiFish(prev, cleaned.koiFishList, peekDeletions("koi_fish")));
       setCustomerKoiList((prev) => mergeCustomerKoi(prev, cleaned.customerKoiList, peekDeletions("customer_koi")));
-      setPondData((prev) => mergePondData(prev, cleaned.pondData));
       setWhatsappGroups((prev) => mergeRecords(prev, cleaned.whatsappGroups || whatsapp.groups, peekDeletions("whatsapp_groups")));
     } else {
       setCustomers(cleaned.customers);
@@ -5574,11 +5604,11 @@ export default function App() {
       setInvoices(sortInvoices(applyInvoicePins(cleaned.invoices)));
       setExpenses(cleaned.expenses);
       setDeliveries(cleaned.deliveries);
-      setEvents(cleaned.events);
+      setPondData(cleaned.pondData);
+      setEvents(enrichCalendarEvents(cleaned.events, cleaned.pondData?.reminders));
       setStockLog(cleaned.stockLog);
       setKoiFishList(cleaned.koiFishList);
       setCustomerKoiList(cleaned.customerKoiList);
-      setPondData(cleaned.pondData);
       setWhatsappGroups(cleaned.whatsappGroups || whatsapp.groups);
     }
 
@@ -5608,7 +5638,7 @@ export default function App() {
     if (isSupabaseConfigured) {
       cacheWriteAllData(data).catch(() => {});
     }
-  }, [addNotification, touchLastSync]);
+  }, [addNotification, touchLastSync, enrichCalendarEvents]);
 
   const resetCloudBusinessState = useCallback(() => {
     setCustomers(INITIAL_CUSTOMERS);
@@ -6330,14 +6360,12 @@ export default function App() {
     [pondData.reminders],
   );
 
-  useEffect(() => {
-    if (!dataReady || !cloudHydrated || !currentUser) return;
-    if (!hasPermission(currentUser, "calendar") || !hasPermission(currentUser, "ponds")) return;
-    setEvents((prev) => backfillCalendarEventsForReminders(prev, pondData.reminders, {
-      createdBy: currentUser.name || "Staff",
-      pondsReady: true,
-    }));
-  }, [dataReady, cloudHydrated, currentUser, pendingRemindersKey]);
+  useLayoutEffect(() => {
+    if (!dataReady || !cloudHydrated) return;
+    const user = currentUserRef.current;
+    if (!user || !hasPermission(user, "calendar") || !hasPermission(user, "ponds")) return;
+    setEvents((prev) => enrichCalendarEvents(prev, syncStateRef.current.pondData?.reminders));
+  }, [dataReady, cloudHydrated, pendingRemindersKey, enrichCalendarEvents]);
 
   useEffect(() => syncDebounced("customers", "Customers", db.syncCustomers, customers), [customers, syncDebounced]);
   useEffect(() => syncDebounced("inventory", "Inventory", db.syncProducts, products), [products, syncDebounced]);

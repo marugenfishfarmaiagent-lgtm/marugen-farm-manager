@@ -1,6 +1,6 @@
 import { MAINTENANCE_TYPES } from '../data/constants'
 import { buildNewEventRecord, sortEventsBySchedule } from './calendarOps'
-import { isPendingReminder } from './pondOps'
+import { isPendingReminder, normalizeReminderStatus } from './pondOps'
 import { touchUpdatedAt } from './syncMeta'
 
 function recordTs(record) {
@@ -56,19 +56,25 @@ function reminderFieldsMatchEvent(reminder, event) {
   )
 }
 
+/** Normalized reminder fields for stable sync keys (avoids dueTime undefined vs "09:00" flapping). */
+export function reminderSyncKeyPart(reminder) {
+  const fields = reminderToCalendarEventFields(reminder)
+  return [
+    reminder.id,
+    fields.date,
+    fields.time,
+    fields.type,
+    reminder.pondName || '',
+    fields.note,
+    normalizeReminderStatus(reminder.status),
+  ].join(':')
+}
+
 /** Stable key so calendar backfill does not run on every pond blob reference change. */
 export function pendingRemindersSyncKey(reminders = []) {
   return (reminders || [])
     .filter(isPendingReminder)
-    .map((r) => [
-      r.id,
-      r.dueDate,
-      r.dueTime,
-      r.type,
-      r.pondName,
-      r.note,
-      r.status,
-    ].join(':'))
+    .map(reminderSyncKeyPart)
     .sort()
     .join('|')
 }
