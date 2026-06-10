@@ -22,6 +22,7 @@ import {
   sameKoiId, validateKoiFormFields, validateKoiSaleForm,
 } from '../lib/koiOps'
 import { isAppVisibleKoiFarm } from '../lib/retention'
+import { uploadInlinePhotoIfNeeded } from '../lib/farmImage'
 import { touchUpdatedAt } from '../lib/syncMeta'
 
 const STATUS_STYLE = {
@@ -128,6 +129,7 @@ export default function KoiFish({
   })
   const [refundKoi, setRefundKoi] = useState(null)
   const [refundReason, setRefundReason] = useState('')
+  const [saving, setSaving] = useState(false)
 
   const pondNames = useMemo(
     () => mergePondNames(FARM_POND_NAMES, registeredPondNames, koiList.map((k) => k.pondName)),
@@ -188,7 +190,7 @@ export default function KoiFish({
     addNotification({ type: 'error', title: 'Photo Upload Failed', message })
   }
 
-  const addKoi = () => {
+  const addKoi = async () => {
     if (!canEdit) {
       addNotification?.({ type: 'error', title: 'Permission Denied', message: 'You need the "Edit records" permission. Contact the farm owner.' })
       return
@@ -198,27 +200,41 @@ export default function KoiFish({
       addNotification({ type: 'error', title: 'Invalid Koi', message: check.message })
       return
     }
+    if (saving) return
     const sizeCm = normalizeKoiSizeField(form.size)
-    const koi = touchUpdatedAt({
-      ...form,
-      id: genId('KOI'),
-      name: form.name?.trim() || '',
-      pondName: form.pondName.trim(),
-      size: sizeCm,
-      price: Number(form.price) || 0,
-      dateAdded: today(),
-      status: KOI_STATUS.AVAILABLE,
-      soldTo: null, soldDate: null, soldPrice: null,
-      sellDisposition: null, keepPondName: null,
-      deathDate: null, deathCause: null, deathPhoto: null,
-    })
-    setKoiList((prev) => [...prev, koi])
-    addNotification({ type: 'success', title: 'Koi Added', message: `${koi.variety} added to ${koi.pondName}` })
-    setShowAdd(false)
-    setForm(emptyKoiForm())
+    const id = genId('KOI')
+    try {
+      setSaving(true)
+      const photo = await uploadInlinePhotoIfNeeded(
+        form.photo,
+        (data) => db.uploadKoiFishPhoto(id, data, 'photo'),
+      )
+      const koi = touchUpdatedAt({
+        ...form,
+        id,
+        photo,
+        name: form.name?.trim() || '',
+        pondName: form.pondName.trim(),
+        size: sizeCm,
+        price: Number(form.price) || 0,
+        dateAdded: today(),
+        status: KOI_STATUS.AVAILABLE,
+        soldTo: null, soldDate: null, soldPrice: null,
+        sellDisposition: null, keepPondName: null,
+        deathDate: null, deathCause: null, deathPhoto: null,
+      })
+      setKoiList((prev) => [...prev, koi])
+      addNotification({ type: 'success', title: 'Koi Added', message: `${koi.variety} added to ${koi.pondName}` })
+      setShowAdd(false)
+      setForm(emptyKoiForm())
+    } catch (err) {
+      notifyImageError(err?.message || 'Could not save koi with photo.')
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const saveEdit = () => {
+  const saveEdit = async () => {
     if (!editKoi) return
     if (!canEdit) {
       addNotification?.({ type: 'error', title: 'Permission Denied', message: 'You need the "Edit records" permission. Contact the farm owner.' })
@@ -237,22 +253,35 @@ export default function KoiFish({
       addNotification({ type: 'error', title: 'Invalid Koi', message: check.message })
       return
     }
+    if (saving) return
     const sizeCm = normalizeKoiSizeField(editKoi.size)
-    const updated = touchUpdatedAt({
-      ...editKoi,
-      name: editKoi.name?.trim() || '',
-      pondName: editKoi.pondName.trim(),
-      size: sizeCm,
-      price: Number(editKoi.price) || 0,
-      soldTo: null,
-      soldDate: null,
-      soldPrice: null,
-      sellDisposition: null,
-      keepPondName: null,
-    })
-    setKoiList((prev) => prev.map((k) => (sameKoiId(k.id, editKoi.id) ? updated : k)))
-    addNotification({ type: 'success', title: 'Updated', message: `${editKoi.id} saved` })
-    setEditKoi(null)
+    try {
+      setSaving(true)
+      const photo = await uploadInlinePhotoIfNeeded(
+        editKoi.photo,
+        (data) => db.uploadKoiFishPhoto(editKoi.id, data, 'photo'),
+      )
+      const updated = touchUpdatedAt({
+        ...editKoi,
+        photo,
+        name: editKoi.name?.trim() || '',
+        pondName: editKoi.pondName.trim(),
+        size: sizeCm,
+        price: Number(editKoi.price) || 0,
+        soldTo: null,
+        soldDate: null,
+        soldPrice: null,
+        sellDisposition: null,
+        keepPondName: null,
+      })
+      setKoiList((prev) => prev.map((k) => (sameKoiId(k.id, editKoi.id) ? updated : k)))
+      addNotification({ type: 'success', title: 'Updated', message: `${editKoi.id} saved` })
+      setEditKoi(null)
+    } catch (err) {
+      notifyImageError(err?.message || 'Could not save koi photo.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const setKoiStatus = (koi, status) => {
@@ -367,7 +396,7 @@ export default function KoiFish({
     setSellKoi(null)
   }
 
-  const confirmDeath = () => {
+  const confirmDeath = async () => {
     if (!deathKoi) return
     if (!canEdit) {
       addNotification?.({ type: 'error', title: 'Permission Denied', message: 'You need the "Edit records" permission. Contact the farm owner.' })
@@ -385,14 +414,25 @@ export default function KoiFish({
       addNotification({ type: 'error', title: 'Date Required', message: 'Choose the date of death.' })
       return
     }
-    setKoiList((prev) => prev.map((k) => (
-      sameKoiId(k.id, deathKoi.id)
-        ? buildDeceasedKoiPatch(k, deathForm)
-        : k
-    )))
-    addNotification({ type: 'warning', title: 'Death Recorded', message: `${deathKoi.name || deathKoi.variety} recorded as deceased` })
-    setDeathKoi(null)
-    setDeathForm({ deathDate: today(), deathCause: KOI_DEATH_CAUSES[0], deathPhoto: null, notes: '' })
+    if (saving) return
+    try {
+      setSaving(true)
+      const deathPhoto = await uploadInlinePhotoIfNeeded(
+        deathForm.deathPhoto,
+        (data) => db.uploadKoiFishPhoto(deathKoi.id, data, 'death_photo'),
+      )
+      const patch = buildDeceasedKoiPatch(deathKoi, { ...deathForm, deathPhoto })
+      setKoiList((prev) => prev.map((k) => (
+        sameKoiId(k.id, deathKoi.id) ? patch : k
+      )))
+      addNotification({ type: 'warning', title: 'Death Recorded', message: `${deathKoi.name || deathKoi.variety} recorded as deceased` })
+      setDeathKoi(null)
+      setDeathForm({ deathDate: today(), deathCause: KOI_DEATH_CAUSES[0], deathPhoto: null, notes: '' })
+    } catch (err) {
+      notifyImageError(err?.message || 'Could not save death photo.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const customerName = (id) => customers.find((c) => String(c.id) === String(id))?.name || '—'

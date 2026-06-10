@@ -434,16 +434,27 @@ export async function uploadExpenseReceipt(expenseId, imageData, imageName = '')
   return apiCall({ action: 'upload_expense_receipt', expenseId, imageData, imageName })
 }
 
+export async function uploadKoiFishPhoto(recordId, imageData, field = 'photo') {
+  if (!isSupabaseConfigured) throw new Error('Cloud storage is not configured')
+  return apiCall({ action: 'upload_koi_image', entity: 'koi_fish', id: recordId, field, imageData })
+}
+
+export async function uploadCustomerKoiPhoto(recordId, imageData, field = 'photo') {
+  if (!isSupabaseConfigured) throw new Error('Cloud storage is not configured')
+  return apiCall({ action: 'upload_koi_image', entity: 'customer_koi', id: recordId, field, imageData })
+}
+
 export async function syncExpenses(expenses, options) {
   if (!isSupabaseConfigured) return
   const payload = expenses.map((e) => {
     const normalized = normalizeExpenseRecord(e)
     const hasHttpUrl = normalized.imageUrl?.startsWith('http')
+    const hasInlineImage = Boolean(normalized.imageData?.startsWith?.('data:image'))
     return {
       ...normalized,
       imageUrl: hasHttpUrl
         ? expenseStoragePath(normalized.id)
-        : (normalized.imageUrl || (normalized.imageData ? expenseStoragePath(normalized.id) : '')),
+        : (hasInlineImage ? '' : (normalized.imageUrl || '')),
       imageData: hasHttpUrl ? '' : (normalized.imageData || ''),
     }
   })

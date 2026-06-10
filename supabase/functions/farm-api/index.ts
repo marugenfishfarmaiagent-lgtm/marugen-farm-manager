@@ -356,6 +356,45 @@ Deno.serve(async (req) => {
       return J({ imageUrl, imagePath: path, imageName: imageName || "" });
     }
 
+    if (body.action === "upload_koi_image") {
+      const entity = String(body.entity || "");
+      const recordId = body.id;
+      const field = String(body.field || "photo");
+      const imageData = body.imageData;
+
+      if (!recordId || !imageData || typeof imageData !== "string" || !imageData.startsWith("data:image/")) {
+        return J({ error: "Valid id and image data required" }, 400);
+      }
+
+      type KoiUploadTarget = {
+        perm: string;
+        resolve: (db: ReturnType<typeof adminClient>, id: unknown, value: unknown) => Promise<string | null>;
+        defaultPath: (id: unknown) => string;
+      };
+
+      const targets: Record<string, Record<string, KoiUploadTarget>> = {
+        koi_fish: {
+          photo: { perm: "koifish", resolve: resolveKoiFishPhoto, defaultPath: koiFishPhotoPath },
+          death_photo: { perm: "koifish", resolve: resolveKoiFishDeathPhoto, defaultPath: koiFishDeathPhotoPath },
+        },
+        customer_koi: {
+          photo: { perm: "customerkoi", resolve: resolveCustomerKoiPhoto, defaultPath: customerKoiPhotoPath },
+          death_photo: { perm: "customerkoi", resolve: resolveCustomerKoiDeathPhoto, defaultPath: customerKoiDeathPhotoPath },
+        },
+      };
+
+      const target = targets[entity]?.[field];
+      if (!target) return J({ error: "Unknown image upload target" }, 400);
+      if (!hasPermission(user, target.perm)) {
+        return J({ error: `Permission denied (${entity})` }, 403);
+      }
+
+      const path = await target.resolve(db, recordId, imageData);
+      if (!path) return J({ error: "Image upload failed" }, 500);
+      const url = await signFarmImageUrl(db, KOI_PHOTOS_BUCKET, path, target.defaultPath(recordId));
+      return J({ url, path });
+    }
+
     if (body.action === "refresh_expense_receipt" || body.action === "refresh_signed_image") {
       const entity = body.action === "refresh_expense_receipt"
         ? "expense"
@@ -727,7 +766,7 @@ Deno.serve(async (req) => {
         const rows = await Promise.all(incoming.map(async (e) => {
           let imagePath = normalizeImageUrlForStorage(String(e.imageUrl ?? ""), e.id);
           let imageData = e.imageData ?? null;
-          if (!imagePath && imageData && typeof imageData === "string" && imageData.startsWith("data:image/")) {
+          if (imageData && typeof imageData === "string" && imageData.startsWith("data:image/")) {
             imagePath = await uploadExpenseReceiptImage(db, e.id, imageData);
             imageData = null;
           } else if (imagePath) {

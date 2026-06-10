@@ -14,6 +14,7 @@ import Fab from '../components/Fab'
 import { readKoiImageFile } from '../lib/koiImage'
 import { openWhatsAppChat } from '../lib/invoiceWhatsApp'
 import { isAppVisibleCustomerKoi } from '../lib/retention'
+import { uploadInlinePhotoIfNeeded } from '../lib/farmImage'
 import { touchUpdatedAt } from '../lib/syncMeta'
 import StoredImage from '../components/StoredImage'
 import EmptyState from '../components/ui/EmptyState'
@@ -200,6 +201,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
   const [collectRec, setCollectRec] = useState(null)
   const [collectDate, setCollectDate] = useState(today())
   const [deathForm, setDeathForm] = useState({ deathDate: today(), deathCause: CUSTOMER_KOI_DEATH_CAUSES[0], deathPhoto: null, deathNotes: '' })
+  const [saving, setSaving] = useState(false)
 
   const customersWithKoi = useMemo(() => {
     const ids = new Set(records.map((r) => String(r.customerId)))
@@ -225,7 +227,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
 
   const selectedCustomer = customers.find((c) => String(c.id) === String(selectedCustomerId))
 
-  const saveRecord = () => {
+  const saveRecord = async () => {
     if (!canEdit) { denyEdit(); return }
     const customer = customers.find((c) => String(c.id) === String(form.customerId))
     if (!customer) {
@@ -247,25 +249,39 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       addNotification({ type: 'error', title: 'Koi Link Invalid', message: linkCheck.message })
       return
     }
+    if (saving) return
     const sizeCm = normalizeCustomerKoiSizeField(form.size)
-    const rec = touchUpdatedAt({
-      ...form,
-      id: genId('CKOI'),
-      customerName: customer.name,
-      fishName: form.fishName?.trim() || '',
-      size: sizeCm,
-      purchasePrice: check.purchasePrice,
-      pondName: form.status === CUSTOMER_KOI_STATUS.IN_POND ? form.pondName.trim() : form.pondName?.trim() || '',
-      collectedDate: form.status === CUSTOMER_KOI_STATUS.COLLECTED ? (form.collectedDate || today()) : null,
-      deathDate: null, deathCause: null, deathPhoto: null, deathNotes: '',
-    })
-    setRecords((prev) => [...prev, rec])
-    addNotification({ type: 'success', title: 'Record Added', message: `${displayFishName(rec)} added for ${customer.name}` })
-    setShowAdd(false)
-    setForm(emptyRecord())
+    const id = genId('CKOI')
+    try {
+      setSaving(true)
+      const photo = await uploadInlinePhotoIfNeeded(
+        form.photo,
+        (data) => db.uploadCustomerKoiPhoto(id, data, 'photo'),
+      )
+      const rec = touchUpdatedAt({
+        ...form,
+        id,
+        photo,
+        customerName: customer.name,
+        fishName: form.fishName?.trim() || '',
+        size: sizeCm,
+        purchasePrice: check.purchasePrice,
+        pondName: form.status === CUSTOMER_KOI_STATUS.IN_POND ? form.pondName.trim() : form.pondName?.trim() || '',
+        collectedDate: form.status === CUSTOMER_KOI_STATUS.COLLECTED ? (form.collectedDate || today()) : null,
+        deathDate: null, deathCause: null, deathPhoto: null, deathNotes: '',
+      })
+      setRecords((prev) => [...prev, rec])
+      addNotification({ type: 'success', title: 'Record Added', message: `${displayFishName(rec)} added for ${customer.name}` })
+      setShowAdd(false)
+      setForm(emptyRecord())
+    } catch (err) {
+      notifyImageError(err?.message || 'Could not save record with photo.')
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const saveEdit = () => {
+  const saveEdit = async () => {
     if (!editRec) return
     if (!canEdit) { denyEdit(); return }
     const check = validateCustomerKoiFields(editRec, { requireCustomer: false })
@@ -309,9 +325,22 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
     if (updated.status === CUSTOMER_KOI_STATUS.IN_POND) {
       updated.collectedDate = null
     }
-    setRecords((prev) => prev.map((r) => (sameRecordId(r.id, editRec.id) ? touchUpdatedAt(updated) : r)))
-    addNotification({ type: 'success', title: 'Updated', message: `${displayFishName(updated)} — ${formatCustomerKoiStatus(updated.status)}` })
-    setEditRec(null)
+    if (saving) return
+    try {
+      setSaving(true)
+      const photo = await uploadInlinePhotoIfNeeded(
+        updated.photo,
+        (data) => db.uploadCustomerKoiPhoto(editRec.id, data, 'photo'),
+      )
+      updated = touchUpdatedAt({ ...updated, photo })
+      setRecords((prev) => prev.map((r) => (sameRecordId(r.id, editRec.id) ? updated : r)))
+      addNotification({ type: 'success', title: 'Updated', message: `${displayFishName(updated)} — ${formatCustomerKoiStatus(updated.status)}` })
+      setEditRec(null)
+    } catch (err) {
+      notifyImageError(err?.message || 'Could not save record photo.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const confirmCollect = () => {
@@ -338,7 +367,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
     setCollectRec(null)
   }
 
-  const confirmDeath = () => {
+  const confirmDeath = async () => {
     if (!deathRec) return
     if (!canEdit) { denyEdit(); return }
     if (deathRec.status === CUSTOMER_KOI_STATUS.DECEASED) {
@@ -349,13 +378,24 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       addNotification({ type: 'error', title: 'Date Required', message: 'Choose the date of death.' })
       return
     }
-    setRecords((prev) => prev.map((r) => (
-      sameRecordId(r.id, deathRec.id)
-        ? buildCustomerKoiDeathPatch(r, deathForm)
-        : r
-    )))
-    addNotification({ type: 'warning', title: 'Death Recorded', message: `${displayFishName(deathRec)} (${deathRec.customerName}) recorded deceased` })
-    setDeathRec(null)
+    if (saving) return
+    try {
+      setSaving(true)
+      const deathPhoto = await uploadInlinePhotoIfNeeded(
+        deathForm.deathPhoto,
+        (data) => db.uploadCustomerKoiPhoto(deathRec.id, data, 'death_photo'),
+      )
+      const patch = buildCustomerKoiDeathPatch(deathRec, { ...deathForm, deathPhoto })
+      setRecords((prev) => prev.map((r) => (
+        sameRecordId(r.id, deathRec.id) ? patch : r
+      )))
+      addNotification({ type: 'warning', title: 'Death Recorded', message: `${displayFishName(deathRec)} (${deathRec.customerName}) recorded deceased` })
+      setDeathRec(null)
+    } catch (err) {
+      notifyImageError(err?.message || 'Could not save death photo.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const linkFarmKoi = (koi) => {

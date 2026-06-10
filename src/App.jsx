@@ -2940,13 +2940,17 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
     }
     try {
       setUploading(true);
-      const e = built.expense;
+      let e = built.expense;
+      if (isSupabaseConfigured && e.imageData?.startsWith?.("data:image")) {
+        const { imageUrl } = await db.uploadExpenseReceipt(e.id, e.imageData, e.imageName);
+        e = { ...e, imageUrl: imageUrl || "", imageData: "" };
+      }
       setExpenses((prev) => [...prev, e]);
       addNotification({
         type: "success",
         title: "Receipt Saved",
         message: isSupabaseConfigured
-          ? "Receipt saved — syncing photo to cloud storage."
+          ? "Receipt saved — photo stored in cloud."
           : "Expense invoice photo recorded.",
       });
       setShowAdd(false);

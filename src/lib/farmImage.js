@@ -1,7 +1,17 @@
 /** Client helpers for private Storage paths and signed URL sync. */
 
+import { isSupabaseConfigured } from './supabase'
+
 export function isInlineImage(src) {
   return typeof src === 'string' && src.startsWith('data:image')
+}
+
+/** Upload a base64 photo to cloud storage before save/sync; returns signed URL or original src. */
+export async function uploadInlinePhotoIfNeeded(src, uploadFn) {
+  if (!src || !isInlineImage(src)) return src ?? null
+  if (!isSupabaseConfigured) return src
+  const result = await uploadFn(src)
+  return result?.url || result?.imageUrl || src
 }
 
 export function isSignedHttpUrl(src) {
