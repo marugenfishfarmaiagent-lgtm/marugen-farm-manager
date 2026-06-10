@@ -1,4 +1,4 @@
-import { clearSession, getAuthHeaders, getSessionToken, hasCloudSession } from './auth'
+import { clearSession, fetchWithSessionRetry, getAuthHeaders, getSessionToken, hasCloudSession } from './auth'
 import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
 import { CHAT_HISTORY_MAX } from './chatOps'
 
@@ -34,7 +34,7 @@ async function callGeminiChat(body, { method = 'POST' } = {}) {
   let lastErr = null
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const response = await fetch(`${getFunctionsUrl()}/gemini-chat`, {
+    const response = await fetchWithSessionRetry(`${getFunctionsUrl()}/gemini-chat`, {
       method,
       credentials: 'include',
       headers: chatHeaders(),
@@ -72,7 +72,7 @@ export async function fetchAiUsageStats() {
   if (!isSupabaseConfigured) return null
   if (!hasCloudSession() && !getSessionToken()) throw new Error('Not authenticated')
 
-  const res = await fetch(`${getFunctionsUrl()}/farm-api`, {
+  const res = await fetchWithSessionRetry(`${getFunctionsUrl()}/farm-api`, {
     method: 'POST',
     credentials: 'include',
     headers: chatHeaders(),

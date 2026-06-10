@@ -6,9 +6,9 @@ import {
   sessionCookieHeader,
   sessionTokenFromCookie,
 } from "../_shared/sessionCookie.ts";
+import { SESSION_DAYS } from "../_shared/sessionConfig.ts";
 import { adminClient, sessionTokenFrom, validateSession } from "../_shared/supabase.ts";
 
-const SESSION_DAYS = 7;
 const PIN_MIN = 4;
 const PIN_MAX = 6;
 
@@ -111,13 +111,15 @@ Deno.serve(async (req) => {
               sessionToken: existingToken,
               needsSetup: false,
               hasUsers: true,
-            }, 200, req);
+            }, 200, req, { "Set-Cookie": sessionCookieHeader(existingToken) });
           }
           await db.from("auth_sessions").delete().eq("token", existingToken);
         }
 
         const { count: userCount } = await db.from("farm_users").select("*", { count: "exact", head: true });
         return jsonResponse({
+          authenticated: false,
+          sessionExpired: Boolean(existingToken),
           needsSetup: userCount === 0,
           hasUsers: (userCount || 0) > 0,
         }, 200, req, { "Set-Cookie": clearSessionCookieHeader() });

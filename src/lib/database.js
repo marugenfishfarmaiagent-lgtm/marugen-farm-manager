@@ -1,4 +1,4 @@
-import { clearSession, cloudFetch, getAuthHeaders } from './auth'
+import { clearSession, fetchWithSessionRetry, getAuthHeaders } from './auth'
 import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
 import { normalizeCustomerKoiRecord } from '../data/constants'
 import { normalizeCustomerRecord } from './customerOps'
@@ -278,21 +278,12 @@ function mapWhatsappGroup(row) {
 
 async function apiCall(body) {
   const headers = getAuthHeaders({ 'Content-Type': 'application/json' })
-  let res
-  try {
-    res = await fetch(`${getFunctionsUrl()}/farm-api`, {
-      method: 'POST',
-      credentials: 'omit',
-      headers,
-      body: JSON.stringify(body),
-    })
-  } catch (err) {
-    const msg = err?.message || 'Network request failed'
-    if (/load failed|failed to fetch|networkerror/i.test(msg)) {
-      throw new Error('Cannot reach the server. Check your connection and try again.')
-    }
-    throw new Error(msg)
-  }
+
+  const res = await fetchWithSessionRetry(`${getFunctionsUrl()}/farm-api`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  })
 
   const raw = await res.text()
   let data = {}

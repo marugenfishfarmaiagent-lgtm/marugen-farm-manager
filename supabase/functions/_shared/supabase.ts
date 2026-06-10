@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
+import { SESSION_DAYS } from "./sessionConfig.ts";
 import { sessionTokenFromCookie } from "./sessionCookie.ts";
 
 export function adminClient() {
@@ -16,7 +17,11 @@ export type SessionUser = {
   is_system?: boolean;
 };
 
-export async function validateSession(token: string | null): Promise<SessionUser | null> {
+export async function validateSession(
+  token: string | null,
+  options: { slide?: boolean } = {},
+): Promise<SessionUser | null> {
+  const { slide = true } = options;
   if (!token) return null;
   const db = adminClient();
   const { data: session } = await db
@@ -28,6 +33,14 @@ export async function validateSession(token: string | null): Promise<SessionUser
   if (new Date(session.expires_at) < new Date()) {
     await db.from("auth_sessions").delete().eq("token", token);
     return null;
+  }
+
+  if (slide) {
+    const expires = new Date();
+    expires.setDate(expires.getDate() + SESSION_DAYS);
+    await db.from("auth_sessions")
+      .update({ expires_at: expires.toISOString() })
+      .eq("token", token);
   }
 
   const { data: user } = await db

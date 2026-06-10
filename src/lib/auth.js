@@ -49,6 +49,30 @@ export function cloudFetch(url, options = {}) {
   })
 }
 
+/**
+ * Fetch with one session refresh attempt on 401 before failing.
+ * Used by farm-api and gemini-chat calls.
+ */
+export async function fetchWithSessionRetry(url, options = {}) {
+  const attempt = async () => fetch(url, {
+    ...options,
+    credentials: options.credentials ?? 'omit',
+    headers: {
+      ...getAuthHeaders(),
+      ...(options.headers || {}),
+    },
+  }).catch((err) => {
+    throw new Error(formatFetchError(err))
+  })
+
+  let res = await attempt()
+  if (res.status === 401 && isSupabaseConfigured) {
+    const refreshed = await tryRefreshSession()
+    if (refreshed) res = await attempt()
+  }
+  return res
+}
+
 function mirrorSessionStorage(raw) {
   if (!raw) return
   try {
@@ -95,8 +119,24 @@ export function getSession() {
 }
 
 export function setSession({ token, user }) {
-  const payload = { user, ...(token ? { token } : {}) }
+  const prev = getSession()
+  const nextUser = user ?? prev?.user
+  if (!nextUser) return
+  const payload = { user: nextUser }
+  if (token !== undefined && token !== null) {
+    payload.token = token
+  } else if (token === undefined && prev?.token) {
+    payload.token = prev.token
+  }
   const json = JSON.stringify(payload)
+  mirrorSessionStorage(json)
+  mirrorLocalStorage(json)
+}
+
+export function clearSessionToken() {
+  const session = getSession()
+  if (!session?.user) return
+  const json = JSON.stringify({ user: session.user })
   mirrorSessionStorage(json)
   mirrorLocalStorage(json)
 }
@@ -112,10 +152,11 @@ export function getSessionToken() {
 
 export function hasCloudSession() {
   if (!isSupabaseConfigured) return Boolean(getSessionToken())
-  return Boolean(getSession()?.user)
+  const session = getSession()
+  return Boolean(session?.user && session?.token)
 }
 
-/** True when user is stored but mobile/PWA auth token is missing (needs one re-login or bootstrap). */
+/** True when user is stored but mobile/PWA auth token is missing (needs cookie bootstrap). */
 export function sessionNeedsRefresh() {
   if (!isSupabaseConfigured) return false
   const session = getSession()
@@ -130,6 +171,15 @@ function applyAuthBootstrap(data) {
   return true
 }
 
+export async function tryRefreshSession() {
+  if (!isSupabaseConfigured) return false
+  try {
+    return await bootstrapCloudSession()
+  } catch {
+    return false
+  }
+}
+
 export async function bootstrapCloudSession() {
   if (!isSupabaseConfigured) return false
   const res = await cloudFetch(`${getFunctionsUrl()}/auth-login`, { credentials: 'include' })
@@ -140,10 +190,29 @@ export async function bootstrapCloudSession() {
 
 export async function authStatus() {
   if (!isSupabaseConfigured) return { needsSetup: false, hasUsers: true, cloud: false }
+  const hadToken = Boolean(getSessionToken())
   const res = await cloudFetch(`${getFunctionsUrl()}/auth-login`, { credentials: 'include' })
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Auth status failed')
-  applyAuthBootstrap(data)
+
+  if (applyAuthBootstrap(data)) {
+    return { ...data, cloud: true }
+  }
+
+  // Stale token in storage — drop it and retry via HttpOnly cookie.
+  if (hadToken && data.hasUsers && !data.needsSetup) {
+    clearSessionToken()
+    const bootRes = await cloudFetch(`${getFunctionsUrl()}/auth-login`, { credentials: 'include' })
+    const bootData = await bootRes.json()
+    if (bootRes.ok && applyAuthBootstrap(bootData)) {
+      return { ...bootData, cloud: true }
+    }
+  }
+
+  if (data.sessionExpired && getSession()?.user) {
+    clearSessionToken()
+  }
+
   return { ...data, cloud: true }
 }
 
@@ -154,6 +223,7 @@ export async function loginWithPin(pin) {
 
   const res = await cloudFetch(`${getFunctionsUrl()}/auth-login`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'login', pin: check.pin }),
   })
@@ -183,6 +253,7 @@ export async function setupOwner({ name, pin, confirmPin, setupSecret }) {
 
   const res = await cloudFetch(`${getFunctionsUrl()}/auth-login`, {
     method: 'POST',
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...(setupSecret ? { 'x-setup-secret': setupSecret } : {}),
@@ -211,6 +282,7 @@ export async function changeMyPin({ currentPin, newPin, confirmPin }) {
 
   const res = await cloudFetch(`${getFunctionsUrl()}/auth-login`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       action: 'change_pin',
@@ -227,6 +299,7 @@ export async function logout() {
   if (isSupabaseConfigured) {
     await cloudFetch(`${getFunctionsUrl()}/auth-login`, {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'logout' }),
     }).catch(() => {})
@@ -250,4 +323,8 @@ export function toAppUser(user) {
     ...normalized,
     displayName: normalized.role === 'owner' ? `🐟 ${normalized.name}` : `👤 ${normalized.name}`,
   }
+}
+
+export function isSessionExpiredError(message) {
+  return typeof message === 'string' && /session expired|login again|unauthorized/i.test(message)
 }

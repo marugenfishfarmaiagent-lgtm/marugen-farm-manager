@@ -5583,9 +5583,11 @@ export default function App() {
       } catch (err) {
         setCloudSync(false);
         setCloudError(err.message);
-        auth.clearSession();
-        setCurrentUser(null);
-        resetCloudBusinessState();
+        if (auth.isSessionExpiredError(err.message)) {
+          auth.clearSession();
+          setCurrentUser(null);
+          resetCloudBusinessState();
+        }
       } finally {
         setDataReady(true);
       }
@@ -5602,7 +5604,7 @@ export default function App() {
       return msg;
     });
     setCloudSync(false);
-    if (msg.includes("Session expired")) {
+    if (auth.isSessionExpiredError(msg)) {
       auth.clearSession();
       setCurrentUser(null);
       resetCloudBusinessState();
@@ -6259,15 +6261,34 @@ export default function App() {
         const allowed = ALL_NAV_ITEMS.filter((item) => hasPermission(user, item.id));
         setActiveTab(allowed[0]?.id || "dashboard");
       } catch (err) {
-        auth.clearSession();
+        if (await auth.tryRefreshSession()) {
+          try {
+            const data = await db.fetchAllData();
+            applyCloudData(data);
+            setCloudSync(true);
+            setCloudError(null);
+            setCurrentUser(user);
+            const allowed = ALL_NAV_ITEMS.filter((item) => hasPermission(user, item.id));
+            setActiveTab(allowed[0]?.id || "dashboard");
+            setCloudHydrated(true);
+            return;
+          } catch (retryErr) {
+            err = retryErr;
+          }
+        }
+        if (auth.isSessionExpiredError(err?.message)) {
+          auth.clearSession();
+          setCurrentUser(null);
+          resetCloudBusinessState();
+        } else {
+          setCurrentUser(user);
+        }
         setCloudSync(false);
         setCloudError(err?.message || "Failed to load cloud data");
-        resetCloudBusinessState();
-        setCurrentUser(null);
         addNotification({
           type: "error",
-          title: "Could not load farm data",
-          message: err?.message || "Please log in again. On iPhone, use Safari or your Home Screen app after updating.",
+          title: auth.isSessionExpiredError(err?.message) ? "Session expired" : "Could not load farm data",
+          message: err?.message || "Please try again. Your connection may be unstable.",
         });
       }
       return;
