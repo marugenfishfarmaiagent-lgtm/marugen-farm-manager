@@ -495,16 +495,29 @@ Deno.serve(async (req) => {
         return J({ error: `Permission denied (${entity})` }, 403);
       }
 
+      const selectCols = entity === "customer_koi" && field === "photo"
+        ? `${target.column}, koi_id`
+        : target.column;
       const { data: row, error: fetchErr } = await db.from(target.table)
-        .select(target.column)
+        .select(selectCols)
         .eq("id", recordId)
         .maybeSingle();
-      const stored = row?.[target.column as keyof typeof row];
-      if (fetchErr || !stored) {
+      if (fetchErr || !row) {
         return J({ error: "Image not found" }, 404);
       }
-
-      const url = await target.sign(db, String(stored), recordId);
+      const stored = row[target.column as keyof typeof row];
+      let url = stored
+        ? await target.sign(db, String(stored), recordId)
+        : "";
+      if (!url && entity === "customer_koi" && field === "photo") {
+        const koiId = (row as { koi_id?: string }).koi_id;
+        if (koiId) {
+          url = await signFarmImageUrl(db, KOI_PHOTOS_BUCKET, koiFishPhotoPath(koiId), koiFishPhotoPath(koiId));
+        }
+      }
+      if (!url) {
+        return J({ error: "Image not found" }, 404);
+      }
       return J({ url, imageUrl: url });
     }
 

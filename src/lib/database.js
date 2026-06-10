@@ -7,7 +7,7 @@ import { normalizeDeliveryRecord } from './deliveryOps'
 import { normalizeEventRecord } from './calendarOps'
 import { normalizeUserRecord } from './teamOps'
 import { emptyPondData } from './cloudData'
-import { normalizeImageFieldForSync, storagePaths } from './farmImage'
+import { normalizeCustomerKoiPhotoForSync, normalizeImageFieldForSync, storagePaths } from './farmImage'
 import { confirmDeletions, peekDeletions } from './syncDeletions'
 import { touchPondData, touchUpdatedAt, withUpdatedAt } from './syncMeta'
 
@@ -524,7 +524,7 @@ export async function syncCustomerKoi(list, options) {
   if (!isSupabaseConfigured) return
   const payload = (list || []).map((r) => ({
     ...r,
-    photo: normalizeImageFieldForSync(r.photo, storagePaths.customerKoiPhoto(r.id)),
+    photo: normalizeCustomerKoiPhotoForSync(r.photo, { koiId: r.koiId, customerKoiId: r.id }),
     deathPhoto: normalizeImageFieldForSync(r.deathPhoto, storagePaths.customerKoiDeathPhoto(r.id)),
   }))
   await syncCall('customer_koi', payload, options)

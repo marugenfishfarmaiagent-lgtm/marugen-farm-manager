@@ -383,7 +383,7 @@ export default function KoiFish({
     const nextList = koiList.map((k) => (sameKoiId(k.id, currentKoi.id) ? soldPatch : k))
     setKoiList(nextList)
     setStatusFilter('sold')
-    onKoiSold?.(currentKoi, customer, soldPrice, soldDate, {
+    await onKoiSold?.(currentKoi, customer, soldPrice, soldDate, {
       disposition: sellForm.disposition,
       keepPondName,
     })

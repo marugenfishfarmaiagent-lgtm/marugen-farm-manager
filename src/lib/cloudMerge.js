@@ -70,11 +70,37 @@ export function resolveKoiConflict(local, remote) {
 function mergeKoiRow(local, remote) {
   const picked = resolveKoiConflict(local, remote)
   const other = picked === local ? remote : local
+  return mergeImageFields(picked, other)
+}
+
+function mergeImageFields(picked, other) {
   return {
     ...picked,
     photo: pickPersistedImageRef(picked.photo, other.photo),
     deathPhoto: pickPersistedImageRef(picked.deathPhoto, other.deathPhoto),
   }
+}
+
+export function mergeCustomerKoi(local = [], remote = [], pendingDeleteIds = []) {
+  const delSet = new Set((pendingDeleteIds || []).map(String))
+  const localMap = new Map((local || []).map((r) => [String(r.id), r]))
+  const remoteMap = new Map((remote || []).map((r) => [String(r.id), r]))
+  const ids = new Set([...localMap.keys(), ...remoteMap.keys()])
+
+  const merged = []
+  for (const id of ids) {
+    if (delSet.has(id)) continue
+    const l = localMap.get(id)
+    const r = remoteMap.get(id)
+    if (l && r) {
+      const picked = ts(l) >= ts(r) ? l : r
+      const other = picked === l ? r : l
+      merged.push(mergeImageFields(picked, other))
+    } else {
+      merged.push(l || r)
+    }
+  }
+  return merged
 }
 
 export function mergeKoiFish(local = [], remote = [], pendingDeleteIds = []) {

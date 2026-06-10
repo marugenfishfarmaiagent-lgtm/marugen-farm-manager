@@ -59,13 +59,33 @@ export async function signKoiFishRowPhotos(db: StorageDb, row: Record<string, un
   return { ...row, photo, death_photo };
 }
 
+async function signCustomerKoiImageField(
+  db: StorageDb,
+  row: Record<string, unknown>,
+  field: "photo" | "death_photo",
+): Promise<string | null> {
+  const value = row[field];
+  const defaultPath = field === "photo"
+    ? customerKoiPhotoPath(row.id)
+    : customerKoiDeathPhotoPath(row.id);
+  if (value != null) {
+    const signed = await signFarmImageUrl(db, KOI_PHOTOS_BUCKET, String(value), defaultPath);
+    if (signed) return signed;
+  }
+  if (field === "photo") {
+    const koiId = row.koi_id ?? row.koiId;
+    if (koiId) {
+      const farmPath = koiFishPhotoPath(koiId);
+      const signed = await signFarmImageUrl(db, KOI_PHOTOS_BUCKET, farmPath, farmPath);
+      if (signed) return signed;
+    }
+  }
+  return null;
+}
+
 export async function signCustomerKoiRowPhotos(db: StorageDb, row: Record<string, unknown>) {
-  const photo = row.photo != null
-    ? await signFarmImageUrl(db, KOI_PHOTOS_BUCKET, String(row.photo), customerKoiPhotoPath(row.id))
-    : null;
-  const death_photo = row.death_photo != null
-    ? await signFarmImageUrl(db, KOI_PHOTOS_BUCKET, String(row.death_photo), customerKoiDeathPhotoPath(row.id))
-    : null;
+  const photo = await signCustomerKoiImageField(db, row, "photo");
+  const death_photo = await signCustomerKoiImageField(db, row, "death_photo");
   return { ...row, photo, death_photo };
 }
 

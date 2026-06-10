@@ -29,8 +29,13 @@ import { downloadInvoicePdf } from "./lib/generateInvoicePdf";
 import { calcInvoiceAmounts, sortInvoices } from './lib/invoiceDesign';
 import { computeDashboardMetrics, dashboardInvoiceTotal } from './lib/dashboardMetrics';
 import { compressReceiptImage, expenseImageSrc } from "./lib/compressImage";
-import { persistExpenseList } from "./lib/imageUploadOps";
-import { normalizeKoiFishForCache } from "./lib/farmImage";
+import { persistCustomerKoiList, persistExpenseList } from "./lib/imageUploadOps";
+import {
+  normalizeCustomerKoiForCache,
+  normalizeKoiFishForCache,
+  resolvePhotoRefFromKoi,
+  uploadInlinePhotoIfNeeded,
+} from "./lib/farmImage";
 import { enrichInvoiceCustomer, findCustomerWhatsApp, formatCustomerAddress, findCustomerRecord, openWhatsAppChat, resolveInvoiceCustomer, resolveInvoiceWhatsApp } from "./lib/invoiceWhatsApp";
 import { lookupSingaporePostalAddress } from "./lib/sgPostalLookup";
 import {
@@ -65,7 +70,7 @@ import {
 import { isSupabaseConfigured } from "./lib/supabase";
 import * as auth from "./lib/auth";
 import { markDeleted, clearAllDeletions, peekDeletions } from "./lib/syncDeletions";
-import { mergeRecords, mergePondData, mergeInvoices, mergeKoiFish } from "./lib/cloudMerge";
+import { mergeRecords, mergePondData, mergeInvoices, mergeKoiFish, mergeCustomerKoi } from "./lib/cloudMerge";
 import {
   countIncomingTeamChanges,
   TEAM_SYNC_EVENT_THROTTLE_MS,
@@ -5447,7 +5452,12 @@ export default function App() {
       : koiFishList
     saveKoiFish(list)
   }, [koiFishList]);
-  useEffect(() => { if (!isSupabaseConfigured) saveCustomerKoi(customerKoiList) }, [customerKoiList]);
+  useEffect(() => {
+    const list = isSupabaseConfigured
+      ? customerKoiList.map((r) => normalizeCustomerKoiForCache(r))
+      : customerKoiList
+    saveCustomerKoi(list)
+  }, [customerKoiList]);
   useEffect(() => { if (!isSupabaseConfigured) savePondData(pondData) }, [pondData]);
   useEffect(() => { if (!isSupabaseConfigured) saveProducts(products) }, [products]);
   useEffect(() => { if (!isSupabaseConfigured) saveStockLog(stockLog) }, [stockLog]);
@@ -5483,7 +5493,7 @@ export default function App() {
       setEvents((prev) => mergeRecords(prev, cleaned.events, peekDeletions("events")));
       setStockLog((prev) => mergeRecords(prev, cleaned.stockLog, peekDeletions("stock_activity")));
       setKoiFishList((prev) => mergeKoiFish(prev, cleaned.koiFishList, peekDeletions("koi_fish")));
-      setCustomerKoiList((prev) => mergeRecords(prev, cleaned.customerKoiList, peekDeletions("customer_koi")));
+      setCustomerKoiList((prev) => mergeCustomerKoi(prev, cleaned.customerKoiList, peekDeletions("customer_koi")));
       setPondData((prev) => mergePondData(prev, cleaned.pondData));
       setWhatsappGroups((prev) => mergeRecords(prev, cleaned.whatsappGroups || whatsapp.groups, peekDeletions("whatsapp_groups")));
     } else {
@@ -6195,7 +6205,7 @@ export default function App() {
     );
   }, [chatMessages]);
 
-  const handleKoiSold = useCallback((koi, customer, soldPrice, soldDate, options = {}) => {
+  const handleKoiSold = useCallback(async (koi, customer, soldPrice, soldDate, options = {}) => {
     if (!customer || options.disposition !== "keep") return;
     const keepPondName = options.keepPondName?.trim() || "";
     const existing = customerKoiList.find(
@@ -6209,31 +6219,52 @@ export default function App() {
       });
       return;
     }
-    setCustomerKoiList((prev) => [...prev, touchUpdatedAt({
-      id: genId("CKOI"),
-      customerId: customer.id,
-      customerName: customer.name,
-      koiId: koi.id,
-      photo: koi.photo,
-      fishName: koi.name?.trim() || "",
-      variety: koi.variety,
-      size: koi.size ?? null,
-      pondName: keepPondName,
-      purchaseDate: soldDate || today(),
-      purchasePrice: soldPrice,
-      status: CUSTOMER_KOI_STATUS.IN_POND,
-      collectedDate: null,
-      notes: `Purchased from Marugen Farm. Kept at ${keepPondName}. Original KOI ID: ${koi.id}`,
-      deathDate: null,
-      deathCause: null,
-      deathPhoto: null,
-      deathNotes: "",
-    })]);
-    addNotification({
-      type: "info",
-      title: "Customer Record Created",
-      message: `Koi kept at ${keepPondName} for ${customer.name}. Track in Customer Koi.`,
-    });
+    const ckoiId = genId("CKOI");
+    let photo = resolvePhotoRefFromKoi(koi.photo, koi.id);
+    try {
+      if (photo && isSupabaseConfigured) {
+        photo = await uploadInlinePhotoIfNeeded(
+          photo,
+          (data) => db.uploadCustomerKoiPhoto(ckoiId, data, "photo"),
+        );
+      }
+      const record = touchUpdatedAt({
+        id: ckoiId,
+        customerId: customer.id,
+        customerName: customer.name,
+        koiId: koi.id,
+        photo,
+        fishName: koi.name?.trim() || "",
+        variety: koi.variety,
+        size: koi.size ?? null,
+        pondName: keepPondName,
+        purchaseDate: soldDate || today(),
+        purchasePrice: soldPrice,
+        status: CUSTOMER_KOI_STATUS.IN_POND,
+        collectedDate: null,
+        notes: `Purchased from Marugen Farm. Kept at ${keepPondName}. Original KOI ID: ${koi.id}`,
+        deathDate: null,
+        deathCause: null,
+        deathPhoto: null,
+        deathNotes: "",
+      });
+      const nextList = [...customerKoiList, record];
+      if (isSupabaseConfigured) {
+        await persistCustomerKoiList(nextList);
+      }
+      setCustomerKoiList(nextList);
+      addNotification({
+        type: "info",
+        title: "Customer Record Created",
+        message: `Koi kept at ${keepPondName} for ${customer.name}. Track in Customer Koi.`,
+      });
+    } catch (err) {
+      addNotification({
+        type: "error",
+        title: "Customer Koi Photo Failed",
+        message: err?.message || "Could not save customer koi photo to cloud.",
+      });
+    }
   }, [addNotification, customerKoiList]);
 
   useEffect(() => {

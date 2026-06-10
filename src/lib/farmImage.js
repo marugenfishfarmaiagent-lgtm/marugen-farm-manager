@@ -51,6 +51,52 @@ export function normalizeKoiFishForCache(koi) {
   }
 }
 
+const KOI_PHOTOS_BUCKET = 'koi-photos'
+
+/** Pull `koi-fish/.../photo.jpg` out of an expiring signed URL. */
+export function extractStoragePathFromUrl(url, bucketId = KOI_PHOTOS_BUCKET) {
+  if (!isSignedHttpUrl(url)) return null
+  const match = url.match(new RegExp(`/${bucketId}/([^?]+)`))
+  return match?.[1] ?? null
+}
+
+/** Stable storage reference when copying a farm koi photo onto a customer koi record. */
+export function resolvePhotoRefFromKoi(photo, koiId) {
+  if (!photo) return null
+  if (isInlineImage(photo) || isStoragePath(photo)) return photo
+  if (isSignedHttpUrl(photo)) {
+    const extracted = extractStoragePathFromUrl(photo)
+    if (extracted) return extracted
+    if (koiId) return storagePaths.koiFishPhoto(koiId)
+  }
+  return null
+}
+
+export function normalizeCustomerKoiPhotoForSync(photo, { koiId, customerKoiId }) {
+  if (!photo) return null
+  if (isStoragePath(photo) || isInlineImage(photo)) return photo
+  if (isSignedHttpUrl(photo)) {
+    const extracted = extractStoragePathFromUrl(photo)
+    if (extracted) return extracted
+    if (koiId) return storagePaths.koiFishPhoto(koiId)
+    return storagePaths.customerKoiPhoto(customerKoiId)
+  }
+  return photo
+}
+
+export function normalizeCustomerKoiForCache(record) {
+  if (!record?.id) return record
+  return {
+    ...record,
+    photo: normalizeCustomerKoiPhotoForSync(record.photo, {
+      koiId: record.koiId,
+      customerKoiId: record.id,
+    }) ?? record.photo ?? null,
+    deathPhoto: normalizeImageFieldForSync(record.deathPhoto, storagePaths.customerKoiDeathPhoto(record.id))
+      ?? record.deathPhoto ?? null,
+  }
+}
+
 export function isSignedHttpUrl(src) {
   return typeof src === 'string' && (src.startsWith('http://') || src.startsWith('https://'))
 }
