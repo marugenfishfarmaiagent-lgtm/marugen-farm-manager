@@ -1,6 +1,12 @@
 import { KOI_STATUS, normalizeKoiSizeCm, today } from '../data/constants'
 import { touchUpdatedAt } from './syncMeta'
 
+function normalizeBigintId(value) {
+  if (value == null || value === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
 const SELLABLE_STATUSES = new Set([KOI_STATUS.AVAILABLE, KOI_STATUS.SICK])
 const VALID_STATUSES = new Set(Object.values(KOI_STATUS))
 
@@ -74,10 +80,11 @@ export function validateKoiSaleForm({ customerId, disposition, keepPondName, sol
 
 export function buildSoldKoiPatch(koi, { customerId, soldPrice, soldDate, disposition, keepPondName }) {
   const keep = disposition === 'keep'
+  const soldTo = normalizeBigintId(customerId) ?? customerId
   return touchUpdatedAt({
     ...koi,
     status: KOI_STATUS.SOLD,
-    soldTo: customerId,
+    soldTo,
     soldPrice: Number(soldPrice) || Number(koi.price) || 0,
     soldDate: soldDate || today(),
     sellDisposition: disposition || 'taken',

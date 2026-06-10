@@ -1,4 +1,5 @@
 import { sortInvoices } from './invoiceDesign'
+import { KOI_STATUS } from '../data/constants'
 
 function ts(record) {
   if (!record?.updatedAt) return 0
@@ -49,6 +50,24 @@ export function mergeRecords(local = [], remote = [], pendingDeleteIds = [], res
 
 export function mergeInvoices(local = [], remote = [], pendingDeleteIds = []) {
   return sortInvoices(mergeRecords(local, remote, pendingDeleteIds, resolveInvoiceConflict))
+}
+
+const TERMINAL_KOI_STATUSES = new Set([KOI_STATUS.SOLD, KOI_STATUS.DECEASED])
+
+/** Prefer sold/deceased when timestamps tie — avoids cloud pull reverting a just-marked sale. */
+export function resolveKoiConflict(local, remote) {
+  const lt = ts(local)
+  const rt = ts(remote)
+  const ls = local?.status || KOI_STATUS.AVAILABLE
+  const rs = remote?.status || KOI_STATUS.AVAILABLE
+  if (TERMINAL_KOI_STATUSES.has(ls) && !TERMINAL_KOI_STATUSES.has(rs)) return local
+  if (TERMINAL_KOI_STATUSES.has(rs) && !TERMINAL_KOI_STATUSES.has(ls)) return remote
+  if (lt !== rt) return lt > rt ? local : remote
+  return local
+}
+
+export function mergeKoiFish(local = [], remote = [], pendingDeleteIds = []) {
+  return mergeRecords(local, remote, pendingDeleteIds, resolveKoiConflict)
 }
 
 export function mergePondData(local, remote) {

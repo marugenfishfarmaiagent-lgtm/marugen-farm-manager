@@ -54,7 +54,7 @@ function mapProduct(row) {
   })
 }
 
-function normalizeBigintId(value) {
+export function normalizeBigintId(value) {
   if (value == null || value === '') return null
   const n = Number(value)
   return Number.isFinite(n) ? n : null
@@ -220,7 +220,7 @@ function mapKoiFish(row) {
     pondName: row.pond_name ?? row.pondName ?? '',
     price: Number(row.price) || 0,
     notes: row.notes || '',
-    status: row.status || 'available',
+    status: String(row.status || 'available').toLowerCase(),
     dateAdded: row.date_added ?? row.dateAdded ?? null,
     soldTo: row.sold_to ?? row.soldTo ?? null,
     soldDate: row.sold_date ?? row.soldDate ?? null,
@@ -299,7 +299,15 @@ async function apiCall(body) {
     clearSession()
     throw new Error('Session expired. Please log in again.')
   }
-  if (!res.ok) throw new Error(data.error || `API error: ${res.status}`)
+  if (!res.ok) {
+    const action = body?.action || 'unknown'
+    const entity = body?.entity ? `/${body.entity}` : ''
+    const errMsg = data.error || `API error: ${res.status}`
+    if (import.meta.env.DEV) {
+      console.error(`[farm-api] ${action}${entity} → ${res.status}: ${errMsg}`)
+    }
+    throw new Error(errMsg)
+  }
   return data
 }
 
@@ -498,11 +506,17 @@ export async function syncStockActivity(logs, options) {
 
 export async function syncKoiFish(list, options) {
   if (!isSupabaseConfigured) return
-  const payload = (list || []).map((k) => ({
-    ...k,
-    photo: normalizeImageFieldForSync(k.photo, storagePaths.koiFishPhoto(k.id)),
-    deathPhoto: normalizeImageFieldForSync(k.deathPhoto, storagePaths.koiFishDeathPhoto(k.id)),
-  }))
+  const payload = (list || []).map((k) => {
+    const status = String(k.status || 'available').toLowerCase()
+    const soldTo = normalizeBigintId(k.soldTo)
+    return {
+      ...k,
+      status,
+      soldTo: status === 'sold' ? soldTo : null,
+      photo: normalizeImageFieldForSync(k.photo, storagePaths.koiFishPhoto(k.id)),
+      deathPhoto: normalizeImageFieldForSync(k.deathPhoto, storagePaths.koiFishDeathPhoto(k.id)),
+    }
+  })
   await syncCall('koi_fish', payload, options)
 }
 

@@ -343,12 +343,12 @@ export default function KoiFish({
     setShipToPond('')
   }
 
-  const confirmSell = () => {
+  const confirmSell = async () => {
     if (!canEdit) {
       addNotification?.({ type: 'error', title: 'Permission Denied', message: 'You need the "Edit records" permission. Contact the farm owner.' })
       return
     }
-    if (!sellKoi) return
+    if (!sellKoi || saving) return
     const currentKoi = koiList.find((k) => sameKoiId(k.id, sellKoi.id)) || sellKoi
     const customer = customers.find((c) => String(c.id) === String(sellForm.customerId))
     if (!customer) {
@@ -377,7 +377,9 @@ export default function KoiFish({
       disposition: sellForm.disposition,
       keepPondName,
     })
-    setKoiList((prev) => prev.map((k) => (sameKoiId(k.id, currentKoi.id) ? soldPatch : k)))
+    const nextList = koiList.map((k) => (sameKoiId(k.id, currentKoi.id) ? soldPatch : k))
+    setKoiList(nextList)
+    setStatusFilter('sold')
     onKoiSold?.(currentKoi, customer, soldPrice, soldDate, {
       disposition: sellForm.disposition,
       keepPondName,
@@ -413,6 +415,20 @@ export default function KoiFish({
       })
     }
     setSellKoi(null)
+    if (isSupabaseConfigured) {
+      try {
+        setSaving(true)
+        await persistKoiFishList(nextList)
+      } catch (err) {
+        addNotification({
+          type: 'warning',
+          title: 'Cloud Sync Pending',
+          message: err?.message || 'Sale saved on this device. Retry cloud sync when online.',
+        })
+      } finally {
+        setSaving(false)
+      }
+    }
   }
 
   const confirmDeath = async () => {
@@ -743,7 +759,7 @@ export default function KoiFish({
             </p>
             <div className="modal-actions mt-4 flex justify-end gap-2">
               <Btn variant="secondary" onClick={() => setSellKoi(null)}>Cancel</Btn>
-              <Btn variant="success" onClick={confirmSell} disabled={customers.length === 0}><ShoppingBag size={14} />Confirm Sale</Btn>
+              <Btn variant="success" onClick={confirmSell} disabled={customers.length === 0 || saving}><ShoppingBag size={14} />{saving ? 'Saving…' : 'Confirm Sale'}</Btn>
             </div>
           </>
         )}

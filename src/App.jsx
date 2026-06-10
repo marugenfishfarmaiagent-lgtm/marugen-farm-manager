@@ -64,7 +64,7 @@ import {
 import { isSupabaseConfigured } from "./lib/supabase";
 import * as auth from "./lib/auth";
 import { markDeleted, clearAllDeletions, peekDeletions } from "./lib/syncDeletions";
-import { mergeRecords, mergePondData, mergeInvoices } from "./lib/cloudMerge";
+import { mergeRecords, mergePondData, mergeInvoices, mergeKoiFish } from "./lib/cloudMerge";
 import { applyInvoicePins, pinInvoice, unpinInvoice } from "./lib/invoicePins";
 import { touchUpdatedAt } from "./lib/syncMeta";
 import {
@@ -5451,7 +5451,7 @@ export default function App() {
     toastTimers.current.set(toast.id, timer);
   }, [currentUser, dismissToast]);
 
-  useEffect(() => { if (!isSupabaseConfigured) saveKoiFish(koiFishList) }, [koiFishList]);
+  useEffect(() => { saveKoiFish(koiFishList) }, [koiFishList]);
   useEffect(() => { if (!isSupabaseConfigured) saveCustomerKoi(customerKoiList) }, [customerKoiList]);
   useEffect(() => { if (!isSupabaseConfigured) savePondData(pondData) }, [pondData]);
   useEffect(() => { if (!isSupabaseConfigured) saveProducts(products) }, [products]);
@@ -5487,7 +5487,7 @@ export default function App() {
       setDeliveries((prev) => mergeRecords(prev, cleaned.deliveries, peekDeletions("deliveries")));
       setEvents((prev) => mergeRecords(prev, cleaned.events, peekDeletions("events")));
       setStockLog((prev) => mergeRecords(prev, cleaned.stockLog, peekDeletions("stock_activity")));
-      setKoiFishList((prev) => mergeRecords(prev, cleaned.koiFishList, peekDeletions("koi_fish")));
+      setKoiFishList((prev) => mergeKoiFish(prev, cleaned.koiFishList, peekDeletions("koi_fish")));
       setCustomerKoiList((prev) => mergeRecords(prev, cleaned.customerKoiList, peekDeletions("customer_koi")));
       setPondData((prev) => mergePondData(prev, cleaned.pondData));
       setWhatsappGroups((prev) => mergeRecords(prev, cleaned.whatsappGroups || whatsapp.groups, peekDeletions("whatsapp_groups")));
