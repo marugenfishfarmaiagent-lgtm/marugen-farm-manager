@@ -105,7 +105,7 @@ export default function PondManagement({
     setCompletingReminderId(id)
     try {
       await onPersistPondData?.(nextPond)
-      onSyncReminderCalendar?.('remove', { id })
+      await onSyncReminderCalendar?.('remove', { id })
       addNotification({ type: 'success', title: 'Reminder completed', message: 'Marked as done.' })
     } catch {
       setPondData((prev) => {
@@ -290,10 +290,10 @@ export default function PondManagement({
       })
       return nextPond
     })
-    onSyncReminderCalendar?.('upsert', newReminder)
     setRemindModal(null)
     try {
       await onPersistPondData?.(nextPond)
+      await onSyncReminderCalendar?.('upsert', newReminder)
       addNotification({
         type: 'success',
         title: 'Reminder Set',
@@ -304,7 +304,11 @@ export default function PondManagement({
         ...prev,
         reminders: (prev.reminders || []).filter((x) => String(x.id) !== String(newReminder.id)),
       }))
-      onSyncReminderCalendar?.('remove', { id: newReminder.id })
+      try {
+        await onSyncReminderCalendar?.('remove', { id: newReminder.id })
+      } catch {
+        // Local calendar row already reverted above when pond rollback runs.
+      }
       addNotification({
         type: 'error',
         title: 'Save failed',

@@ -5463,6 +5463,13 @@ export default function App() {
   const [products, setProducts] = useState(() => (isSupabaseConfigured ? INITIAL_PRODUCTS : loadProducts()));
   const [deliveries, setDeliveries] = useState(INITIAL_DELIVERIES);
   const [events, setEvents] = useState(INITIAL_EVENTS);
+  const setEventsWithRef = useCallback((updater) => {
+    setEvents((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      syncStateRef.current = { ...syncStateRef.current, events: next };
+      return next;
+    });
+  }, []);
   const [stockLog, setStockLog] = useState(() => (isSupabaseConfigured ? [] : loadStockLog()));
   const [koiFishList, setKoiFishList] = useState(() => (isSupabaseConfigured ? [] : loadKoiFish()));
   const [customerKoiList, setCustomerKoiList] = useState(() => (isSupabaseConfigured ? [] : loadCustomerKoi()));
@@ -5593,10 +5600,15 @@ export default function App() {
       setInvoices((prev) => applyInvoicePins(mergeInvoices(prev, cleaned.invoices, peekDeletions("invoices"))));
       setExpenses((prev) => mergeRecords(prev, cleaned.expenses, peekDeletions("expenses")));
       setDeliveries((prev) => mergeRecords(prev, cleaned.deliveries, peekDeletions("deliveries")));
-      setPondDataWithRef((prev) => mergePondData(prev, cleaned.pondData));
-      setEvents((prev) => enrichCalendarEvents(
+      let mergedPondReminders = cleaned.pondData?.reminders;
+      setPondDataWithRef((prev) => {
+        const merged = mergePondData(prev, cleaned.pondData);
+        mergedPondReminders = merged.reminders;
+        return merged;
+      });
+      setEventsWithRef((prev) => enrichCalendarEvents(
         mergeRecords(prev, cleaned.events, peekDeletions("events")),
-        syncStateRef.current.pondData?.reminders,
+        mergedPondReminders,
       ));
       setStockLog((prev) => mergeRecords(prev, cleaned.stockLog, peekDeletions("stock_activity")));
       setKoiFishList((prev) => mergeKoiFish(prev, cleaned.koiFishList, peekDeletions("koi_fish")));
@@ -5815,7 +5827,10 @@ export default function App() {
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
   const syncPondDataNow = useCallback(async (pondOverride) => {
-    if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
+    if (!isSupabaseConfigured) return;
+    if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
+      throw new Error("Cloud sync is not ready.");
+    }
     if (!hasPermission(currentUser, "ponds")) {
       throw new Error("Permission denied (ponds).");
     }
@@ -5868,20 +5883,65 @@ export default function App() {
     }
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
-  const syncReminderCalendar = useCallback((action, reminder) => {
+  const syncEventsNow = useCallback(async (eventsOverride) => {
+    if (!isSupabaseConfigured) return;
+    if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
+      throw new Error("Cloud sync is not ready.");
+    }
+    if (!hasPermission(currentUser, "calendar")) return;
+
+    const timerKey = "calendar:Calendar";
+    if (syncTimersRef.current[timerKey]) {
+      clearTimeout(syncTimersRef.current[timerKey]);
+      delete syncTimersRef.current[timerKey];
+    }
+
+    let waited = 0;
+    while (syncInFlightRef.current > 0 && waited < 3000) {
+      await new Promise((r) => setTimeout(r, 100));
+      waited += 100;
+    }
+
+    const payload = eventsOverride ?? syncStateRef.current.events;
+    syncStateRef.current = { ...syncStateRef.current, events: payload };
+
+    syncInFlightRef.current += 1;
+    try {
+      if (!(await ensureCloudSyncReady())) {
+        throw new Error("Session needs refresh. Log out and log in again.");
+      }
+      await db.syncEvents(payload);
+      resetSyncHealth();
+      touchLastSync();
+    } catch (err) {
+      handleSyncFailure(err);
+      throw err;
+    } finally {
+      syncInFlightRef.current -= 1;
+    }
+  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
+
+  const syncReminderCalendar = useCallback(async (action, reminder) => {
     if (!hasPermission(currentUser, "calendar")) return;
     const reminderId = reminder?.id;
     if (!reminderId) return;
-    setEvents((prev) => {
+    let changed = false;
+    let nextEvents = null;
+    setEventsWithRef((prev) => {
       if (action === "upsert") {
-        return upsertCalendarEventForReminder(prev, reminder, currentUser?.name || "Staff");
+        nextEvents = upsertCalendarEventForReminder(prev, reminder, currentUser?.name || "Staff");
+      } else if (action === "remove") {
+        nextEvents = removeCalendarEventForReminder(prev, reminderId);
+      } else {
+        return prev;
       }
-      if (action === "remove") {
-        return removeCalendarEventForReminder(prev, reminderId);
-      }
-      return prev;
+      if (nextEvents === prev) return prev;
+      changed = true;
+      return nextEvents;
     });
-  }, [currentUser]);
+    if (!changed) return;
+    await syncEventsNow(nextEvents);
+  }, [currentUser, setEventsWithRef, syncEventsNow]);
 
   const syncInvoicesNow = useCallback(async (invoicesOverride) => {
     if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) {
@@ -6368,8 +6428,8 @@ export default function App() {
     if (!dataReady || !cloudHydrated) return;
     const user = currentUserRef.current;
     if (!user || !hasPermission(user, "calendar") || !hasPermission(user, "ponds")) return;
-    setEvents((prev) => enrichCalendarEvents(prev, pondData.reminders));
-  }, [dataReady, cloudHydrated, pendingRemindersKey, enrichCalendarEvents, pondData.reminders]);
+    setEventsWithRef((prev) => enrichCalendarEvents(prev, pondData.reminders));
+  }, [dataReady, cloudHydrated, pendingRemindersKey, enrichCalendarEvents, pondData.reminders, setEventsWithRef]);
 
   useEffect(() => syncDebounced("customers", "Customers", db.syncCustomers, customers), [customers, syncDebounced]);
   useEffect(() => syncDebounced("inventory", "Inventory", db.syncProducts, products), [products, syncDebounced]);
