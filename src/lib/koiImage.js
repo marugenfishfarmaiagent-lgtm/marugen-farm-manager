@@ -1,8 +1,7 @@
-import { compressReceiptImage } from './compressImage'
+import { compressImageFile } from './compressImage'
 
+/** Read, auto-resize, and compress a koi / customer-koi photo before save. */
 export async function readKoiImageFile(file) {
-  if (!file?.type?.startsWith('image/')) throw new Error('Please choose an image file.')
-  if (file.size > 2 * 1024 * 1024) throw new Error('Image too large. Max 2MB.')
-  const { dataUrl } = await compressReceiptImage(file, { maxWidth: 900, quality: 0.82 })
+  const { dataUrl } = await compressImageFile(file, { defaultName: 'koi' })
   return dataUrl
 }

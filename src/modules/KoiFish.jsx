@@ -64,7 +64,7 @@ function PhotoPicker({ photo, onPick, onError, label = 'Photo' }) {
           ) : (
             <div className="py-8 text-slate-500">
               <ImagePlus size={32} className="mx-auto mb-2 text-cyan-400" />
-              <p className="text-sm">Click to upload (max 2MB)</p>
+              <p className="text-sm">Click to upload — large photos auto-compressed</p>
             </div>
           )}
         </div>

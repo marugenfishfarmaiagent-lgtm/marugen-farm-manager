@@ -58,7 +58,7 @@ function PhotoPicker({ photo, onPick, onError, label = 'Photo' }) {
     <div>
       <p className="text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wide">{label}</p>
       <label className="block cursor-pointer rounded-xl border-2 border-dashed border-slate-600 p-4 text-center">
-        {photo ? <img src={photo} alt="" className="w-40 h-40 mx-auto object-cover rounded-lg" /> : <p className="text-slate-500 text-sm py-6">Upload photo (max 2MB)</p>}
+        {photo ? <img src={photo} alt="" className="w-40 h-40 mx-auto object-cover rounded-lg" /> : <p className="text-slate-500 text-sm py-6">Upload photo — large files auto-compressed</p>}
         <input type="file" accept="image/*" className="hidden" onChange={(e) => pick(e.target.files?.[0])} />
       </label>
     </div>

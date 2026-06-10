@@ -3140,7 +3140,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
 
       <Modal open={showAdd} onClose={() => { setShowAdd(false); resetUpload(); }} title="Upload Expense Receipt" size="md">
         <div className="space-y-4">
-          <p className="text-slate-400 text-sm">Take a photo or choose an image of the supplier invoice / receipt, then set the receipt date.</p>
+          <p className="text-slate-400 text-sm">Take a photo or choose an invoice image — large files are auto-compressed before upload. Set the receipt date before saving.</p>
           <input
             ref={albumInputRef}
             type="file"
