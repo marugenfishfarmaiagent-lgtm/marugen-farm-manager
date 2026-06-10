@@ -54,7 +54,14 @@ function filterPondDataForCloud(data: Record<string, unknown>) {
   const treatmentLogs = ((data.treatmentLogs as Record<string, unknown>[]) || [])
     .filter((l) => keepLog((l.startDate || l.date) as string))
   const reminders = ((data.reminders as Record<string, unknown>[]) || [])
-    .filter((r) => r.status === "pending" || isWithinDays(r.dueDate as string, CLOUD_RETENTION_DAYS.pondLog))
+    .filter((r) => {
+      const status = String(r.status || "pending").toLowerCase()
+      if (status === "pending") return true
+      if (status === "done") {
+        return isWithinDays((r.completedAt || r.dueDate) as string, CLOUD_RETENTION_DAYS.pondLog)
+      }
+      return isWithinDays(r.dueDate as string, CLOUD_RETENTION_DAYS.pondLog)
+    })
   return { ...data, maintenanceLogs, treatmentLogs, reminders }
 }
 

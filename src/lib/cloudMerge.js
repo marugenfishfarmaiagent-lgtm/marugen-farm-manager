@@ -120,12 +120,20 @@ export function mergeKoiFish(local = [], remote = [], pendingDeleteIds = []) {
   return merged
 }
 
+function reminderIsDone(row) {
+  if (!row) return false
+  if (row.completedAt) return true
+  return String(row.status || 'pending').toLowerCase() === 'done'
+}
+
 function mergePondRecords(local = [], remote = [], { preferDone = false } = {}) {
   const map = new Map()
   const pick = (a, b) => {
     if (preferDone) {
-      if (a.status === 'done' && b.status !== 'done') return a
-      if (b.status === 'done' && a.status !== 'done') return b
+      const aDone = reminderIsDone(a)
+      const bDone = reminderIsDone(b)
+      if (aDone && !bDone) return a
+      if (bDone && !aDone) return b
     }
     return ts(a) >= ts(b) ? a : b
   }
@@ -148,13 +156,18 @@ export function mergePondData(local, remote) {
   if (!remote || typeof remote !== 'object') return local
   if (!local || typeof local !== 'object') return remote
   const localNewer = ts(local) >= ts(remote)
+  const mergedReminders = mergePondRecords(local.reminders, remote.reminders, { preferDone: true })
+  const localDoneWins = (local.reminders || []).some((row) => {
+    const remoteRow = (remote.reminders || []).find((r) => String(r.id) === String(row.id))
+    return reminderIsDone(row) && !reminderIsDone(remoteRow)
+  })
   return {
     ...(localNewer ? local : remote),
     ponds: mergePondRecords(local.ponds, remote.ponds),
     maintenanceLogs: mergePondRecords(local.maintenanceLogs, remote.maintenanceLogs),
     treatmentLogs: mergePondRecords(local.treatmentLogs, remote.treatmentLogs),
-    reminders: mergePondRecords(local.reminders, remote.reminders, { preferDone: true }),
+    reminders: mergedReminders,
     treatmentGuides: mergePondRecords(local.treatmentGuides, remote.treatmentGuides),
-    updatedAt: localNewer ? local.updatedAt : remote.updatedAt,
+    updatedAt: localDoneWins || localNewer ? local.updatedAt : remote.updatedAt,
   }
 }

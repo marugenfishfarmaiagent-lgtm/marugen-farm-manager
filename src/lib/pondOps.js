@@ -1,4 +1,5 @@
 import { POND_TYPES, MAINTENANCE_TYPES, today } from '../data/constants'
+import { touchPondData, touchUpdatedAt } from './syncMeta'
 
 const POND_TYPE_VALUES = new Set(POND_TYPES.map((t) => t.value))
 const MAINTENANCE_TYPE_VALUES = new Set(MAINTENANCE_TYPES.map((t) => t.value))
@@ -138,6 +139,42 @@ export function applyMaintenanceToPond(pond, form) {
 
 export function findPondById(ponds, pondId) {
   return (ponds || []).find((p) => samePondId(p.id, pondId)) || null
+}
+
+export function normalizeReminderStatus(status) {
+  const value = String(status || 'pending').toLowerCase()
+  return value === 'done' ? 'done' : 'pending'
+}
+
+export function isPendingReminder(reminder) {
+  if (!reminder) return false
+  if (reminder.completedAt) return false
+  return normalizeReminderStatus(reminder.status) === 'pending'
+}
+
+export function isDoneReminder(reminder) {
+  if (!reminder) return false
+  if (reminder.completedAt) return true
+  return normalizeReminderStatus(reminder.status) === 'done'
+}
+
+/** Mark a pending reminder complete; returns { changed, data }. */
+export function markReminderCompleteInPondData(pondData, reminderId) {
+  if (!pondData || reminderId == null) return { changed: false, data: pondData }
+  const reminders = pondData.reminders || []
+  const id = String(reminderId)
+  const target = reminders.find((x) => String(x.id) === id)
+  if (!target || !isPendingReminder(target)) return { changed: false, data: pondData }
+
+  const nextReminders = reminders.map((x) => (
+    String(x.id) === id
+      ? touchUpdatedAt({ ...x, status: 'done', completedAt: today() })
+      : x
+  ))
+  return {
+    changed: true,
+    data: touchPondData({ ...pondData, reminders: nextReminders }),
+  }
 }
 
 export function isDuplicatePondName(ponds, name, excludeId = null) {

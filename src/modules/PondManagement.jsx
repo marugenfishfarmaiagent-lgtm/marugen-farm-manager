@@ -13,6 +13,7 @@ import EmptyState from '../components/ui/EmptyState'
 import { filterPondLogsForApp } from '../lib/retention'
 import {
   applyMaintenanceToPond, buildMaintenanceLogEntry, findPondById, isDuplicatePondName,
+  isPendingReminder, markReminderCompleteInPondData,
   samePondId, validateMaintenanceForm, validatePondFields, validateReminderForm, validateTreatmentForm,
 } from '../lib/pondOps'
 import { touchPondData, touchUpdatedAt } from '../lib/syncMeta'
@@ -35,7 +36,10 @@ function paramColor(kind, value) {
   return 'text-white'
 }
 
-export default function PondManagement({ pondData, setPondData, addNotification, currentUser, canEdit = false, canDelete = false }) {
+export default function PondManagement({
+  pondData, setPondData, addNotification, currentUser, canEdit = false, canDelete = false,
+  onPersistPondData,
+}) {
   const { ponds, maintenanceLogs, treatmentLogs, reminders, treatmentGuides } = pondData
   const visiblePond = useMemo(() => filterPondLogsForApp(pondData), [pondData])
   const denyEdit = () => addNotification({ type: 'error', title: 'Permission Denied', message: 'You need the "Edit records" permission. Contact the farm owner.' })
@@ -60,22 +64,30 @@ export default function PondManagement({ pondData, setPondData, addNotification,
 
   const todayStr = today()
   const activeTreatments = visiblePond.treatmentLogs.filter((t) => t.startDate <= todayStr && (!t.endDate || t.endDate >= todayStr))
-  const overdueReminders = visiblePond.reminders.filter((r) => r.status === 'pending' && r.dueDate < todayStr)
-  const pendingReminders = visiblePond.reminders.filter((r) => r.status === 'pending' && r.dueDate >= todayStr)
+  const overdueReminders = visiblePond.reminders.filter((r) => isPendingReminder(r) && r.dueDate < todayStr)
+  const pendingReminders = visiblePond.reminders.filter((r) => isPendingReminder(r) && r.dueDate >= todayStr)
 
   const update = (patch) => setPondData((prev) => touchPondData({ ...prev, ...patch }))
 
-  const markReminderDone = (reminderId) => {
+  const markReminderDone = async (reminderId) => {
     if (!canEdit) { denyEdit(); return }
-    setPondData((prev) => touchPondData({
-      ...prev,
-      reminders: (prev.reminders || []).map((x) => (
-        String(x.id) === String(reminderId)
-          ? touchUpdatedAt({ ...x, status: 'done', completedAt: today() })
-          : x
-      )),
-    }))
+    let nextPond = null
+    setPondData((prev) => {
+      const result = markReminderCompleteInPondData(prev, reminderId)
+      if (!result.changed) return prev
+      nextPond = result.data
+      return result.data
+    })
+    if (!nextPond) {
+      addNotification({ type: 'error', title: 'Reminder not updated', message: 'Could not find that reminder. Refresh and try again.' })
+      return
+    }
     addNotification({ type: 'success', title: 'Reminder completed', message: 'Marked as done.' })
+    try {
+      await onPersistPondData?.(nextPond)
+    } catch {
+      // Parent surfaces sync errors via cloud toast.
+    }
   }
   const hasPonds = ponds.length > 0
 
@@ -553,7 +565,10 @@ export default function PondManagement({ pondData, setPondData, addNotification,
                 {canDelete && (
                   <Btn variant="ghost" size="sm" onClick={() => {
                     if (!canDelete) { denyDelete(); return }
-                    update({ reminders: reminders.filter((x) => x.id !== r.id) })
+                    setPondData((prev) => touchPondData({
+                      ...prev,
+                      reminders: (prev.reminders || []).filter((x) => String(x.id) !== String(r.id)),
+                    }))
                   }}><Trash2 size={12} /></Btn>
                 )}
               </div>
