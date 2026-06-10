@@ -15,7 +15,7 @@ import {
   applyMaintenanceToPond, buildMaintenanceLogEntry, findPondById, isDuplicatePondName,
   samePondId, validateMaintenanceForm, validatePondFields, validateReminderForm, validateTreatmentForm,
 } from '../lib/pondOps'
-import { touchPondData } from '../lib/syncMeta'
+import { touchPondData, touchUpdatedAt } from '../lib/syncMeta'
 
 const POND_TYPE_COLOR = { koi: 'bg-cyan-500/20 text-cyan-300', arowana: 'bg-amber-500/20 text-amber-300', quarantine: 'bg-red-500/20 text-red-300', display: 'bg-purple-500/20 text-purple-300' }
 
@@ -56,6 +56,7 @@ export default function PondManagement({ pondData, setPondData, addNotification,
   const [remindForm, setRemindForm] = useState({ pondId: '', type: 'water_test', dueDate: today(), dueTime: '09:00', note: '', repeat: 'none' })
   const [guideForm, setGuideForm] = useState({ title: '', category: '', steps: '', warning: '' })
   const [editingGuideId, setEditingGuideId] = useState(null)
+  const [editingTreatmentId, setEditingTreatmentId] = useState(null)
 
   const todayStr = today()
   const activeTreatments = visiblePond.treatmentLogs.filter((t) => t.startDate <= todayStr && (!t.endDate || t.endDate >= todayStr))
@@ -63,6 +64,19 @@ export default function PondManagement({ pondData, setPondData, addNotification,
   const pendingReminders = visiblePond.reminders.filter((r) => r.status === 'pending' && r.dueDate >= todayStr)
 
   const update = (patch) => setPondData((prev) => touchPondData({ ...prev, ...patch }))
+
+  const markReminderDone = (reminderId) => {
+    if (!canEdit) { denyEdit(); return }
+    setPondData((prev) => touchPondData({
+      ...prev,
+      reminders: (prev.reminders || []).map((x) => (
+        String(x.id) === String(reminderId)
+          ? touchUpdatedAt({ ...x, status: 'done', completedAt: today() })
+          : x
+      )),
+    }))
+    addNotification({ type: 'success', title: 'Reminder completed', message: 'Marked as done.' })
+  }
   const hasPonds = ponds.length > 0
 
   const displayGuides = treatmentGuides.length ? treatmentGuides : DEFAULT_TREATMENT_GUIDES
@@ -138,10 +152,67 @@ export default function PondManagement({ pondData, setPondData, addNotification,
       addNotification({ type: 'error', title: 'Pond Not Found', message: 'Selected pond is no longer in the list.' })
       return
     }
-    const log = { ...treatForm, medicine: treatForm.medicine.trim(), id: genId('TREAT'), pondName: pond.name, performedBy: currentUser?.name || '' }
-    update({ treatmentLogs: [log, ...treatmentLogs] })
-    addNotification({ type: 'info', title: 'Treatment Started', message: `${treatForm.medicine} in ${pond.name}` })
+    const payload = {
+      ...treatForm,
+      medicine: treatForm.medicine.trim(),
+      reason: treatForm.reason?.trim() || '',
+      notes: treatForm.notes?.trim() || '',
+      pondName: pond.name,
+      performedBy: currentUser?.name || '',
+    }
+    if (editingTreatmentId) {
+      update({
+        treatmentLogs: treatmentLogs.map((t) => (
+          String(t.id) === String(editingTreatmentId)
+            ? touchUpdatedAt({ ...t, ...payload, id: editingTreatmentId })
+            : t
+        )),
+      })
+      addNotification({ type: 'success', title: 'Treatment Updated', message: `${payload.medicine} — ${pond.name}` })
+    } else {
+      const log = touchUpdatedAt({ ...payload, id: genId('TREAT') })
+      update({ treatmentLogs: [log, ...treatmentLogs] })
+      addNotification({ type: 'info', title: 'Treatment Started', message: `${payload.medicine} in ${pond.name}` })
+    }
     setTreatModal(null)
+    setEditingTreatmentId(null)
+  }
+
+  const openEditTreatment = (log) => {
+    if (!canEdit) { denyEdit(); return }
+    setEditingTreatmentId(log.id)
+    setTreatForm({
+      pondId: log.pondId,
+      medicine: log.medicine || '',
+      dosage: log.dosage || '',
+      reason: log.reason || '',
+      startDate: log.startDate || today(),
+      endDate: log.endDate || '',
+      waterChangeBefore: Boolean(log.waterChangeBefore),
+      notes: log.notes || '',
+    })
+    setTreatModal('edit')
+  }
+
+  const deleteTreatment = (treatmentId) => {
+    if (!canDelete) { denyDelete(); return }
+    update({ treatmentLogs: treatmentLogs.filter((t) => String(t.id) !== String(treatmentId)) })
+    addNotification({ type: 'info', title: 'Treatment Removed', message: 'Treatment log deleted.' })
+  }
+
+  const deletePond = (pondId) => {
+    if (!canDelete) { denyDelete(); return }
+    const pond = findPondById(ponds, pondId)
+    if (!pond) return
+    if (!window.confirm(`Delete pond "${pond.name}" and all its maintenance, treatment logs, and reminders?`)) return
+    update({
+      ponds: ponds.filter((p) => !samePondId(p.id, pondId)),
+      maintenanceLogs: maintenanceLogs.filter((l) => !samePondId(l.pondId, pondId)),
+      treatmentLogs: treatmentLogs.filter((t) => !samePondId(t.pondId, pondId)),
+      reminders: reminders.filter((r) => !samePondId(r.pondId, pondId)),
+    })
+    addNotification({ type: 'info', title: 'Pond Deleted', message: `${pond.name} removed.` })
+    if (editPond && samePondId(editPond.id, pondId)) setEditPond(null)
   }
 
   const saveReminder = () => {
@@ -226,8 +297,14 @@ export default function PondManagement({ pondData, setPondData, addNotification,
   }
 
   const openNewTreatment = () => {
+    setEditingTreatmentId(null)
     setTreatForm({ pondId: ponds[0]?.id || '', medicine: '', dosage: '', reason: '', startDate: today(), endDate: '', waterChangeBefore: false, notes: '' })
     setTreatModal('new')
+  }
+
+  const closeTreatModal = () => {
+    setTreatModal(null)
+    setEditingTreatmentId(null)
   }
 
   const openNewReminder = () => {
@@ -338,7 +415,10 @@ export default function PondManagement({ pondData, setPondData, addNotification,
                       <Btn variant="secondary" size="sm" onClick={() => { setMaintModal(p.id); setMaintForm((f) => ({ ...f, pondId: p.id, date: today() })) }}>Maintenance</Btn>
                       <Btn variant="secondary" size="sm" onClick={() => { setTreatModal(p.id); setTreatForm((f) => ({ ...f, pondId: p.id })) }}>Treatment</Btn>
                       <Btn variant="ghost" size="sm" onClick={() => { setRemindModal(p.id); setRemindForm((f) => ({ ...f, pondId: p.id })) }}><Bell size={12} /></Btn>
-                      <Btn variant="ghost" size="sm" onClick={() => setEditPond({ ...p })}>Edit</Btn>
+                      <Btn variant="ghost" size="sm" onClick={() => setEditPond({ ...p })}><Edit2 size={12} />Edit</Btn>
+                      {canDelete && (
+                        <Btn variant="danger" size="sm" onClick={() => deletePond(p.id)}><Trash2 size={12} />Delete</Btn>
+                      )}
                     </>
                   )}
                 </div>
@@ -404,24 +484,43 @@ export default function PondManagement({ pondData, setPondData, addNotification,
               <Card><EmptyState emoji="💊" title="No treatment logs yet" hint="Log medicine and dosage per pond" className="py-10" /></Card>
             ) : visiblePond.treatmentLogs.map((t) => (
               <Card key={t.id} className="p-3 text-sm">
-                <div className="flex justify-between gap-2">
-                  <span className="text-white font-medium">{t.medicine}</span>
-                  <Badge className="bg-amber-500/20 text-amber-300">{t.pondName}</Badge>
+                <div className="flex justify-between gap-2 items-start">
+                  <div className="min-w-0 flex-1">
+                    <span className="text-white font-medium">{t.medicine}</span>
+                    <Badge className="bg-amber-500/20 text-amber-300 ml-2">{t.pondName}</Badge>
+                    <p className="text-slate-400 text-xs mt-1">{t.startDate} → {t.endDate || 'ongoing'}</p>
+                    {t.performedBy && <p className="text-slate-500 text-xs mt-1">By {t.performedBy}</p>}
+                  </div>
+                  {(canEdit || canDelete) && (
+                    <div className="flex gap-1 shrink-0">
+                      {canEdit && <Btn variant="ghost" size="sm" onClick={() => openEditTreatment(t)}><Edit2 size={12} /></Btn>}
+                      {canDelete && <Btn variant="danger" size="sm" onClick={() => deleteTreatment(t.id)}><Trash2 size={12} /></Btn>}
+                    </div>
+                  )}
                 </div>
-                <p className="text-slate-400 text-xs mt-1">{t.startDate} → {t.endDate || 'ongoing'}</p>
-                {t.performedBy && <p className="text-slate-500 text-xs mt-1">By {t.performedBy}</p>}
               </Card>
             ))}
           </div>
           <Card className="overflow-hidden hidden md:block">
             <div className="overflow-x-auto">
             <table className="w-full text-sm min-w-[480px]">
-              <thead><tr className="bg-slate-700/30 text-slate-400 text-xs"><th className="p-2 text-left">Pond</th><th className="p-2 text-left">Medicine</th><th className="p-2 text-left">Period</th><th className="p-2 text-left">By</th></tr></thead>
+              <thead><tr className="bg-slate-700/30 text-slate-400 text-xs"><th className="p-2 text-left">Pond</th><th className="p-2 text-left">Medicine</th><th className="p-2 text-left">Period</th><th className="p-2 text-left">By</th><th className="p-2 text-right">Actions</th></tr></thead>
               <tbody className="divide-y divide-slate-700/30">
                 {visiblePond.treatmentLogs.length === 0 ? (
-                  <tr><td colSpan={4} className="p-0"><EmptyState emoji="💊" title="No treatment logs yet" className="py-10" /></td></tr>
+                  <tr><td colSpan={5} className="p-0"><EmptyState emoji="💊" title="No treatment logs yet" className="py-10" /></td></tr>
                 ) : visiblePond.treatmentLogs.map((t) => (
-                  <tr key={t.id} className="text-slate-300"><td className="p-2">{t.pondName}</td><td className="p-2">{t.medicine}</td><td className="p-2">{t.startDate} → {t.endDate || 'ongoing'}</td><td className="p-2 text-xs">{t.performedBy}</td></tr>
+                  <tr key={t.id} className="text-slate-300">
+                    <td className="p-2">{t.pondName}</td>
+                    <td className="p-2">{t.medicine}</td>
+                    <td className="p-2">{t.startDate} → {t.endDate || 'ongoing'}</td>
+                    <td className="p-2 text-xs">{t.performedBy}</td>
+                    <td className="p-2 text-right">
+                      <div className="flex justify-end gap-1">
+                        {canEdit && <Btn variant="ghost" size="sm" onClick={() => openEditTreatment(t)}><Edit2 size={12} /></Btn>}
+                        {canDelete && <Btn variant="danger" size="sm" onClick={() => deleteTreatment(t.id)}><Trash2 size={12} /></Btn>}
+                      </div>
+                    </td>
+                  </tr>
                 ))}
               </tbody>
             </table>
@@ -438,10 +537,7 @@ export default function PondManagement({ pondData, setPondData, addNotification,
               {overdueReminders.map((r) => (
                 <div key={r.id} className="flex justify-between items-center py-2 text-sm">
                   <span className="text-white">{r.pondName} — {r.note || r.type} ({r.dueDate})</span>
-                  <Btn variant="success" size="sm" onClick={() => {
-                    if (!canEdit) { denyEdit(); return }
-                    update({ reminders: reminders.map((x) => (x.id === r.id ? { ...x, status: 'done' } : x)) })
-                  }}><Check size={12} /></Btn>
+                  <Btn variant="success" size="sm" onClick={() => markReminderDone(r.id)}><Check size={12} /></Btn>
                 </div>
               ))}
             </Card>
@@ -453,10 +549,7 @@ export default function PondManagement({ pondData, setPondData, addNotification,
             <Card key={r.id} className="p-3 flex justify-between items-center text-sm">
               <span className="text-white">{r.pondName} · {r.dueDate} {r.dueTime}</span>
               <div className="flex gap-2">
-                <Btn variant="success" size="sm" onClick={() => {
-                  if (!canEdit) { denyEdit(); return }
-                  update({ reminders: reminders.map((x) => (x.id === r.id ? { ...x, status: 'done' } : x)) })
-                }}>Done</Btn>
+                <Btn variant="success" size="sm" onClick={() => markReminderDone(r.id)}>Done</Btn>
                 {canDelete && (
                   <Btn variant="ghost" size="sm" onClick={() => {
                     if (!canDelete) { denyDelete(); return }
@@ -510,9 +603,14 @@ export default function PondManagement({ pondData, setPondData, addNotification,
             <Select label="Type" value={editPond.type} onChange={(e) => setEditPond((p) => ({ ...p, type: e.target.value }))} options={POND_TYPES} className="mt-3" />
             <Input label="Volume (ton)" type="number" value={editPond.volume} onChange={(e) => setEditPond((p) => ({ ...p, volume: e.target.value }))} className="mt-3" min="0" step="0.1" />
             <Textarea label="Notes" value={editPond.notes || ''} onChange={(e) => setEditPond((p) => ({ ...p, notes: e.target.value }))} className="mt-3" />
-            <div className="modal-actions mt-4 flex justify-end gap-2">
-              <Btn variant="secondary" onClick={() => setEditPond(null)}>Cancel</Btn>
-              <Btn onClick={saveEditPond}>Save</Btn>
+            <div className="modal-actions mt-4 flex justify-between gap-2">
+              {canDelete && (
+                <Btn variant="danger" onClick={() => deletePond(editPond.id)}><Trash2 size={14} />Delete Pond</Btn>
+              )}
+              <div className="flex gap-2 ml-auto">
+                <Btn variant="secondary" onClick={() => setEditPond(null)}>Cancel</Btn>
+                <Btn onClick={saveEditPond}>Save</Btn>
+              </div>
             </div>
           </>
         )}
@@ -538,7 +636,7 @@ export default function PondManagement({ pondData, setPondData, addNotification,
         <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setMaintModal(null)}>Cancel</Btn><Btn onClick={saveMaint} disabled={!canEdit}>Save</Btn></div>
       </Modal>
 
-      <Modal open={!!treatModal} onClose={() => setTreatModal(null)} title="Log Treatment" size="lg">
+      <Modal open={!!treatModal} onClose={closeTreatModal} title={editingTreatmentId ? 'Edit Treatment' : 'Log Treatment'} size="lg">
         <Select label="Pond" value={treatForm.pondId} onChange={(e) => setTreatForm((f) => ({ ...f, pondId: e.target.value }))}
           options={hasPonds ? ponds.map((p) => ({ value: p.id, label: p.name })) : [{ value: '', label: 'No ponds — add one first' }]} />
         <Input label="Medicine" value={treatForm.medicine} onChange={(e) => setTreatForm((f) => ({ ...f, medicine: e.target.value }))} className="mt-3" placeholder="Melafix" />
@@ -551,7 +649,11 @@ export default function PondManagement({ pondData, setPondData, addNotification,
         <label className="flex items-center gap-2 mt-3 text-sm text-slate-300">
           <input type="checkbox" checked={treatForm.waterChangeBefore} onChange={(e) => setTreatForm((f) => ({ ...f, waterChangeBefore: e.target.checked }))} />Water change before treatment
         </label>
-        <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setTreatModal(null)}>Cancel</Btn><Btn onClick={saveTreatment} disabled={!canEdit}>Start</Btn></div>
+        <Textarea label="Notes" value={treatForm.notes} onChange={(e) => setTreatForm((f) => ({ ...f, notes: e.target.value }))} className="mt-3" />
+        <div className="modal-actions mt-4 flex justify-end gap-2">
+          <Btn variant="secondary" onClick={closeTreatModal}>Cancel</Btn>
+          <Btn onClick={saveTreatment} disabled={!canEdit}>{editingTreatmentId ? 'Save Changes' : 'Start'}</Btn>
+        </div>
       </Modal>
 
       <Modal open={!!remindModal} onClose={() => setRemindModal(null)} title="Add Reminder">

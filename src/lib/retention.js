@@ -140,7 +140,11 @@ function stripDeathPhoto(record) {
 function filterPondLogsForCloud(pondData) {
   if (!pondData || typeof pondData !== 'object') return pondData
   const keepLog = (date) => isWithinDays(date, CLOUD_RETENTION_DAYS.pondLog)
-  const keepReminder = (r) => r.status === 'pending' || isWithinDays(r.dueDate, CLOUD_RETENTION_DAYS.pondLog)
+  const keepReminder = (r) => {
+    if (r.status === 'pending') return true
+    if (r.status === 'done') return isWithinDays(r.completedAt || r.dueDate, CLOUD_RETENTION_DAYS.pondLog)
+    return isWithinDays(r.dueDate, CLOUD_RETENTION_DAYS.pondLog)
+  }
   return {
     ...pondData,
     maintenanceLogs: (pondData.maintenanceLogs || []).filter((l) => keepLog(l.date)),
@@ -152,7 +156,11 @@ function filterPondLogsForCloud(pondData) {
 export function filterPondLogsForApp(pondData) {
   if (!pondData || typeof pondData !== 'object') return pondData
   const keepLog = (date) => isWithinDays(date, APP_VIEW_DAYS.pondLog)
-  const keepReminder = (r) => r.status === 'pending' || isWithinDays(r.dueDate, APP_VIEW_DAYS.pondLog)
+  const keepReminder = (r) => {
+    if (r.status === 'pending') return true
+    if (r.status === 'done') return isWithinDays(r.completedAt || r.dueDate, APP_VIEW_DAYS.pondLog)
+    return isWithinDays(r.dueDate, APP_VIEW_DAYS.pondLog)
+  }
   return {
     ...pondData,
     maintenanceLogs: (pondData.maintenanceLogs || []).filter((l) => keepLog(l.date)),

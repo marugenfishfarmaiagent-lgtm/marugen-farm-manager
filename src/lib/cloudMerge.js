@@ -120,8 +120,41 @@ export function mergeKoiFish(local = [], remote = [], pendingDeleteIds = []) {
   return merged
 }
 
+function mergePondRecords(local = [], remote = [], { preferDone = false } = {}) {
+  const map = new Map()
+  const pick = (a, b) => {
+    if (preferDone) {
+      if (a.status === 'done' && b.status !== 'done') return a
+      if (b.status === 'done' && a.status !== 'done') return b
+    }
+    return ts(a) >= ts(b) ? a : b
+  }
+
+  for (const row of remote || []) {
+    if (row?.id == null) continue
+    map.set(String(row.id), row)
+  }
+  for (const row of local || []) {
+    if (row?.id == null) continue
+    const id = String(row.id)
+    const existing = map.get(id)
+    map.set(id, existing ? pick(row, existing) : row)
+  }
+  return [...map.values()]
+}
+
+/** Merge pond blob field-by-field so reminder "done" and log edits are not wiped by cloud pull. */
 export function mergePondData(local, remote) {
   if (!remote || typeof remote !== 'object') return local
   if (!local || typeof local !== 'object') return remote
-  return ts(local) >= ts(remote) ? local : remote
+  const localNewer = ts(local) >= ts(remote)
+  return {
+    ...(localNewer ? local : remote),
+    ponds: mergePondRecords(local.ponds, remote.ponds),
+    maintenanceLogs: mergePondRecords(local.maintenanceLogs, remote.maintenanceLogs),
+    treatmentLogs: mergePondRecords(local.treatmentLogs, remote.treatmentLogs),
+    reminders: mergePondRecords(local.reminders, remote.reminders, { preferDone: true }),
+    treatmentGuides: mergePondRecords(local.treatmentGuides, remote.treatmentGuides),
+    updatedAt: localNewer ? local.updatedAt : remote.updatedAt,
+  }
 }
