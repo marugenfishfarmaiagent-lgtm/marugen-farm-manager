@@ -5467,6 +5467,13 @@ export default function App() {
   const [koiFishList, setKoiFishList] = useState(() => (isSupabaseConfigured ? [] : loadKoiFish()));
   const [customerKoiList, setCustomerKoiList] = useState(() => (isSupabaseConfigured ? [] : loadCustomerKoi()));
   const [pondData, setPondData] = useState(() => (isSupabaseConfigured ? emptyPondData() : loadPondData()));
+  const setPondDataWithRef = useCallback((updater) => {
+    setPondData((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      syncStateRef.current = { ...syncStateRef.current, pondData: next };
+      return next;
+    });
+  }, []);
   const [whatsappGroups, setWhatsappGroups] = useState(() => (isSupabaseConfigured ? [] : loadWhatsappGroups()));
   const [notifications, setNotifications] = useState([]);
   const [toasts, setToasts] = useState([]);
@@ -5586,14 +5593,11 @@ export default function App() {
       setInvoices((prev) => applyInvoicePins(mergeInvoices(prev, cleaned.invoices, peekDeletions("invoices"))));
       setExpenses((prev) => mergeRecords(prev, cleaned.expenses, peekDeletions("expenses")));
       setDeliveries((prev) => mergeRecords(prev, cleaned.deliveries, peekDeletions("deliveries")));
-      setPondData((prev) => mergePondData(prev, cleaned.pondData));
-      setEvents((prev) => {
-        const mergedPond = mergePondData(syncStateRef.current.pondData, cleaned.pondData);
-        return enrichCalendarEvents(
-          mergeRecords(prev, cleaned.events, peekDeletions("events")),
-          mergedPond.reminders,
-        );
-      });
+      setPondDataWithRef((prev) => mergePondData(prev, cleaned.pondData));
+      setEvents((prev) => enrichCalendarEvents(
+        mergeRecords(prev, cleaned.events, peekDeletions("events")),
+        syncStateRef.current.pondData?.reminders,
+      ));
       setStockLog((prev) => mergeRecords(prev, cleaned.stockLog, peekDeletions("stock_activity")));
       setKoiFishList((prev) => mergeKoiFish(prev, cleaned.koiFishList, peekDeletions("koi_fish")));
       setCustomerKoiList((prev) => mergeCustomerKoi(prev, cleaned.customerKoiList, peekDeletions("customer_koi")));
@@ -5604,7 +5608,7 @@ export default function App() {
       setInvoices(sortInvoices(applyInvoicePins(cleaned.invoices)));
       setExpenses(cleaned.expenses);
       setDeliveries(cleaned.deliveries);
-      setPondData(cleaned.pondData);
+      setPondDataWithRef(cleaned.pondData);
       setEvents(enrichCalendarEvents(cleaned.events, cleaned.pondData?.reminders));
       setStockLog(cleaned.stockLog);
       setKoiFishList(cleaned.koiFishList);
@@ -5650,7 +5654,7 @@ export default function App() {
     setStockLog([]);
     setKoiFishList([]);
     setCustomerKoiList([]);
-    setPondData(emptyPondData());
+    setPondDataWithRef(emptyPondData());
     setWhatsappGroups([]);
     clearAllDeletions();
     setCloudHydrated(false);
@@ -5843,7 +5847,7 @@ export default function App() {
         if (remote?.pondData) {
           payload = touchPondData(mergePondData(payload, remote.pondData));
           syncStateRef.current = { ...syncStateRef.current, pondData: payload };
-          setPondData((prev) => mergePondData(prev, remote.pondData));
+          setPondDataWithRef((prev) => mergePondData(prev, remote.pondData));
           result = await db.syncPondData(payload);
         }
         if (result?.skipped) {
@@ -6364,8 +6368,8 @@ export default function App() {
     if (!dataReady || !cloudHydrated) return;
     const user = currentUserRef.current;
     if (!user || !hasPermission(user, "calendar") || !hasPermission(user, "ponds")) return;
-    setEvents((prev) => enrichCalendarEvents(prev, syncStateRef.current.pondData?.reminders));
-  }, [dataReady, cloudHydrated, pendingRemindersKey, enrichCalendarEvents]);
+    setEvents((prev) => enrichCalendarEvents(prev, pondData.reminders));
+  }, [dataReady, cloudHydrated, pendingRemindersKey, enrichCalendarEvents, pondData.reminders]);
 
   useEffect(() => syncDebounced("customers", "Customers", db.syncCustomers, customers), [customers, syncDebounced]);
   useEffect(() => syncDebounced("inventory", "Inventory", db.syncProducts, products), [products, syncDebounced]);
@@ -6703,7 +6707,7 @@ export default function App() {
     isSupabaseConfigured,
     koiFishList, customerKoiList, pondData,
     setCustomers, setInvoices, setExpenses, setProducts, setDeliveries, setEvents, setStockLog,
-    setKoiFishList, setCustomerKoiList, setPondData,
+    setKoiFishList, setCustomerKoiList, setPondData: setPondDataWithRef,
     onNavigate: goToTab,
     onKoiSold: handleKoiSold,
     onKoiRefund: handleKoiRefund,
@@ -6725,7 +6729,7 @@ export default function App() {
       case "inventory": return guard("inventory", "Inventory", <InventoryModule products={products} setProducts={setProducts} stockLog={stockLog} setStockLog={setStockLog} invoices={invoices} addNotification={addNotification} currentUser={currentUser} />);
       case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} />);
-      case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondData} addNotification={addNotification} currentUser={currentUser} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} onPersistPondData={syncPondDataNow} onSyncReminderCalendar={syncReminderCalendar} />);
+      case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondDataWithRef} addNotification={addNotification} currentUser={currentUser} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} onPersistPondData={syncPondDataNow} onSyncReminderCalendar={syncReminderCalendar} />);
       case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} openViewId={invoiceViewRequest?.id} onViewOpened={() => setInvoiceViewRequest(null)} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} />);
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} invoices={invoices} setInvoices={setInvoices} deliveries={deliveries} setDeliveries={setDeliveries} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpenses} addNotification={addNotification} currentUser={currentUser} />);

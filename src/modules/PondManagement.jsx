@@ -260,7 +260,7 @@ export default function PondManagement({
     if (editPond && samePondId(editPond.id, pondId)) setEditPond(null)
   }
 
-  const saveReminder = () => {
+  const saveReminder = async () => {
     if (!canEdit) { denyEdit(); return }
     if (!hasPonds) {
       addNotification({ type: 'error', title: 'No Ponds', message: 'Add a pond before creating a reminder.' })
@@ -276,23 +276,41 @@ export default function PondManagement({
       addNotification({ type: 'error', title: 'Pond Not Found', message: 'Selected pond is no longer in the list.' })
       return
     }
-    const newReminder = normalizeReminderRecord({
+    const newReminder = touchUpdatedAt(normalizeReminderRecord({
       ...remindForm,
       id: genId('REM'),
       pondName: pond.name,
       status: 'pending',
-    })
-    setPondData((prev) => touchPondData({
-      ...prev,
-      reminders: [...(prev.reminders || []), newReminder],
     }))
-    onSyncReminderCalendar?.('upsert', newReminder)
-    addNotification({
-      type: 'success',
-      title: 'Reminder Set',
-      message: `${reminderDisplayLines(newReminder).title} · ${newReminder.dueDate}`,
+    let nextPond = null
+    setPondData((prev) => {
+      nextPond = touchPondData({
+        ...prev,
+        reminders: [...(prev.reminders || []), newReminder],
+      })
+      return nextPond
     })
+    onSyncReminderCalendar?.('upsert', newReminder)
     setRemindModal(null)
+    try {
+      await onPersistPondData?.(nextPond)
+      addNotification({
+        type: 'success',
+        title: 'Reminder Set',
+        message: `${reminderDisplayLines(newReminder).title} · ${newReminder.dueDate}`,
+      })
+    } catch {
+      setPondData((prev) => touchPondData({
+        ...prev,
+        reminders: (prev.reminders || []).filter((x) => String(x.id) !== String(newReminder.id)),
+      }))
+      onSyncReminderCalendar?.('remove', { id: newReminder.id })
+      addNotification({
+        type: 'error',
+        title: 'Save failed',
+        message: 'Reminder could not be saved to cloud. Try again.',
+      })
+    }
   }
 
   const openAddGuide = () => {
