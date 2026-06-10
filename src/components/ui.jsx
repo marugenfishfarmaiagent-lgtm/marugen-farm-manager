@@ -1,4 +1,4 @@
-import { useId, useMemo } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { FARM_POND_GROUPS, FARM_POND_NAMES, mergePondNames } from '../data/constants'
 
@@ -12,22 +12,72 @@ export function Card({ children, className = '' }) {
   return <div className={`bg-slate-800/60 border border-slate-700/50 rounded-xl ${className}`}>{children}</div>
 }
 
-export function Modal({ open, onClose, title, children, size = 'md' }) {
-  if (!open) return null
+const MODAL_CLICK_GUARD_MS = 400
+
+export function Modal({
+  open, onClose, title, children, size = 'md', priority = false, backdropClose = true,
+}) {
+  const [guardActive, setGuardActive] = useState(false)
+  const guardTimerRef = useRef(null)
+  const prevOpenRef = useRef(open)
+  const backdropDownRef = useRef(false)
+
+  useEffect(() => {
+    if (prevOpenRef.current && !open) {
+      setGuardActive(true)
+      if (guardTimerRef.current) clearTimeout(guardTimerRef.current)
+      guardTimerRef.current = window.setTimeout(() => setGuardActive(false), MODAL_CLICK_GUARD_MS)
+    }
+    prevOpenRef.current = open
+  }, [open])
+
+  useEffect(() => () => {
+    if (guardTimerRef.current) clearTimeout(guardTimerRef.current)
+  }, [])
+
+  if (!open && !guardActive) return null
+
   const sizes = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl', full: 'max-w-[900px]' }
+  const zClass = priority ? 'z-[60]' : 'z-50'
+  const guardZClass = priority ? 'z-[70]' : 'z-[55]'
+
+  const handleBackdropMouseDown = (e) => {
+    backdropDownRef.current = e.target === e.currentTarget
+  }
+
+  const handleBackdropClick = (e) => {
+    if (!backdropClose || !onClose) return
+    if (e.target === e.currentTarget && backdropDownRef.current) onClose()
+    backdropDownRef.current = false
+  }
+
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm" onClick={onClose}>
-      <div
-        className={`bg-slate-800 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full ${sizes[size]} max-h-screen max-h-[92dvh] sm:max-h-[90vh] flex flex-col shadow-2xl safe-top overflow-hidden`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-700 shrink-0">
-          <h3 className="text-base sm:text-lg font-bold text-white pr-2">{title}</h3>
-          <button type="button" onClick={onClose} className="text-slate-400 hover:text-white p-2 -mr-1 rounded-lg hover:bg-slate-700 transition-colors touch-manipulation"><X size={18} /></button>
+    <>
+      {guardActive && !open && (
+        <div className={`fixed inset-0 ${guardZClass}`} aria-hidden />
+      )}
+      {open && (
+        <div
+          className={`fixed inset-0 ${zClass} flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm`}
+          onMouseDown={handleBackdropMouseDown}
+          onClick={handleBackdropClick}
+        >
+          <div
+            className={`bg-slate-800 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full ${sizes[size]} max-h-screen max-h-[92dvh] sm:max-h-[90vh] flex flex-col shadow-2xl safe-top overflow-hidden`}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-700 shrink-0">
+              <h3 className="text-base sm:text-lg font-bold text-white pr-2">{title}</h3>
+              {onClose && (
+                <button type="button" onClick={onClose} className="text-slate-400 hover:text-white p-2 -mr-1 rounded-lg hover:bg-slate-700 transition-colors touch-manipulation"><X size={18} /></button>
+              )}
+            </div>
+            <div className="overflow-y-auto flex-1 p-4 sm:p-5 overscroll-contain">{children}</div>
+          </div>
         </div>
-        <div className="overflow-y-auto flex-1 p-4 sm:p-5 overscroll-contain">{children}</div>
-      </div>
-    </div>
+      )}
+    </>
   )
 }
 
@@ -118,8 +168,14 @@ export function Btn({ children, onClick, variant = 'primary', size = 'md', class
     ghost: 'text-slate-400 hover:text-white hover:bg-slate-700',
   }
   const sizes = { sm: 'px-3 py-2 text-xs min-h-[40px]', md: 'px-4 py-2.5 text-sm min-h-[44px]', lg: 'px-6 py-3 text-base min-h-[48px]' }
+  const handleClick = (e) => {
+    if (disabled || !onClick) return
+    e.preventDefault()
+    e.stopPropagation()
+    onClick(e)
+  }
   return (
-    <button type={type} title={title} onClick={onClick} disabled={disabled} className={`rounded-lg transition-all flex items-center gap-1.5 touch-manipulation ${variants[variant]} ${sizes[size]} ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`}>
+    <button type={type} title={title} onClick={handleClick} disabled={disabled} className={`rounded-lg transition-all flex items-center gap-1.5 touch-manipulation ${variants[variant]} ${sizes[size]} ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`}>
       {children}
     </button>
   )

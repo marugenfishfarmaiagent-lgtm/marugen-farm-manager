@@ -235,31 +235,75 @@ function Card({ children, className = "" }) {
   return <div className={`bg-slate-800/60 border border-slate-700/50 rounded-xl ${className}`}>{children}</div>;
 }
 
+const MODAL_CLICK_GUARD_MS = 400;
+
 function Modal({ open, onClose, title, children, size = "md", priority = false, footer = null, backdropClose = true }) {
-  if (!open) return null;
+  const [guardActive, setGuardActive] = useState(false);
+  const guardTimerRef = useRef(null);
+  const prevOpenRef = useRef(open);
+  const backdropDownRef = useRef(false);
+
+  useEffect(() => {
+    if (prevOpenRef.current && !open) {
+      setGuardActive(true);
+      if (guardTimerRef.current) clearTimeout(guardTimerRef.current);
+      guardTimerRef.current = window.setTimeout(() => setGuardActive(false), MODAL_CLICK_GUARD_MS);
+    }
+    prevOpenRef.current = open;
+  }, [open]);
+
+  useEffect(() => () => {
+    if (guardTimerRef.current) clearTimeout(guardTimerRef.current);
+  }, []);
+
+  if (!open && !guardActive) return null;
+
   const sizes = { sm: "max-w-sm", md: "max-w-lg", lg: "max-w-2xl", xl: "max-w-4xl", full: "max-w-[900px]" };
   const zClass = priority ? "z-[60]" : "z-50";
-  const handleBackdropClose = backdropClose && onClose ? onClose : () => {};
+  const guardZClass = priority ? "z-[70]" : "z-[55]";
+
+  const handleBackdropMouseDown = (e) => {
+    backdropDownRef.current = e.target === e.currentTarget;
+  };
+
+  const handleBackdropClick = (e) => {
+    if (!backdropClose || !onClose) return;
+    if (e.target === e.currentTarget && backdropDownRef.current) onClose();
+    backdropDownRef.current = false;
+  };
+
   return (
-    <div className={`fixed inset-0 ${zClass} flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm`} onClick={handleBackdropClose}>
-      <div
-        className={`bg-slate-800 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full ${sizes[size]} h-[92dvh] sm:h-auto max-h-[92dvh] sm:max-h-[90vh] flex flex-col shadow-2xl overflow-hidden`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 p-4 sm:p-5 border-b border-slate-700 shrink-0 bg-slate-800 pt-[max(1rem,env(safe-area-inset-top,0px))]">
-          <h3 className="text-base sm:text-lg font-bold text-white pr-2 min-w-0 truncate">{title}</h3>
-          {onClose && (
-            <button type="button" onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white p-2 -mr-1 rounded-lg hover:bg-slate-700 transition-colors touch-manipulation shrink-0"><X size={20} /></button>
-          )}
-        </div>
-        <div className="overflow-y-auto flex-1 p-4 sm:p-5 overscroll-contain min-w-0">{children}</div>
-        {footer && (
-          <div className="sticky bottom-0 shrink-0 border-t border-slate-700 bg-slate-800/95 backdrop-blur-sm p-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))]">
-            {footer}
+    <>
+      {guardActive && !open && (
+        <div className={`fixed inset-0 ${guardZClass}`} aria-hidden />
+      )}
+      {open && (
+        <div
+          className={`fixed inset-0 ${zClass} flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm`}
+          onMouseDown={handleBackdropMouseDown}
+          onClick={handleBackdropClick}
+        >
+          <div
+            className={`bg-slate-800 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full ${sizes[size]} h-[92dvh] sm:h-auto max-h-[92dvh] sm:max-h-[90vh] flex flex-col shadow-2xl overflow-hidden`}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 flex items-center justify-between gap-3 p-4 sm:p-5 border-b border-slate-700 shrink-0 bg-slate-800 pt-[max(1rem,env(safe-area-inset-top,0px))]">
+              <h3 className="text-base sm:text-lg font-bold text-white pr-2 min-w-0 truncate">{title}</h3>
+              {onClose && (
+                <button type="button" onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white p-2 -mr-1 rounded-lg hover:bg-slate-700 transition-colors touch-manipulation shrink-0"><X size={20} /></button>
+              )}
+            </div>
+            <div className="overflow-y-auto flex-1 p-4 sm:p-5 overscroll-contain min-w-0">{children}</div>
+            {footer && (
+              <div className="sticky bottom-0 shrink-0 border-t border-slate-700 bg-slate-800/95 backdrop-blur-sm p-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))]">
+                {footer}
+              </div>
+            )}
           </div>
-        )}
-      </div>
-    </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -313,8 +357,14 @@ function Btn({ children, onClick, variant = "primary", size = "md", className = 
     ghost: "text-slate-400 hover:text-white hover:bg-slate-700",
   };
   const sizes = { sm: "px-3 py-2 text-xs min-h-[40px]", md: "px-4 py-2.5 text-sm min-h-[44px]", lg: "px-6 py-3 text-base min-h-[48px]" };
+  const handleClick = (e) => {
+    if (disabled || !onClick) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onClick(e);
+  };
   return (
-    <button type={type} onClick={onClick} disabled={disabled}
+    <button type={type} onClick={handleClick} disabled={disabled}
       className={`rounded-lg transition-all flex items-center gap-1.5 touch-manipulation ${variants[variant]} ${sizes[size]} ${disabled ? "opacity-50 cursor-not-allowed" : ""} ${className}`}>
       {children}
     </button>
