@@ -406,6 +406,16 @@ Deno.serve(async (req) => {
 
       const path = await target.resolve(db, recordId, imageData);
       if (!path) return J({ error: "Image upload failed" }, 500);
+
+      const table = entity === "koi_fish" ? "koi_fish" : "customer_koi";
+      const { data: existingRow } = await db.from(table).select("id").eq("id", recordId).maybeSingle();
+      if (existingRow) {
+        await db.from(table).update({
+          [field]: path,
+          updated_at: new Date().toISOString(),
+        }).eq("id", recordId);
+      }
+
       const url = await signFarmImageUrl(db, KOI_PHOTOS_BUCKET, path, target.defaultPath(recordId));
       return J({ url, path });
     }

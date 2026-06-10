@@ -30,6 +30,7 @@ import { calcInvoiceAmounts, sortInvoices } from './lib/invoiceDesign';
 import { computeDashboardMetrics, dashboardInvoiceTotal } from './lib/dashboardMetrics';
 import { compressReceiptImage, expenseImageSrc } from "./lib/compressImage";
 import { persistExpenseList } from "./lib/imageUploadOps";
+import { normalizeKoiFishForCache } from "./lib/farmImage";
 import { enrichInvoiceCustomer, findCustomerWhatsApp, formatCustomerAddress, findCustomerRecord, openWhatsAppChat, resolveInvoiceCustomer, resolveInvoiceWhatsApp } from "./lib/invoiceWhatsApp";
 import { lookupSingaporePostalAddress } from "./lib/sgPostalLookup";
 import {
@@ -5440,7 +5441,12 @@ export default function App() {
     toastTimers.current.set(toast.id, timer);
   }, [currentUser, dismissToast]);
 
-  useEffect(() => { saveKoiFish(koiFishList) }, [koiFishList]);
+  useEffect(() => {
+    const list = isSupabaseConfigured
+      ? koiFishList.map((k) => normalizeKoiFishForCache(k))
+      : koiFishList
+    saveKoiFish(list)
+  }, [koiFishList]);
   useEffect(() => { if (!isSupabaseConfigured) saveCustomerKoi(customerKoiList) }, [customerKoiList]);
   useEffect(() => { if (!isSupabaseConfigured) savePondData(pondData) }, [pondData]);
   useEffect(() => { if (!isSupabaseConfigured) saveProducts(products) }, [products]);

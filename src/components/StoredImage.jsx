@@ -1,11 +1,11 @@
-import { useEffect, useRef } from 'react'
-import { isInlineImage } from '../lib/farmImage'
+import { useEffect, useRef, useState } from 'react'
+import { isInlineImage, isStoragePath } from '../lib/farmImage'
 import { isSupabaseConfigured } from '../lib/supabase'
 import * as db from '../lib/database'
 
 const PLACEHOLDER = '/placeholder-fish.svg'
 
-/** Renders a cloud or local image; refreshes signed URLs on load failure. */
+/** Renders a cloud or local image; resolves storage paths and refreshes expired signed URLs. */
 export default function StoredImage({
   src,
   alt = '',
@@ -17,10 +17,28 @@ export default function StoredImage({
   ...rest
 }) {
   const retriedRef = useRef(false)
+  const [resolvedSrc, setResolvedSrc] = useState(src)
 
   useEffect(() => {
     retriedRef.current = false
+    setResolvedSrc(src)
   }, [src])
+
+  useEffect(() => {
+    if (!src || !isStoragePath(src)) return undefined
+    if (!isSupabaseConfigured || !entity || !recordId || !field) return undefined
+
+    let cancelled = false
+    db.refreshSignedImage({ entity, id: recordId, field })
+      .then((result) => {
+        if (cancelled || !result?.url) return
+        setResolvedSrc(result.url)
+        onRefresh?.({ entity, id: recordId, field, url: result.url })
+      })
+      .catch(() => {})
+
+    return () => { cancelled = true }
+  }, [src, entity, recordId, field, onRefresh])
 
   if (!src) return null
 
@@ -44,6 +62,7 @@ export default function StoredImage({
         const result = await db.refreshSignedImage({ entity, id: recordId, field })
         const freshUrl = result?.url
         if (freshUrl) {
+          setResolvedSrc(freshUrl)
           e.target.src = freshUrl
           onRefresh?.({ entity, id: recordId, field, url: freshUrl })
           return
@@ -61,7 +80,7 @@ export default function StoredImage({
 
   return (
     <img
-      src={src}
+      src={resolvedSrc}
       alt={alt}
       className={className}
       onError={handleError}

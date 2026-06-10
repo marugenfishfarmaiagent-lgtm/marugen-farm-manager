@@ -7,6 +7,14 @@ export function isInlineImage(src) {
   return typeof src === 'string' && src.startsWith('data:image')
 }
 
+/** Private Storage object path (persisted in Postgres — not a displayable URL). */
+export function isStoragePath(src) {
+  return typeof src === 'string' && src.length > 0
+    && !src.startsWith('http://')
+    && !src.startsWith('https://')
+    && !src.startsWith('data:')
+}
+
 /** Upload a base64 photo to cloud storage before save/sync; returns signed URL or original src. */
 export async function uploadInlinePhotoIfNeeded(src, uploadFn) {
   if (!src || !isInlineImage(src)) return src ?? null
@@ -15,9 +23,32 @@ export async function uploadInlinePhotoIfNeeded(src, uploadFn) {
     throw new Error('Session expired. Log out and log in again, then retry.')
   }
   const result = await uploadFn(src)
+  // Persist storage path in app state — signed URLs expire (~4h).
+  if (result?.path) return result.path
   const url = result?.url || result?.imageUrl
   if (!url) throw new Error('Cloud photo upload failed. Check connection and try again.')
   return url
+}
+
+/** Keep the image reference that survives sync and signed-URL expiry. */
+export function pickPersistedImageRef(localRef, remoteRef) {
+  if (!localRef && !remoteRef) return null
+  if (!localRef) return remoteRef
+  if (!remoteRef) return localRef
+  if (isStoragePath(localRef)) return localRef
+  if (isStoragePath(remoteRef)) return remoteRef
+  if (isInlineImage(localRef)) return localRef
+  if (isInlineImage(remoteRef)) return remoteRef
+  return remoteRef
+}
+
+export function normalizeKoiFishForCache(koi) {
+  if (!koi?.id) return koi
+  return {
+    ...koi,
+    photo: normalizeImageFieldForSync(koi.photo, storagePaths.koiFishPhoto(koi.id)) ?? koi.photo ?? null,
+    deathPhoto: normalizeImageFieldForSync(koi.deathPhoto, storagePaths.koiFishDeathPhoto(koi.id)) ?? koi.deathPhoto ?? null,
+  }
 }
 
 export function isSignedHttpUrl(src) {

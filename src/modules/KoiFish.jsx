@@ -220,14 +220,10 @@ export default function KoiFish({
     const id = genId('KOI')
     try {
       setSaving(true)
-      const photo = await uploadInlinePhotoIfNeeded(
-        form.photo,
-        (data) => db.uploadKoiFishPhoto(id, data, 'photo'),
-      )
-      const koi = touchUpdatedAt({
+      const koiBase = touchUpdatedAt({
         ...form,
         id,
-        photo,
+        photo: null,
         name: form.name?.trim() || '',
         pondName: form.pondName.trim(),
         size: sizeCm,
@@ -238,6 +234,13 @@ export default function KoiFish({
         sellDisposition: null, keepPondName: null,
         deathDate: null, deathCause: null, deathPhoto: null,
       })
+      await persistKoiFishList([...koiList, koiBase])
+
+      const photo = await uploadInlinePhotoIfNeeded(
+        form.photo,
+        (data) => db.uploadKoiFishPhoto(id, data, 'photo'),
+      )
+      const koi = touchUpdatedAt({ ...koiBase, photo })
       const nextList = [...koiList, koi]
       await persistKoiFishList(nextList)
       setKoiList(nextList)

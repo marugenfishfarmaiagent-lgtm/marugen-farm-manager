@@ -1,5 +1,6 @@
 import { sortInvoices } from './invoiceDesign'
 import { KOI_STATUS } from '../data/constants'
+import { pickPersistedImageRef } from './farmImage'
 
 function ts(record) {
   if (!record?.updatedAt) return 0
@@ -66,8 +67,31 @@ export function resolveKoiConflict(local, remote) {
   return local
 }
 
+function mergeKoiRow(local, remote) {
+  const picked = resolveKoiConflict(local, remote)
+  const other = picked === local ? remote : local
+  return {
+    ...picked,
+    photo: pickPersistedImageRef(picked.photo, other.photo),
+    deathPhoto: pickPersistedImageRef(picked.deathPhoto, other.deathPhoto),
+  }
+}
+
 export function mergeKoiFish(local = [], remote = [], pendingDeleteIds = []) {
-  return mergeRecords(local, remote, pendingDeleteIds, resolveKoiConflict)
+  const delSet = new Set((pendingDeleteIds || []).map(String))
+  const localMap = new Map((local || []).map((r) => [String(r.id), r]))
+  const remoteMap = new Map((remote || []).map((r) => [String(r.id), r]))
+  const ids = new Set([...localMap.keys(), ...remoteMap.keys()])
+
+  const merged = []
+  for (const id of ids) {
+    if (delSet.has(id)) continue
+    const l = localMap.get(id)
+    const r = remoteMap.get(id)
+    if (l && r) merged.push(mergeKoiRow(l, r))
+    else merged.push(l || r)
+  }
+  return merged
 }
 
 export function mergePondData(local, remote) {
