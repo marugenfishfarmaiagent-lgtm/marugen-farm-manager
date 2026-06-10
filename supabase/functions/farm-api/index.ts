@@ -648,7 +648,7 @@ Deno.serve(async (req) => {
     }
 
     if (body.action === "sync") {
-      const { entity, data, prune, deletedIds } = body;
+      const { entity, data, prune, deletedIds, force } = body;
       const perm = ENTITY_PERMS[entity];
       if (!perm || !hasPermission(user, perm)) {
         return J({ error: `Permission denied (${entity})` }, 403);
@@ -980,7 +980,7 @@ Deno.serve(async (req) => {
         delete raw.updatedAt;
         delete raw.updated_at;
         const { data: existing } = await db.from("farm_pond_data").select("updated_at").eq("id", "default").maybeSingle();
-        if (existing?.updated_at && clientTs) {
+        if (!force && existing?.updated_at && clientTs) {
           const clientTime = new Date(String(clientTs)).getTime();
           const serverTime = new Date(String(existing.updated_at)).getTime();
           if (Number.isFinite(clientTime) && clientTime < serverTime) {

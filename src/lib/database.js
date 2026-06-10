@@ -311,17 +311,19 @@ async function apiCall(body) {
   return data
 }
 
-async function syncCall(entity, data, { prune = false } = {}) {
+async function syncCall(entity, data, { prune = false, force = false } = {}) {
   const deletedIds = peekDeletions(entity)
   const payload = stampOutgoing(data)
-  await apiCall({
+  const result = await apiCall({
     action: 'sync',
     entity,
     data: payload,
     deletedIds,
     prune,
+    ...(force ? { force: true } : {}),
   })
   if (deletedIds.length) confirmDeletions(entity, deletedIds)
+  return result
 }
 
 function stampOutgoing(data) {
@@ -530,9 +532,9 @@ export async function syncCustomerKoi(list, options) {
   await syncCall('customer_koi', payload, options)
 }
 
-export async function syncPondData(pondData, options) {
-  if (!isSupabaseConfigured) return
-  await syncCall('farm_pond_data', touchPondData(pondData), options)
+export async function syncPondData(pondData, options = {}) {
+  if (!isSupabaseConfigured) return { ok: true }
+  return syncCall('farm_pond_data', touchPondData(pondData), options)
 }
 
 export async function syncWhatsappGroups(groups, options) {

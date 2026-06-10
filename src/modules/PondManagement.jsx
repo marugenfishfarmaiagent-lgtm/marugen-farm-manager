@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
   Droplets, AlertTriangle, Beaker, Bell, BookOpen, Trash2, Check, Edit2, Calculator,
 } from 'lucide-react'
@@ -61,6 +61,8 @@ export default function PondManagement({
   const [guideForm, setGuideForm] = useState({ title: '', category: '', steps: '', warning: '' })
   const [editingGuideId, setEditingGuideId] = useState(null)
   const [editingTreatmentId, setEditingTreatmentId] = useState(null)
+  const [completingReminderId, setCompletingReminderId] = useState(null)
+  const completingReminderRef = useRef(null)
 
   const todayStr = today()
   const activeTreatments = visiblePond.treatmentLogs.filter((t) => t.startDate <= todayStr && (!t.endDate || t.endDate >= todayStr))
@@ -71,6 +73,9 @@ export default function PondManagement({
 
   const markReminderDone = async (reminderId) => {
     if (!canEdit) { denyEdit(); return }
+    const id = String(reminderId)
+    if (completingReminderRef.current === id) return
+
     let nextPond = null
     setPondData((prev) => {
       const result = markReminderCompleteInPondData(prev, reminderId)
@@ -78,15 +83,30 @@ export default function PondManagement({
       nextPond = result.data
       return result.data
     })
+
     if (!nextPond) {
       addNotification({ type: 'error', title: 'Reminder not updated', message: 'Could not find that reminder. Refresh and try again.' })
       return
     }
-    addNotification({ type: 'success', title: 'Reminder completed', message: 'Marked as done.' })
+
+    completingReminderRef.current = id
+    setCompletingReminderId(id)
     try {
       await onPersistPondData?.(nextPond)
+      addNotification({ type: 'success', title: 'Reminder completed', message: 'Marked as done.' })
     } catch {
-      // Parent surfaces sync errors via cloud toast.
+      setPondData((prev) => {
+        const revert = (prev.reminders || []).map((x) => (
+          String(x.id) === id && !isPendingReminder(x)
+            ? touchUpdatedAt({ ...x, status: 'pending', completedAt: undefined })
+            : x
+        ))
+        return touchPondData({ ...prev, reminders: revert })
+      })
+      addNotification({ type: 'error', title: 'Save failed', message: 'Reminder could not be saved to cloud. Try again.' })
+    } finally {
+      completingReminderRef.current = null
+      setCompletingReminderId(null)
     }
   }
   const hasPonds = ponds.length > 0
@@ -549,7 +569,7 @@ export default function PondManagement({
               {overdueReminders.map((r) => (
                 <div key={r.id} className="flex justify-between items-center py-2 text-sm">
                   <span className="text-white">{r.pondName} — {r.note || r.type} ({r.dueDate})</span>
-                  <Btn variant="success" size="sm" onClick={() => markReminderDone(r.id)}><Check size={12} /></Btn>
+                  <Btn variant="success" size="sm" disabled={completingReminderId === String(r.id)} onClick={() => markReminderDone(r.id)}><Check size={12} /></Btn>
                 </div>
               ))}
             </Card>
@@ -561,7 +581,7 @@ export default function PondManagement({
             <Card key={r.id} className="p-3 flex justify-between items-center text-sm">
               <span className="text-white">{r.pondName} · {r.dueDate} {r.dueTime}</span>
               <div className="flex gap-2">
-                <Btn variant="success" size="sm" onClick={() => markReminderDone(r.id)}>Done</Btn>
+                <Btn variant="success" size="sm" disabled={completingReminderId === String(r.id)} onClick={() => markReminderDone(r.id)}>Done</Btn>
                 {canDelete && (
                   <Btn variant="ghost" size="sm" onClick={() => {
                     if (!canDelete) { denyDelete(); return }

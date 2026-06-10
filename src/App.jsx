@@ -78,7 +78,7 @@ import {
   TEAM_SYNC_USER_IDLE_MS,
 } from "./lib/teamSyncDetect";
 import { applyInvoicePins, pinInvoice, unpinInvoice } from "./lib/invoicePins";
-import { touchUpdatedAt } from "./lib/syncMeta";
+import { touchPondData, touchUpdatedAt } from "./lib/syncMeta";
 import {
   applyCustomerPaidDelta, buildNewCustomerRecord, buildUpdatedCustomerRecord, getCustomerDeleteWarnings,
   isDuplicateCustomerName, propagateCustomerProfileChange, sameCustomerId,
@@ -5760,7 +5760,9 @@ export default function App() {
 
   const syncPondDataNow = useCallback(async (pondOverride) => {
     if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
-    if (!hasPermission(currentUser, "ponds")) return;
+    if (!hasPermission(currentUser, "ponds")) {
+      throw new Error("Permission denied (ponds).");
+    }
 
     const timerKey = "ponds:Pond data";
     if (syncTimersRef.current[timerKey]) {
@@ -5774,15 +5776,33 @@ export default function App() {
       waited += 100;
     }
 
-    const payload = pondOverride ?? syncStateRef.current.pondData;
-    if (pondOverride) {
-      syncStateRef.current = { ...syncStateRef.current, pondData: pondOverride };
-    }
+    let payload = touchPondData(pondOverride ?? syncStateRef.current.pondData);
+    syncStateRef.current = { ...syncStateRef.current, pondData: payload };
+    setPondData(payload);
 
     syncInFlightRef.current += 1;
     try {
-      if (!(await ensureCloudSyncReady())) return;
-      await db.syncPondData(payload);
+      if (!(await ensureCloudSyncReady())) {
+        throw new Error("Session needs refresh. Log out and log in again.");
+      }
+
+      let result = await db.syncPondData(payload);
+      if (result?.skipped) {
+        const remote = await db.fetchAllData();
+        if (remote?.pondData) {
+          payload = touchPondData(mergePondData(payload, remote.pondData));
+          syncStateRef.current = { ...syncStateRef.current, pondData: payload };
+          setPondData(payload);
+          result = await db.syncPondData(payload);
+        }
+        if (result?.skipped) {
+          result = await db.syncPondData(payload, { force: true });
+        }
+      }
+      if (result?.skipped) {
+        throw new Error("Could not save pond reminder — cloud data was newer. Refresh and try again.");
+      }
+
       resetSyncHealth();
       touchLastSync();
     } catch (err) {
