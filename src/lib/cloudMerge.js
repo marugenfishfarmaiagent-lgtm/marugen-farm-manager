@@ -1,6 +1,7 @@
 import { sortInvoices } from './invoiceDesign'
 import { KOI_STATUS } from '../data/constants'
 import { pickPersistedImageRef } from './farmImage'
+import { normalizeReminderRecord } from './pondOps'
 
 function ts(record) {
   if (!record?.updatedAt) return 0
@@ -122,7 +123,6 @@ export function mergeKoiFish(local = [], remote = [], pendingDeleteIds = []) {
 
 function reminderIsDone(row) {
   if (!row) return false
-  if (row.completedAt) return true
   return String(row.status || 'pending').toLowerCase() === 'done'
 }
 
@@ -148,7 +148,8 @@ function mergePondRecords(local = [], remote = [], { preferDone = false } = {}) 
     const existing = map.get(id)
     map.set(id, existing ? pick(row, existing) : row)
   }
-  return [...map.values()]
+  const merged = [...map.values()]
+  return preferDone ? merged.map(normalizeReminderRecord) : merged
 }
 
 /** Merge pond blob field-by-field so reminder "done" and log edits are not wiped by cloud pull. */

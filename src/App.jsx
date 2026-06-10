@@ -5800,7 +5800,6 @@ export default function App() {
 
     let payload = touchPondData(pondOverride ?? syncStateRef.current.pondData);
     syncStateRef.current = { ...syncStateRef.current, pondData: payload };
-    setPondData(payload);
 
     syncInFlightRef.current += 1;
     try {
@@ -5814,7 +5813,7 @@ export default function App() {
         if (remote?.pondData) {
           payload = touchPondData(mergePondData(payload, remote.pondData));
           syncStateRef.current = { ...syncStateRef.current, pondData: payload };
-          setPondData(payload);
+          setPondData((prev) => mergePondData(prev, remote.pondData));
           result = await db.syncPondData(payload);
         }
         if (result?.skipped) {
@@ -6332,14 +6331,13 @@ export default function App() {
   );
 
   useEffect(() => {
-    if (!cloudHydrated || !currentUser) return;
+    if (!dataReady || !cloudHydrated || !currentUser) return;
     if (!hasPermission(currentUser, "calendar") || !hasPermission(currentUser, "ponds")) return;
-    setEvents((prev) => backfillCalendarEventsForReminders(
-      prev,
-      pondData.reminders,
-      currentUser.name || "Staff",
-    ));
-  }, [cloudHydrated, currentUser, pendingRemindersKey]);
+    setEvents((prev) => backfillCalendarEventsForReminders(prev, pondData.reminders, {
+      createdBy: currentUser.name || "Staff",
+      pondsReady: true,
+    }));
+  }, [dataReady, cloudHydrated, currentUser, pendingRemindersKey]);
 
   useEffect(() => syncDebounced("customers", "Customers", db.syncCustomers, customers), [customers, syncDebounced]);
   useEffect(() => syncDebounced("inventory", "Inventory", db.syncProducts, products), [products, syncDebounced]);

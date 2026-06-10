@@ -148,14 +148,27 @@ export function normalizeReminderStatus(status) {
 
 export function isPendingReminder(reminder) {
   if (!reminder) return false
-  if (reminder.completedAt) return false
   return normalizeReminderStatus(reminder.status) === 'pending'
 }
 
 export function isDoneReminder(reminder) {
   if (!reminder) return false
-  if (reminder.completedAt) return true
   return normalizeReminderStatus(reminder.status) === 'done'
+}
+
+/** Keep status and completedAt consistent after cloud merge or local edits. */
+export function normalizeReminderRecord(reminder) {
+  if (!reminder) return reminder
+  const status = normalizeReminderStatus(reminder.status)
+  if (status === 'pending') {
+    const { completedAt, ...rest } = reminder
+    return { ...rest, status: 'pending' }
+  }
+  return {
+    ...reminder,
+    status: 'done',
+    completedAt: reminder.completedAt || today(),
+  }
 }
 
 /** Mark a pending reminder complete; returns { changed, data }. */
@@ -168,7 +181,7 @@ export function markReminderCompleteInPondData(pondData, reminderId) {
 
   const nextReminders = reminders.map((x) => (
     String(x.id) === id
-      ? touchUpdatedAt({ ...x, status: 'done', completedAt: today() })
+      ? touchUpdatedAt(normalizeReminderRecord({ ...x, status: 'done', completedAt: today() }))
       : x
   ))
   return {

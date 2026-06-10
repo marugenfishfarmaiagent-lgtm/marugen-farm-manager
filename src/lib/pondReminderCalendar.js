@@ -116,16 +116,20 @@ export function removeCalendarEventForReminder(events, reminderId) {
   return next.length === (events || []).length ? (events || []) : next
 }
 
-/** Link pending pond reminders to calendar events; drop events for completed reminders. */
-export function backfillCalendarEventsForReminders(events, reminders, createdBy) {
-  const pending = (reminders || []).filter(isPendingReminder)
+/** Link pending pond reminders to calendar events; drop events for completed/deleted reminders. */
+export function backfillCalendarEventsForReminders(events, reminders, { createdBy, pondsReady = true } = {}) {
+  if (!pondsReady) return events || []
+
+  const allReminders = reminders || []
+  const pending = allReminders.filter(isPendingReminder)
   const pendingIds = new Set(pending.map((r) => String(r.id)))
+  const knownIds = new Set(allReminders.map((r) => String(r.id)))
 
   let next = dedupeEventsByPondReminderId(events || [])
   let changed = next.length !== (events || []).length
-  const withoutOrphans = removeOrphanedPondReminderEvents(next, pendingIds)
-  if (withoutOrphans.length !== next.length) changed = true
-  next = withoutOrphans
+  const withoutStale = removeStalePondReminderEvents(next, pendingIds, knownIds)
+  if (withoutStale.length !== next.length) changed = true
+  next = withoutStale
 
   for (const reminder of pending) {
     if (next.some((e) => sameReminderLink(e.pondReminderId, reminder.id))) continue
@@ -139,8 +143,16 @@ export function backfillCalendarEventsForReminders(events, reminders, createdBy)
   return changed ? next : (events || [])
 }
 
-function removeOrphanedPondReminderEvents(events, pendingIds) {
-  return events.filter((e) => !e.pondReminderId || pendingIds.has(String(e.pondReminderId)))
+function removeStalePondReminderEvents(events, pendingIds, knownIds) {
+  return (events || []).filter((e) => {
+    if (!e.pondReminderId) return true
+    const linkId = String(e.pondReminderId)
+    if (pendingIds.has(linkId)) return true
+    // Reminder still exists but is done — drop linked calendar row.
+    if (knownIds.has(linkId)) return false
+    // Reminder deleted from pond data — drop linked calendar row.
+    return false
+  })
 }
 
 /** @deprecated Virtual overlay caused duplicate rows; calendar uses linked events only. */

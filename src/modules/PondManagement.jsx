@@ -13,7 +13,7 @@ import EmptyState from '../components/ui/EmptyState'
 import { filterPondLogsForApp } from '../lib/retention'
 import {
   applyMaintenanceToPond, buildMaintenanceLogEntry, findPondById, isDuplicatePondName,
-  isPendingReminder, markReminderCompleteInPondData,
+  isPendingReminder, markReminderCompleteInPondData, normalizeReminderRecord,
   samePondId, validateMaintenanceForm, validatePondFields, validateReminderForm, validateTreatmentForm,
 } from '../lib/pondOps'
 import { reminderDisplayLines } from '../lib/pondReminderCalendar'
@@ -276,12 +276,12 @@ export default function PondManagement({
       addNotification({ type: 'error', title: 'Pond Not Found', message: 'Selected pond is no longer in the list.' })
       return
     }
-    const newReminder = {
+    const newReminder = normalizeReminderRecord({
       ...remindForm,
       id: genId('REM'),
       pondName: pond.name,
       status: 'pending',
-    }
+    })
     setPondData((prev) => touchPondData({
       ...prev,
       reminders: [...(prev.reminders || []), newReminder],
