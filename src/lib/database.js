@@ -1,4 +1,4 @@
-import { clearSession, fetchWithSessionRetry, getAuthHeaders } from './auth'
+import { clearSession, cloudFetch, fetchWithSessionRetry, getAuthHeaders } from './auth'
 import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
 import { normalizeCustomerKoiRecord } from '../data/constants'
 import { normalizeCustomerRecord } from './customerOps'
