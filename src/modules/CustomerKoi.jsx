@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
-import { Fish, Search, Home, Edit2, Eye, Skull, MessageSquare, PackageCheck, X } from 'lucide-react'
+import { Fish, Search, Home, Edit2, Eye, Skull, MessageSquare, PackageCheck, X, ZoomIn } from 'lucide-react'
 import {
   KOI_VARIETIES, CUSTOMER_KOI_DEATH_CAUSES, CUSTOMER_KOI_STATUS, CUSTOMER_KOI_STATUS_OPTIONS,
   formatCustomerKoiStatus, formatSGD, formatKoiSize, genId, today,
@@ -86,6 +86,37 @@ function PhotoPicker({ photo, onPick, onError, label = 'Photo', disabled = false
 
 function displayFishName(rec) {
   return rec.fishName?.trim() || rec.variety || 'Koi'
+}
+
+function PhotoLightbox({ src, alt, entity, recordId, field, onRefresh, onClose }) {
+  if (!src) return null
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/95 p-4"
+      onClick={onClose}
+      role="dialog"
+      aria-label="Full size photo"
+    >
+      <button
+        type="button"
+        onClick={onClose}
+        className="absolute top-4 right-4 z-10 rounded-lg bg-slate-800/90 p-2.5 text-white hover:bg-slate-700 touch-manipulation"
+        aria-label="Close full screen photo"
+      >
+        <X size={20} />
+      </button>
+      <StoredImage
+        src={src}
+        alt={alt}
+        className="max-h-[92dvh] max-w-full object-contain"
+        entity={entity}
+        recordId={recordId}
+        field={field}
+        onRefresh={onRefresh}
+        onClick={(e) => e.stopPropagation()}
+      />
+    </div>
+  )
 }
 
 function KoiCodeSearch({ linkedId, farmKoiList, customers, onLink, onClear, className = '' }) {
@@ -216,6 +247,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
   const [form, setForm] = useState(emptyRecord())
   const [editRec, setEditRec] = useState(null)
   const [viewRec, setViewRec] = useState(null)
+  const [photoZoom, setPhotoZoom] = useState(null)
   const [deathRec, setDeathRec] = useState(null)
   const [collectRec, setCollectRec] = useState(null)
   const [collectDate, setCollectDate] = useState(today())
@@ -504,7 +536,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
         <p className="text-slate-400 text-sm">Sold koi — track pond, taken away, or deceased</p>
       </div>
       {canEdit && (
-        <Fab onClick={openAdd} label="Add Koi Record" hidden={showAdd || !!editRec || !!viewRec || !!deathRec || !!collectRec} />
+        <Fab onClick={openAdd} label="Add Koi Record" hidden={showAdd || !!editRec || !!viewRec || !!photoZoom || !!deathRec || !!collectRec} />
       )}
 
       <div className="flex flex-col lg:flex-row gap-4 min-h-[480px]">
@@ -734,22 +766,52 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
         )}
       </Modal>
 
-      <Modal open={!!viewRec} onClose={() => setViewRec(null)} title={viewRec ? displayFishName(viewRec) : ''} size="lg">
+      <Modal
+        open={!!viewRec}
+        onClose={() => { setViewRec(null); setPhotoZoom(null) }}
+        title={viewRec ? displayFishName(viewRec) : ''}
+        size="full"
+      >
         {viewRec && (
-          <div className="space-y-4">
-            {viewRec.photo && (
-              <StoredImage
-                src={viewRec.photo}
-                alt=""
-                className="w-full max-h-56 object-cover rounded-xl"
-                entity="customer_koi"
-                recordId={viewRec.id}
-                field="photo"
-                onRefresh={refreshCustomerKoiImage}
-              />
-            )}
-            <Badge className={STATUS_STYLE[viewRec.status]?.badge}>{formatCustomerKoiStatus(viewRec.status)}</Badge>
-            <div className="grid grid-cols-2 gap-2 text-sm">
+          <div className="space-y-5">
+            <button
+              type="button"
+              onClick={() => viewRec.photo && setPhotoZoom('photo')}
+              className={`relative w-full rounded-xl bg-slate-900 border border-slate-700 overflow-hidden ${viewRec.photo ? 'cursor-zoom-in hover:border-cyan-500/40' : ''}`}
+              disabled={!viewRec.photo}
+            >
+              {viewRec.photo ? (
+                <>
+                  <StoredImage
+                    src={viewRec.photo}
+                    alt={displayFishName(viewRec)}
+                    className={`w-full max-h-[min(58vh,560px)] object-contain mx-auto ${viewRec.status === CUSTOMER_KOI_STATUS.DECEASED ? 'grayscale' : ''}`}
+                    entity="customer_koi"
+                    recordId={viewRec.id}
+                    field="photo"
+                    onRefresh={refreshCustomerKoiImage}
+                  />
+                  <span className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-lg bg-black/60 px-2.5 py-1.5 text-xs text-white">
+                    <ZoomIn size={14} />
+                    Full screen
+                  </span>
+                </>
+              ) : (
+                <div className="flex aspect-[4/3] items-center justify-center">
+                  <Fish size={48} className="text-slate-600" />
+                </div>
+              )}
+            </button>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge className={STATUS_STYLE[viewRec.status]?.badge}>{formatCustomerKoiStatus(viewRec.status)}</Badge>
+              <Badge className="bg-slate-700">{viewRec.variety}</Badge>
+              {viewRec.size != null && viewRec.size !== '' && (
+                <Badge className="bg-slate-700">{formatKoiSize(viewRec.size)}</Badge>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
               {[
                 ['Customer', viewRec.customerName],
                 ['Variety', viewRec.variety],
@@ -759,32 +821,73 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
                 viewRec.status === CUSTOMER_KOI_STATUS.IN_POND ? ['Pond', viewRec.pondName] : null,
                 viewRec.status === CUSTOMER_KOI_STATUS.COLLECTED ? ['Taken away', viewRec.collectedDate] : null,
               ].filter(Boolean).map(([k, v]) => (
-                <div key={k}><p className="text-slate-500 text-xs">{k}</p><p className="text-white">{v || '—'}</p></div>
+                <div key={k} className="rounded-lg bg-slate-900/50 border border-slate-700/50 p-3">
+                  <p className="text-slate-500 text-xs uppercase tracking-wide">{k}</p>
+                  <p className="text-white font-medium mt-0.5">{v || '—'}</p>
+                </div>
               ))}
             </div>
-            {viewRec.koiId && <p className="text-cyan-400 text-xs font-mono">Koi Code: {viewRec.koiId}</p>}
-            {viewRec.notes && <p className="text-slate-400 text-sm">{viewRec.notes}</p>}
+
+            {viewRec.koiId && (
+              <p className="text-cyan-400 text-sm font-mono">Koi Code: {viewRec.koiId}</p>
+            )}
+            {viewRec.notes && (
+              <Card className="p-4">
+                <p className="text-slate-500 text-xs uppercase tracking-wide mb-1">Notes</p>
+                <p className="text-slate-300 text-sm leading-relaxed">{viewRec.notes}</p>
+              </Card>
+            )}
+
             {viewRec.status === CUSTOMER_KOI_STATUS.DECEASED && (
-              <Card className="p-3 border-red-500/40">
-                <p className="text-red-300 font-bold text-xs mb-2">Death Record</p>
+              <Card className="p-4 border-red-500/40">
+                <p className="text-red-300 font-bold text-xs mb-2 uppercase tracking-wide">Death Record</p>
                 <p className="text-sm text-white">{viewRec.deathDate} — {viewRec.deathCause}</p>
-                {viewRec.deathNotes && <p className="text-slate-400 text-sm mt-1">{viewRec.deathNotes}</p>}
+                {viewRec.deathNotes && <p className="text-slate-400 text-sm mt-2">{viewRec.deathNotes}</p>}
                 {viewRec.deathPhoto && (
-                  <StoredImage
-                    src={viewRec.deathPhoto}
-                    alt=""
-                    className="mt-2 rounded-lg max-h-40 border border-red-500/50"
-                    entity="customer_koi"
-                    recordId={viewRec.id}
-                    field="death_photo"
-                    onRefresh={refreshCustomerKoiImage}
-                  />
+                  <button
+                    type="button"
+                    onClick={() => setPhotoZoom('death_photo')}
+                    className="mt-3 block w-full cursor-zoom-in rounded-lg border border-red-500/50 overflow-hidden hover:border-red-400/70"
+                  >
+                    <StoredImage
+                      src={viewRec.deathPhoto}
+                      alt="Death photo"
+                      className="w-full max-h-64 object-contain bg-slate-900"
+                      entity="customer_koi"
+                      recordId={viewRec.id}
+                      field="death_photo"
+                      onRefresh={refreshCustomerKoiImage}
+                    />
+                  </button>
                 )}
               </Card>
             )}
+
+            <div className="flex flex-wrap justify-end gap-2 pt-2">
+              {canEdit && (
+                <Btn variant="secondary" onClick={() => { setEditRec({ ...viewRec }); setViewRec(null); setPhotoZoom(null) }}>
+                  <Edit2 size={14} />Edit
+                </Btn>
+              )}
+              <Btn variant="secondary" onClick={() => { setViewRec(null); setPhotoZoom(null) }}>
+                Close
+              </Btn>
+            </div>
           </div>
         )}
       </Modal>
+
+      {viewRec && photoZoom && (
+        <PhotoLightbox
+          src={photoZoom === 'death_photo' ? viewRec.deathPhoto : viewRec.photo}
+          alt={displayFishName(viewRec)}
+          entity="customer_koi"
+          recordId={viewRec.id}
+          field={photoZoom === 'death_photo' ? 'death_photo' : 'photo'}
+          onRefresh={refreshCustomerKoiImage}
+          onClose={() => setPhotoZoom(null)}
+        />
+      )}
     </div>
   )
 }
