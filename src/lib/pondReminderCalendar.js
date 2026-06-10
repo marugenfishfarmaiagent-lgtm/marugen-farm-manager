@@ -3,6 +3,16 @@ import { buildNewEventRecord, sortEventsBySchedule } from './calendarOps'
 import { isPendingReminder } from './pondOps'
 import { touchUpdatedAt } from './syncMeta'
 
+function recordTs(record) {
+  if (!record?.updatedAt) return 0
+  const t = new Date(record.updatedAt).getTime()
+  return Number.isFinite(t) ? t : 0
+}
+
+function sameReminderLink(a, b) {
+  return String(a || '').trim() === String(b || '').trim()
+}
+
 export function reminderActionLabel(type) {
   return MAINTENANCE_TYPES.find((m) => m.value === type)?.label || type || 'Maintenance'
 }
@@ -35,24 +45,61 @@ export function reminderToCalendarEventFields(reminder) {
   }
 }
 
-/** Read-only calendar row for reminders not yet linked to an event row. */
-export function reminderToVirtualCalendarEvent(reminder) {
+function reminderFieldsMatchEvent(reminder, event) {
   const fields = reminderToCalendarEventFields(reminder)
-  return {
-    id: `pond-rem-${reminder.id}`,
-    ...fields,
-    pondReminderId: reminder.id,
-    isPondReminder: true,
-    createdBy: 'Pond Mgmt',
+  return (
+    event.title === fields.title
+    && event.date === fields.date
+    && (event.time || '09:00') === fields.time
+    && event.type === fields.type
+    && (event.note || '') === (fields.note || '')
+  )
+}
+
+/** Stable key so calendar backfill does not run on every pond blob reference change. */
+export function pendingRemindersSyncKey(reminders = []) {
+  return (reminders || [])
+    .filter(isPendingReminder)
+    .map((r) => [
+      r.id,
+      r.dueDate,
+      r.dueTime,
+      r.type,
+      r.pondName,
+      r.note,
+      r.status,
+    ].join(':'))
+    .sort()
+    .join('|')
+}
+
+/** Keep one calendar row per linked pond reminder (newest wins). */
+export function dedupeEventsByPondReminderId(events = []) {
+  const unlinked = []
+  const linkedByReminderId = new Map()
+
+  for (const event of events || []) {
+    const linkId = String(event?.pondReminderId || '').trim()
+    if (!linkId) {
+      unlinked.push(event)
+      continue
+    }
+    const existing = linkedByReminderId.get(linkId)
+    if (!existing || recordTs(event) >= recordTs(existing)) {
+      linkedByReminderId.set(linkId, event)
+    }
   }
+
+  return [...unlinked, ...linkedByReminderId.values()]
 }
 
 export function upsertCalendarEventForReminder(events, reminder, createdBy) {
   const fields = reminderToCalendarEventFields(reminder)
-  const existing = (events || []).find((e) => e.pondReminderId === reminder.id)
+  const existing = (events || []).find((e) => sameReminderLink(e.pondReminderId, reminder.id))
   if (existing) {
+    if (reminderFieldsMatchEvent(reminder, existing)) return events || []
     const next = (events || []).map((e) => (
-      e.pondReminderId === reminder.id
+      sameReminderLink(e.pondReminderId, reminder.id)
         ? touchUpdatedAt({ ...e, ...fields, pondReminderId: reminder.id })
         : e
     ))
@@ -65,19 +112,8 @@ export function upsertCalendarEventForReminder(events, reminder, createdBy) {
 
 export function removeCalendarEventForReminder(events, reminderId) {
   const id = String(reminderId)
-  return (events || []).filter((e) => String(e.pondReminderId || '') !== id)
-}
-
-/** Show pond reminders on calendar even before cloud event rows are created. */
-export function mergeEventsWithPondReminders(events = [], reminders = []) {
-  const linked = new Set(
-    (events || []).filter((e) => e.pondReminderId).map((e) => String(e.pondReminderId)),
-  )
-  const virtual = (reminders || [])
-    .filter(isPendingReminder)
-    .filter((r) => !linked.has(String(r.id)))
-    .map(reminderToVirtualCalendarEvent)
-  return sortEventsBySchedule([...(events || []), ...virtual])
+  const next = (events || []).filter((e) => !sameReminderLink(e.pondReminderId, id))
+  return next.length === (events || []).length ? (events || []) : next
 }
 
 /** Link pending pond reminders to calendar events; drop events for completed reminders. */
@@ -85,13 +121,19 @@ export function backfillCalendarEventsForReminders(events, reminders, createdBy)
   const pending = (reminders || []).filter(isPendingReminder)
   const pendingIds = new Set(pending.map((r) => String(r.id)))
 
-  let next = removeOrphanedPondReminderEvents(events || [], pendingIds)
+  let next = dedupeEventsByPondReminderId(events || [])
   let changed = next.length !== (events || []).length
+  const withoutOrphans = removeOrphanedPondReminderEvents(next, pendingIds)
+  if (withoutOrphans.length !== next.length) changed = true
+  next = withoutOrphans
 
   for (const reminder of pending) {
-    if (next.some((e) => String(e.pondReminderId) === String(reminder.id))) continue
-    next = upsertCalendarEventForReminder(next, reminder, createdBy)
-    changed = true
+    if (next.some((e) => sameReminderLink(e.pondReminderId, reminder.id))) continue
+    const updated = upsertCalendarEventForReminder(next, reminder, createdBy)
+    if (updated !== next) {
+      next = updated
+      changed = true
+    }
   }
 
   return changed ? next : (events || [])
@@ -99,4 +141,9 @@ export function backfillCalendarEventsForReminders(events, reminders, createdBy)
 
 function removeOrphanedPondReminderEvents(events, pendingIds) {
   return events.filter((e) => !e.pondReminderId || pendingIds.has(String(e.pondReminderId)))
+}
+
+/** @deprecated Virtual overlay caused duplicate rows; calendar uses linked events only. */
+export function mergeEventsWithPondReminders(events = []) {
+  return sortEventsBySchedule(dedupeEventsByPondReminderId(events))
 }
