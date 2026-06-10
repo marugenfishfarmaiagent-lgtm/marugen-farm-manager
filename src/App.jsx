@@ -106,6 +106,10 @@ import PaginationControls from "./components/ui/PaginationControls";
 import { usePagination } from "./hooks/usePagination";
 import { useTeamSyncPoll } from "./hooks/useTeamSyncPoll";
 import { buildTeamNotification, buildToastNotification, isTeamNotification } from "./lib/notifications";
+import { getConnectionState, onConnectionChange, isTransientSyncError } from "./lib/connectionManager";
+import { cacheWriteAllData, cacheReadAllData } from "./lib/localCache";
+import { logSyncEvent } from "./lib/syncAnalytics";
+import ConnectionStatus from "./components/ConnectionStatus";
 
 function BookedBadge({ booked, bookedBy }) {
   if (booked) {
@@ -116,36 +120,6 @@ function BookedBadge({ booked, bookedBy }) {
     );
   }
   return <Badge className="bg-amber-500/15 text-amber-300 text-[10px]">Pending accounts</Badge>;
-}
-
-function CloudOfflineBanner({ error, onRetry, retrying }) {
-  return (
-    <div className="bg-amber-500/15 border-b border-amber-500/50 px-3 py-3 sm:px-4 flex flex-col sm:flex-row sm:items-center gap-3 shrink-0">
-      <div className="flex items-start gap-2.5 flex-1 min-w-0">
-        <AlertTriangle size={20} className="text-amber-400 shrink-0 mt-0.5" />
-        <div className="min-w-0">
-          <p className="text-amber-100 text-sm font-bold">Cloud save paused — Local mode</p>
-          <p className="text-amber-200/90 text-xs mt-0.5 leading-relaxed">
-            New invoices, sales, and expenses show here but are <strong className="text-amber-100">not saved to Supabase</strong> yet.
-            Avoid refresh or closing this tab until sync succeeds.
-          </p>
-          {error && (
-            <p className="text-amber-300/70 text-[11px] mt-1 truncate" title={error}>{error}</p>
-          )}
-        </div>
-      </div>
-      <Btn
-        size="sm"
-        variant="secondary"
-        onClick={onRetry}
-        disabled={retrying}
-        className="w-full sm:w-auto justify-center border-amber-500/40 text-amber-100 hover:bg-amber-500/20 shrink-0"
-      >
-        <RefreshCw size={14} className={retrying ? "animate-spin" : ""} />
-        {retrying ? "Saving…" : "Retry save"}
-      </Btn>
-    </div>
-  );
 }
 
 function AccountsMarkConfirmModal({ open, recordLabel, currentlyBooked, onCancel, onSubmit }) {
@@ -5375,6 +5349,10 @@ export default function App() {
   const [cloudRetrying, setCloudRetrying] = useState(false);
   const [cloudPulling, setCloudPulling] = useState(false);
   const [lastSyncAt, setLastSyncAt] = useState(null);
+  const [isFromCache, setIsFromCache] = useState(false);
+  const [cacheCachedAt, setCacheCachedAt] = useState(null);
+  const [syncFailCount, setSyncFailCount] = useState(0);
+  const syncFailCountRef = useRef(0);
   const lowStockNotified = useRef(false);
   const lastSyncWarnRef = useRef(0);
   const lastCloudPullAt = useRef(0);
@@ -5534,7 +5512,12 @@ export default function App() {
       });
     }
     setCloudHydrated(true);
+    setIsFromCache(false);
+    setCacheCachedAt(null);
     touchLastSync();
+    if (isSupabaseConfigured) {
+      cacheWriteAllData(data).catch(() => {});
+    }
   }, [addNotification, touchLastSync]);
 
   const resetCloudBusinessState = useCallback(() => {
@@ -5586,12 +5569,24 @@ export default function App() {
         }
         const data = await db.fetchAllData();
         applyCloudData(data);
+        syncFailCountRef.current = 0;
+        setSyncFailCount(0);
         setCloudSync(true);
         setCloudError(null);
         setCurrentUser(auth.toAppUser(sessionUser));
       } catch (err) {
-        setCloudSync(false);
-        setCloudError(err.message);
+        const cached = await cacheReadAllData();
+        if (cached?.data) {
+          applyCloudData(cached.data);
+          setIsFromCache(true);
+          setCacheCachedAt(cached.cachedAt);
+          setCloudSync(getConnectionState().mode === 'cloud');
+          setCloudError(err.message);
+          logSyncEvent('load_from_cache', { reason: err.message });
+        } else {
+          setCloudSync(false);
+          setCloudError(err.message);
+        }
         if (auth.isSessionExpiredError(err.message)) {
           auth.clearSession();
           setCurrentUser(null);
@@ -5605,18 +5600,49 @@ export default function App() {
     loadFromCloud();
   }, [applyCloudData, resetCloudBusinessState]);
 
+  const resetSyncHealth = useCallback(() => {
+    syncFailCountRef.current = 0;
+    setSyncFailCount(0);
+    setCloudSync(true);
+    setCloudError(null);
+    setIsFromCache(false);
+    setCacheCachedAt(null);
+  }, []);
+
   const handleSyncFailure = useCallback((err) => {
     const msg = err?.message || "Sync failed";
-    setCloudError((prev) => {
-      if (!prev) warnCloudSaveFailed(msg, { force: true });
-      else warnCloudSaveFailed(msg);
-      return msg;
-    });
-    setCloudSync(false);
+    logSyncEvent('sync_failed', { message: msg });
+
     if (auth.isSessionExpiredError(msg)) {
+      syncFailCountRef.current = 0;
+      setSyncFailCount(0);
+      setCloudError(msg);
+      setCloudSync(false);
       auth.clearSession();
       setCurrentUser(null);
       resetCloudBusinessState();
+      warnCloudSaveFailed(msg, { force: true });
+      return;
+    }
+
+    const conn = getConnectionState();
+    const transient = isTransientSyncError(msg);
+    const nextCount = syncFailCountRef.current + 1;
+    syncFailCountRef.current = nextCount;
+    setSyncFailCount(nextCount);
+    setCloudError(msg);
+
+    const enterLocalMode = !conn.isOnline
+      || !conn.isApiReachable
+      || !transient
+      || nextCount >= 3;
+
+    if (enterLocalMode) {
+      setCloudSync(false);
+      logSyncEvent('entered_local_mode', { message: msg, failCount: nextCount });
+      warnCloudSaveFailed(msg, { force: nextCount >= 3 });
+    } else {
+      warnCloudSaveFailed(msg);
     }
   }, [warnCloudSaveFailed, resetCloudBusinessState]);
 
@@ -5655,15 +5681,14 @@ export default function App() {
     syncInFlightRef.current += 1;
     try {
       await Promise.all(tasks.map((e) => e.sync(syncStateRef.current[e.key])));
-      setCloudSync(true);
-      setCloudError(null);
+      resetSyncHealth();
       touchLastSync();
     } catch (err) {
       handleSyncFailure(err);
     } finally {
       syncInFlightRef.current -= 1;
     }
-  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync]);
+  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
   const syncInvoicesNow = useCallback(async (invoicesOverride) => {
     if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) {
@@ -5687,8 +5712,7 @@ export default function App() {
     syncInFlightRef.current += 1;
     try {
       await db.syncInvoices(payload);
-      setCloudSync(true);
-      setCloudError(null);
+      resetSyncHealth();
       touchLastSync();
     } catch (err) {
       handleSyncFailure(err);
@@ -5742,8 +5766,7 @@ export default function App() {
       } else if (inv.customerId != null && inv.customerId !== "") {
         setCustomers((prev) => applyCustomerPaidDelta(prev, inv.customerId, paidTotal));
       }
-      setCloudSync(true);
-      setCloudError(null);
+      resetSyncHealth();
       touchLastSync();
     } catch (err) {
       unpinInvoice(invId);
@@ -5836,8 +5859,7 @@ export default function App() {
       );
       syncStateRef.current = { ...syncStateRef.current, invoices: finalInvoices };
       setInvoices(finalInvoices);
-      setCloudSync(true);
-      setCloudError(null);
+      resetSyncHealth();
       touchLastSync();
     } catch (err) {
       unpinInvoice(invId);
@@ -5890,8 +5912,7 @@ export default function App() {
       );
       syncStateRef.current = { ...syncStateRef.current, invoices: finalInvoices };
       setInvoices(finalInvoices);
-      setCloudSync(true);
-      setCloudError(null);
+      resetSyncHealth();
       touchLastSync();
     } catch (err) {
       unpinInvoice(invId);
@@ -5922,8 +5943,7 @@ export default function App() {
         await fn(data);
       })()
         .then(() => {
-          setCloudSync(true);
-          setCloudError(null);
+          resetSyncHealth();
           touchLastSync();
         })
         .catch((err) => {
@@ -5938,7 +5958,7 @@ export default function App() {
       if (syncTimersRef.current[key]) clearTimeout(syncTimersRef.current[key]);
       delete syncTimersRef.current[key];
     };
-  }, [dataReady, cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync]);
+  }, [dataReady, cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
   useEffect(() => {
     if (!inventorySyncPendingRef.current) return;
@@ -5967,8 +5987,7 @@ export default function App() {
         const snap = syncStateRef.current;
         await db.syncProducts(snap.products || []);
         await db.syncStockActivity(snap.stockLog || []);
-        setCloudSync(true);
-        setCloudError(null);
+        resetSyncHealth();
         touchLastSync();
       } catch (err) {
         handleSyncFailure(err);
@@ -5996,8 +6015,7 @@ export default function App() {
         const reason = results.find((r) => r.status === "rejected")?.reason;
         throw new Error(`Sync failed: ${failed.join(", ")} — ${reason?.message || "unknown error"}`);
       }
-      setCloudSync(true);
-      setCloudError(null);
+      resetSyncHealth();
       touchLastSync();
       dismissToast("cloud-sync-warn");
       const skipped = SYNC_ENTITIES.length - tasks.length;
@@ -6016,7 +6034,7 @@ export default function App() {
       setCloudRetrying(false);
     }
   }, [
-    currentUser, cloudHydrated, syncState, ensureCloudSyncReady, handleSyncFailure, dismissToast, showProminentToast, touchLastSync,
+    currentUser, cloudHydrated, syncState, ensureCloudSyncReady, handleSyncFailure, dismissToast, showProminentToast, touchLastSync, resetSyncHealth,
   ]);
 
   const refreshFromCloud = useCallback(async ({ force = false, quiet = false, source = "event" } = {}) => {
@@ -6052,8 +6070,7 @@ export default function App() {
 
       lastCloudPullAt.current = Date.now();
       applyCloudData(data, { mode: cloudHydrated ? "merge" : "replace" });
-      setCloudSync(true);
-      setCloudError(null);
+      resetSyncHealth();
       touchLastSync();
       dismissToast("cloud-sync-warn");
       if (quiet && source === "poll" && teamChanges > 0) {
@@ -6081,7 +6098,7 @@ export default function App() {
     }
   }, [
     currentUser, cloudHydrated, applyCloudData, handleSyncFailure, dismissToast,
-    showProminentToast, flushPendingCloudSync, touchLastSync, addNotification,
+    showProminentToast, flushPendingCloudSync, touchLastSync, resetSyncHealth, addNotification,
   ]);
 
   useTeamSyncPoll({
@@ -6111,6 +6128,17 @@ export default function App() {
       window.removeEventListener("pageshow", onPageShow);
     };
   }, [currentUser, refreshFromCloud, flushPendingCloudSync]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !currentUser) return;
+    return onConnectionChange(({ mode }) => {
+      if (mode !== 'cloud') return;
+      refreshFromCloud({ quiet: true, source: "event" });
+      if (!cloudSync && cloudError) {
+        retryCloudSync();
+      }
+    });
+  }, [currentUser, cloudSync, cloudError, refreshFromCloud, retryCloudSync]);
 
   useEffect(() => {
     if (!cloudHydrated || invoicesNormalizedRef.current) return;
@@ -6568,8 +6596,14 @@ export default function App() {
                 Last synced {format(lastSyncAt, "HH:mm")}
               </span>
             )}
-            {cloudError && (
+            {cloudError && !cloudSync && (
               <Badge className="bg-amber-500/25 text-amber-200 text-[10px] sm:text-xs animate-pulse shrink-0" title={cloudError}>⚠️ Local mode</Badge>
+            )}
+            {cloudError && cloudSync && syncFailCount > 0 && (
+              <Badge className="bg-cyan-500/20 text-cyan-200 text-[10px] sm:text-xs shrink-0" title={cloudError}>⏳ Sync retry</Badge>
+            )}
+            {isFromCache && !cloudError && (
+              <Badge className="bg-amber-500/15 text-amber-300 text-[10px] sm:text-xs shrink-0">📦 Cached</Badge>
             )}
             {isSupabaseConfigured && currentUser && (
               <button
@@ -6617,11 +6651,15 @@ export default function App() {
           </div>
         </header>
 
-        {isSupabaseConfigured && currentUser && cloudError && (
-          <CloudOfflineBanner
-            error={cloudError}
+        {isSupabaseConfigured && currentUser && (
+          <ConnectionStatus
+            cloudSync={cloudSync}
+            cloudError={cloudError}
+            cloudRetrying={cloudRetrying}
             onRetry={retryCloudSync}
-            retrying={cloudRetrying}
+            isFromCache={isFromCache}
+            cacheCachedAt={cacheCachedAt}
+            syncFailCount={syncFailCount}
           />
         )}
 

@@ -4,6 +4,7 @@ import { Analytics } from '@vercel/analytics/react'
 import './index.css'
 import App from './App.jsx'
 import { initMonitoring } from './lib/monitoring.js'
+import './lib/connectionManager.js'
 
 initMonitoring()
 

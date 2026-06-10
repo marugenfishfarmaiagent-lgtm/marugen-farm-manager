@@ -277,7 +277,13 @@ Deno.serve(async (req) => {
   try {
     const J = (payload: unknown, status = 200) => jsonResponse(payload, status, req);
     const token = sessionTokenFrom(req);
-    const user = await validateSession(token);
+    let user: SessionUser | null = null;
+    try {
+      user = await validateSession(token);
+    } catch (sessionErr) {
+      console.error("[farm-api] session validation failed:", sessionErr);
+      return J({ error: "Unauthorized" }, 401);
+    }
     if (!user) return J({ error: "Unauthorized" }, 401);
 
     const body = await req.json();

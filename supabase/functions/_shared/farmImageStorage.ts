@@ -47,7 +47,14 @@ export async function signFarmImageUrl(
   const { data, error } = await db.storage
     .from(bucket)
     .createSignedUrl(path, SIGNED_URL_TTL_SEC);
-  if (error) throw error;
+  if (error) {
+    // Stale DB path — file was deleted or never uploaded. Don't fail entire fetch/sync.
+    if (/not found/i.test(error.message)) {
+      console.warn(`[storage] missing object: ${bucket}/${path}`);
+      return "";
+    }
+    throw error;
+  }
   return data.signedUrl;
 }
 
