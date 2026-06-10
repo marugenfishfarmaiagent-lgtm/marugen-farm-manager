@@ -749,6 +749,9 @@ export function executeAiAction(name, args, ctx) {
           address: a.address,
           fishTypes: a.fishTypes,
           notes: a.notes,
+        }, {
+          existingCustomers: ctx.customers,
+          cloudIds: Boolean(ctx.isSupabaseConfigured),
         })
         if (!built.ok) return { success: false, error: built.message }
         if (isDuplicateCustomerName(ctx.customers, built.customer.name)) {

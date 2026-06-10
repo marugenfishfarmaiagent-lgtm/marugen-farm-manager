@@ -97,13 +97,24 @@ export function normalizeCustomerRecord(customer) {
   }
 }
 
-export function buildNewCustomerRecord(fields) {
+/** Next BIGINT customer id for cloud sync (Postgres customers.id). */
+export function allocateCloudCustomerId(existingCustomers = []) {
+  let max = 0
+  for (const c of existingCustomers) {
+    const n = Number(c?.id)
+    if (Number.isFinite(n) && n > max) max = Math.trunc(n)
+  }
+  return max + 1
+}
+
+export function buildNewCustomerRecord(fields, { existingCustomers = [], cloudIds = false } = {}) {
   const check = validateCustomerFields(fields)
   if (!check.ok) return check
+  const id = cloudIds ? allocateCloudCustomerId(existingCustomers) : genId('CUST')
   return {
     ok: true,
     customer: touchUpdatedAt({
-      id: genId('CUST'),
+      id,
       name: check.name,
       phone: check.phone,
       whatsapp: check.whatsapp,

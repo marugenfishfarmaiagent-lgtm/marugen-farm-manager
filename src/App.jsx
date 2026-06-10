@@ -65,6 +65,11 @@ import { isSupabaseConfigured } from "./lib/supabase";
 import * as auth from "./lib/auth";
 import { markDeleted, clearAllDeletions, peekDeletions } from "./lib/syncDeletions";
 import { mergeRecords, mergePondData, mergeInvoices, mergeKoiFish } from "./lib/cloudMerge";
+import {
+  countIncomingTeamChanges,
+  TEAM_SYNC_EVENT_THROTTLE_MS,
+  TEAM_SYNC_POLL_THROTTLE_MS,
+} from "./lib/teamSyncDetect";
 import { applyInvoicePins, pinInvoice, unpinInvoice } from "./lib/invoicePins";
 import { touchUpdatedAt } from "./lib/syncMeta";
 import {
@@ -99,6 +104,7 @@ import EmptyState from "./components/ui/EmptyState";
 import ModuleSkeleton from "./components/ui/ModuleSkeleton";
 import PaginationControls from "./components/ui/PaginationControls";
 import { usePagination } from "./hooks/usePagination";
+import { useTeamSyncPoll } from "./hooks/useTeamSyncPoll";
 import { buildTeamNotification, buildToastNotification, isTeamNotification } from "./lib/notifications";
 
 function BookedBadge({ booked, bookedBy }) {
@@ -2501,7 +2507,10 @@ function CustomerModule({
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
-    const built = buildNewCustomerRecord(form);
+    const built = buildNewCustomerRecord(form, {
+      existingCustomers: customers,
+      cloudIds: isSupabaseConfigured,
+    });
     if (!built.ok) {
       addNotification({ type: "error", title: "Invalid Customer", message: built.message });
       return;
@@ -6010,10 +6019,15 @@ export default function App() {
     currentUser, cloudHydrated, syncState, ensureCloudSyncReady, handleSyncFailure, dismissToast, showProminentToast, touchLastSync,
   ]);
 
-  const refreshFromCloud = useCallback(async ({ force = false, quiet = false } = {}) => {
+  const refreshFromCloud = useCallback(async ({ force = false, quiet = false, source = "event" } = {}) => {
     if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
     const now = Date.now();
-    if (!force && now - lastCloudPullAt.current < 15_000) return;
+    const throttleMs = force
+      ? 0
+      : source === "poll"
+        ? TEAM_SYNC_POLL_THROTTLE_MS
+        : TEAM_SYNC_EVENT_THROTTLE_MS;
+    if (!force && now - lastCloudPullAt.current < throttleMs) return;
     setCloudPulling(true);
     try {
       let waited = 0;
@@ -6023,17 +6037,34 @@ export default function App() {
       }
       if (syncInFlightRef.current > 0) return;
 
-      if (Object.keys(syncTimersRef.current).length > 0) {
+      const pendingPush = Object.keys(syncTimersRef.current).length > 0;
+      if (pendingPush) {
         await flushPendingCloudSync();
       }
 
       const data = await db.fetchAllData();
+      const teamChanges = source === "poll"
+        && cloudHydrated
+        && !pendingPush
+        && syncInFlightRef.current === 0
+        ? countIncomingTeamChanges(syncStateRef.current, data, peekDeletions)
+        : 0;
+
       lastCloudPullAt.current = Date.now();
       applyCloudData(data, { mode: cloudHydrated ? "merge" : "replace" });
       setCloudSync(true);
       setCloudError(null);
       touchLastSync();
       dismissToast("cloud-sync-warn");
+      if (quiet && source === "poll" && teamChanges > 0) {
+        addNotification({
+          type: "info",
+          title: "Team data updated",
+          message: `${teamChanges} update${teamChanges === 1 ? "" : "s"} from other devices synced.`,
+          actor: "System",
+          actorRole: "system",
+        });
+      }
       if (!quiet) {
         showProminentToast({
           id: "cloud-pull-ok",
@@ -6048,20 +6079,28 @@ export default function App() {
     } finally {
       setCloudPulling(false);
     }
-  }, [currentUser, cloudHydrated, applyCloudData, handleSyncFailure, dismissToast, showProminentToast, flushPendingCloudSync, touchLastSync]);
+  }, [
+    currentUser, cloudHydrated, applyCloudData, handleSyncFailure, dismissToast,
+    showProminentToast, flushPendingCloudSync, touchLastSync, addNotification,
+  ]);
+
+  useTeamSyncPoll({
+    enabled: isSupabaseConfigured && Boolean(currentUser) && cloudHydrated && cloudSync,
+    onPoll: () => refreshFromCloud({ quiet: true, source: "poll" }),
+  });
 
   useEffect(() => {
     if (!isSupabaseConfigured || !currentUser) return;
     const onVisibility = () => {
       if (document.visibilityState === "visible") {
-        refreshFromCloud({ quiet: true });
+        refreshFromCloud({ quiet: true, source: "event" });
       } else if (document.visibilityState === "hidden") {
         flushPendingCloudSync();
       }
     };
-    const onOnline = () => refreshFromCloud({ quiet: true });
+    const onOnline = () => refreshFromCloud({ quiet: true, source: "event" });
     const onPageShow = (event) => {
-      if (event.persisted) refreshFromCloud({ quiet: true });
+      if (event.persisted) refreshFromCloud({ quiet: true, source: "event" });
     };
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("online", onOnline);
@@ -6391,6 +6430,7 @@ export default function App() {
 
   const aiContext = {
     customers, invoices, expenses, products, deliveries, events, stockLog, currentUser, addNotification,
+    isSupabaseConfigured,
     koiFishList, customerKoiList, pondData,
     setCustomers, setInvoices, setExpenses, setProducts, setDeliveries, setEvents, setStockLog,
     setKoiFishList, setCustomerKoiList, setPondData,
@@ -6534,7 +6574,7 @@ export default function App() {
             {isSupabaseConfigured && currentUser && (
               <button
                 type="button"
-                onClick={() => refreshFromCloud({ force: true })}
+                onClick={() => refreshFromCloud({ force: true, source: "manual" })}
                 disabled={cloudPulling}
                 title="Load latest data from cloud (use after changes on another device)"
                 className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-400 hover:bg-slate-800 transition-colors touch-manipulation disabled:opacity-40 shrink-0"
