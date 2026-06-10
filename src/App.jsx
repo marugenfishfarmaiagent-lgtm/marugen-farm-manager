@@ -91,6 +91,10 @@ import {
   resolveDeliveryArea, sameDeliveryId,
 } from "./lib/deliveryOps";
 import {
+  backfillCalendarEventsForReminders, mergeEventsWithPondReminders,
+  removeCalendarEventForReminder, upsertCalendarEventForReminder,
+} from "./lib/pondReminderCalendar";
+import {
   buildNewEventRecord, buildUpdatedEventRecord, EVENT_TYPE_OPTIONS,
   sameEventId, sortEventsBySchedule,
 } from "./lib/calendarOps";
@@ -566,10 +570,17 @@ function LoginScreen({ onLogin, users, cloudMode }) {
 
 function Dashboard({
   invoices, expenses, customers, products, events, deliveries, koiFishList, customerKoiList,
-  currentUser, onNavigate, onOpenInvoice, cloudStale,
+  pondReminders, currentUser, onNavigate, onOpenInvoice, cloudStale,
 }) {
   const can = useCallback((perm) => hasPermission(currentUser, perm), [currentUser]);
   const go = useCallback((tab) => { if (hasPermission(currentUser, tab)) onNavigate?.(tab); }, [currentUser, onNavigate]);
+
+  const scheduleEvents = useMemo(
+    () => (can("calendar") && can("ponds")
+      ? mergeEventsWithPondReminders(events, pondReminders)
+      : (can("calendar") ? events : [])),
+    [events, pondReminders, can],
+  );
 
   const metrics = useMemo(
     () => computeDashboardMetrics({
@@ -577,13 +588,13 @@ function Dashboard({
       expenses: can("expenses") ? expenses : [],
       customers: can("customers") ? customers : [],
       products: can("inventory") ? products : [],
-      events: can("calendar") ? events : [],
+      events: scheduleEvents,
       deliveries: can("deliveries") ? deliveries : [],
       koiFishList: can("koifish") ? koiFishList : [],
       customerKoiList: can("customerkoi") ? customerKoiList : [],
       can,
     }),
-    [invoices, expenses, customers, products, events, deliveries, koiFishList, customerKoiList, can],
+    [invoices, expenses, customers, products, scheduleEvents, deliveries, koiFishList, customerKoiList, can],
   );
 
   const {
@@ -4063,7 +4074,7 @@ function DeliveryModule({
 // ─────────────────────────────────────────────
 // CALENDAR MODULE
 // ─────────────────────────────────────────────
-function CalendarModule({ events, setEvents, addNotification, currentUser }) {
+function CalendarModule({ events, setEvents, pondReminders, onNavigateToPonds, addNotification, currentUser }) {
   const emptyEventForm = () => ({ title: "", date: today(), time: "09:00", type: "other", note: "" });
   const eventToForm = (e) => ({
     title: e.title || "",
@@ -4172,31 +4183,53 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
     setDeleteConfirm(null);
   };
 
-  const sorted = sortEventsBySchedule(events);
+  const mergedEvents = useMemo(
+    () => mergeEventsWithPondReminders(events, pondReminders),
+    [events, pondReminders],
+  );
+  const sorted = sortEventsBySchedule(mergedEvents);
   const todayStr = today();
   const todayEvents = sorted.filter((e) => e.date === todayStr);
   const upcoming = sorted.filter((e) => e.date > todayStr);
   const past = sorted.filter((e) => e.date < todayStr && isAppVisibleEvent(e));
   const visiblePast = showAllPast ? past : past.slice(-5).reverse();
+  const isPondLinkedEvent = (e) => Boolean(e.pondReminderId || e.isPondReminder);
 
   const EventCard = ({ e }) => (
     <div className={`p-3 rounded-xl border ${eventTypeColor[e.type] || eventTypeColor.other} flex items-start justify-between gap-3`}>
       <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2 mb-1">
+          {isPondLinkedEvent(e) && (
+            <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-cyan-300 bg-cyan-500/10 border border-cyan-500/30 rounded-full px-2 py-0.5">
+              <Droplets size={10} />Pond reminder
+            </span>
+          )}
+        </div>
         <p className="font-bold text-sm">{e.time && `${e.time} · `}{e.title}</p>
         <p className="text-xs opacity-70">{e.date}{e.type ? ` · ${e.type}` : ""}</p>
         {e.note && <p className="text-xs mt-1 opacity-60">{e.note}</p>}
         {e.createdBy && <p className="text-[10px] mt-1 opacity-50">Added by {e.createdBy}</p>}
       </div>
       <div className="flex flex-col gap-1 shrink-0">
-        {canEdit && (
-          <button type="button" onClick={() => openEditEvent(e)} className="opacity-60 hover:opacity-100 touch-manipulation" title="Edit event">
-            <Edit2 size={12} className="text-cyan-400" />
-          </button>
-        )}
-        {canDelete && (
-          <button type="button" onClick={() => requestDeleteEvent(e)} className="opacity-60 hover:opacity-100 touch-manipulation" title="Delete event">
-            <Trash2 size={12} className="text-red-400" />
-          </button>
+        {isPondLinkedEvent(e) ? (
+          onNavigateToPonds && (
+            <button type="button" onClick={onNavigateToPonds} className="opacity-60 hover:opacity-100 touch-manipulation text-[10px] text-cyan-400 font-semibold" title="Open Pond Management">
+              Pond →
+            </button>
+          )
+        ) : (
+          <>
+            {canEdit && (
+              <button type="button" onClick={() => openEditEvent(e)} className="opacity-60 hover:opacity-100 touch-manipulation" title="Edit event">
+                <Edit2 size={12} className="text-cyan-400" />
+              </button>
+            )}
+            {canDelete && (
+              <button type="button" onClick={() => requestDeleteEvent(e)} className="opacity-60 hover:opacity-100 touch-manipulation" title="Delete event">
+                <Trash2 size={12} className="text-red-400" />
+              </button>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -4212,7 +4245,7 @@ function CalendarModule({ events, setEvents, addNotification, currentUser }) {
         <Fab onClick={openAddEvent} label="Add Event" hidden={formOpen || !!deleteConfirm} />
       )}
 
-      {events.length === 0 ? (
+      {mergedEvents.length === 0 ? (
         <Card>
           <EmptyState
             emoji="📅"
@@ -5813,6 +5846,21 @@ export default function App() {
     }
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
+  const syncReminderCalendar = useCallback((action, reminder) => {
+    if (!hasPermission(currentUser, "calendar")) return;
+    const reminderId = reminder?.id;
+    if (!reminderId) return;
+    setEvents((prev) => {
+      if (action === "upsert") {
+        return upsertCalendarEventForReminder(prev, reminder, currentUser?.name || "Staff");
+      }
+      if (action === "remove") {
+        return removeCalendarEventForReminder(prev, reminderId);
+      }
+      return prev;
+    });
+  }, [currentUser]);
+
   const syncInvoicesNow = useCallback(async (invoicesOverride) => {
     if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) {
       throw new Error("Cloud sync is not ready.");
@@ -6289,6 +6337,16 @@ export default function App() {
     setInvoices((prev) => sortInvoices(prev.map((inv) => db.sanitizeInvoiceForSync(inv))));
   }, [cloudHydrated]);
 
+  useEffect(() => {
+    if (!cloudHydrated || !currentUser) return;
+    if (!hasPermission(currentUser, "calendar") || !hasPermission(currentUser, "ponds")) return;
+    setEvents((prev) => backfillCalendarEventsForReminders(
+      prev,
+      pondData.reminders,
+      currentUser.name || "Staff",
+    ));
+  }, [cloudHydrated, currentUser, pondData.reminders]);
+
   useEffect(() => syncDebounced("customers", "Customers", db.syncCustomers, customers), [customers, syncDebounced]);
   useEffect(() => syncDebounced("inventory", "Inventory", db.syncProducts, products), [products, syncDebounced]);
   useEffect(() => syncDebounced("invoices", "Invoices", db.syncInvoices, invoices), [invoices, syncDebounced]);
@@ -6640,6 +6698,7 @@ export default function App() {
       case "dashboard": return guard("dashboard", "Dashboard", (
         <Dashboard
           {...props}
+          pondReminders={pondData.reminders}
           onOpenInvoice={handleOpenInvoiceFromDashboard}
           cloudStale={dashboardCloudStale}
         />
@@ -6647,12 +6706,12 @@ export default function App() {
       case "inventory": return guard("inventory", "Inventory", <InventoryModule products={products} setProducts={setProducts} stockLog={stockLog} setStockLog={setStockLog} invoices={invoices} addNotification={addNotification} currentUser={currentUser} />);
       case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} />);
-      case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondData} addNotification={addNotification} currentUser={currentUser} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} onPersistPondData={syncPondDataNow} />);
+      case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondData} addNotification={addNotification} currentUser={currentUser} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} onPersistPondData={syncPondDataNow} onSyncReminderCalendar={syncReminderCalendar} />);
       case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} openViewId={invoiceViewRequest?.id} onViewOpened={() => setInvoiceViewRequest(null)} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} />);
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} invoices={invoices} setInvoices={setInvoices} deliveries={deliveries} setDeliveries={setDeliveries} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpenses} addNotification={addNotification} currentUser={currentUser} />);
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} />);
-      case "calendar": return guard("calendar", "Calendar", <CalendarModule events={events} setEvents={setEvents} addNotification={addNotification} currentUser={currentUser} />);
+      case "calendar": return guard("calendar", "Calendar", <CalendarModule events={events} setEvents={setEvents} pondReminders={pondData.reminders} onNavigateToPonds={() => goToTab("ponds")} addNotification={addNotification} currentUser={currentUser} />);
       case "chat": return guard("chat", "AI Chat", <ChatModule aiContext={aiContext} messages={chatMessages} setMessages={setChatMessages} />);
       case "users": return <ErrorBoundary><TeamModule users={users} setUsers={setUsers} currentUser={currentUser} addNotification={addNotification} onCurrentUserUpdate={handleUserUpdate} cloudMode={isSupabaseConfigured && cloudSync} apiEnabled={isSupabaseConfigured} onOpenChangePin={() => setShowChangePin(true)} getBackupData={getBackupData} /></ErrorBoundary>;
       default: return null;

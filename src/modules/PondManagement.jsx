@@ -16,9 +16,21 @@ import {
   isPendingReminder, markReminderCompleteInPondData,
   samePondId, validateMaintenanceForm, validatePondFields, validateReminderForm, validateTreatmentForm,
 } from '../lib/pondOps'
+import { reminderDisplayLines } from '../lib/pondReminderCalendar'
 import { touchPondData, touchUpdatedAt } from '../lib/syncMeta'
 
 const POND_TYPE_COLOR = { koi: 'bg-cyan-500/20 text-cyan-300', arowana: 'bg-amber-500/20 text-amber-300', quarantine: 'bg-red-500/20 text-red-300', display: 'bg-purple-500/20 text-purple-300' }
+
+function ReminderDetails({ reminder, overdue = false }) {
+  const { title, subtitle, note } = reminderDisplayLines(reminder)
+  return (
+    <div className="min-w-0 flex-1">
+      <p className={`font-semibold ${overdue ? 'text-red-200' : 'text-white'}`}>{title}</p>
+      <p className="text-slate-400 text-xs mt-0.5">{subtitle}</p>
+      {note ? <p className="text-slate-300 text-xs mt-1 whitespace-pre-wrap">{note}</p> : null}
+    </div>
+  )
+}
 
 function daysSince(dateStr) {
   if (!dateStr) return 999
@@ -38,7 +50,7 @@ function paramColor(kind, value) {
 
 export default function PondManagement({
   pondData, setPondData, addNotification, currentUser, canEdit = false, canDelete = false,
-  onPersistPondData,
+  onPersistPondData, onSyncReminderCalendar,
 }) {
   const { ponds, maintenanceLogs, treatmentLogs, reminders, treatmentGuides } = pondData
   const visiblePond = useMemo(() => filterPondLogsForApp(pondData), [pondData])
@@ -93,6 +105,7 @@ export default function PondManagement({
     setCompletingReminderId(id)
     try {
       await onPersistPondData?.(nextPond)
+      onSyncReminderCalendar?.('remove', { id })
       addNotification({ type: 'success', title: 'Reminder completed', message: 'Marked as done.' })
     } catch {
       setPondData((prev) => {
@@ -263,8 +276,22 @@ export default function PondManagement({
       addNotification({ type: 'error', title: 'Pond Not Found', message: 'Selected pond is no longer in the list.' })
       return
     }
-    update({ reminders: [...reminders, { ...remindForm, id: genId('REM'), pondName: pond.name, status: 'pending' }] })
-    addNotification({ type: 'success', title: 'Reminder Set', message: `${pond.name} — ${MAINTENANCE_TYPES.find((m) => m.value === remindForm.type)?.label || remindForm.type}` })
+    const newReminder = {
+      ...remindForm,
+      id: genId('REM'),
+      pondName: pond.name,
+      status: 'pending',
+    }
+    setPondData((prev) => touchPondData({
+      ...prev,
+      reminders: [...(prev.reminders || []), newReminder],
+    }))
+    onSyncReminderCalendar?.('upsert', newReminder)
+    addNotification({
+      type: 'success',
+      title: 'Reminder Set',
+      message: `${reminderDisplayLines(newReminder).title} · ${newReminder.dueDate}`,
+    })
     setRemindModal(null)
   }
 
@@ -567,8 +594,8 @@ export default function PondManagement({
             <Card className="p-4 border-red-500/40">
               <p className="text-red-300 font-bold text-sm mb-2">Overdue</p>
               {overdueReminders.map((r) => (
-                <div key={r.id} className="flex justify-between items-center py-2 text-sm">
-                  <span className="text-white">{r.pondName} — {r.note || r.type} ({r.dueDate})</span>
+                <div key={r.id} className="flex justify-between items-start gap-3 py-2 text-sm border-b border-red-500/20 last:border-0">
+                  <ReminderDetails reminder={r} overdue />
                   <Btn variant="success" size="sm" disabled={completingReminderId === String(r.id)} onClick={() => markReminderDone(r.id)}><Check size={12} /></Btn>
                 </div>
               ))}
@@ -578,9 +605,9 @@ export default function PondManagement({
             <Card className="p-6 text-center text-slate-500 text-sm">No pending reminders.</Card>
           )}
           {pendingReminders.map((r) => (
-            <Card key={r.id} className="p-3 flex justify-between items-center text-sm">
-              <span className="text-white">{r.pondName} · {r.dueDate} {r.dueTime}</span>
-              <div className="flex gap-2">
+            <Card key={r.id} className="p-3 flex justify-between items-start gap-3 text-sm">
+              <ReminderDetails reminder={r} />
+              <div className="flex gap-2 shrink-0">
                 <Btn variant="success" size="sm" disabled={completingReminderId === String(r.id)} onClick={() => markReminderDone(r.id)}>Done</Btn>
                 {canDelete && (
                   <Btn variant="ghost" size="sm" onClick={() => {
@@ -589,6 +616,7 @@ export default function PondManagement({
                       ...prev,
                       reminders: (prev.reminders || []).filter((x) => String(x.id) !== String(r.id)),
                     }))
+                    onSyncReminderCalendar?.('remove', { id: r.id })
                   }}><Trash2 size={12} /></Btn>
                 )}
               </div>

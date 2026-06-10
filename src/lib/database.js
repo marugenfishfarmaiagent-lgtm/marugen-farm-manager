@@ -191,6 +191,7 @@ function mapEvent(row) {
     type: row.type ?? 'other',
     note: row.note ?? '',
     createdBy: row.created_by ?? row.createdBy ?? '',
+    pondReminderId: row.pond_reminder_id ?? row.pondReminderId ?? '',
   }))
 }
 
@@ -497,7 +498,13 @@ export async function syncDeliveries(deliveries, options) {
 
 export async function syncEvents(events, options) {
   if (!isSupabaseConfigured) return
-  const payload = (events || []).map((e) => normalizeEventRecord(e))
+  const payload = (events || []).map((e) => {
+    const row = normalizeEventRecord(e)
+    return {
+      ...row,
+      pond_reminder_id: row.pondReminderId || '',
+    }
+  })
   await syncCall('events', payload, options)
 }
 

@@ -862,6 +862,7 @@ Deno.serve(async (req) => {
         await upsertSync("events", incoming.map((e: Record<string, unknown>) => withTs({
           id: e.id, title: e.title, date: e.date, time: e.time ?? "09:00", type: e.type ?? "other",
           note: e.note ?? "", created_by: e.createdBy ?? "",
+          pond_reminder_id: e.pondReminderId ?? e.pond_reminder_id ?? "",
         }, e)), "id", syncOpts);
       } else if (entity === "stock_activity") {
         const incoming = (data || []) as Record<string, unknown>[];

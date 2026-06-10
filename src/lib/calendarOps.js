@@ -32,6 +32,7 @@ export function normalizeEventRecord(event) {
   const type = EVENT_TYPE_VALUES.has(event.type) ? event.type : 'other'
   const timeRaw = String(event.time || '09:00').trim()
   const time = TIME_RE.test(timeRaw) ? timeRaw : '09:00'
+  const pondReminderId = String(event.pondReminderId || event.pond_reminder_id || '').trim()
   return {
     ...event,
     title: String(event.title || '').trim().slice(0, TITLE_MAX),
@@ -40,6 +41,7 @@ export function normalizeEventRecord(event) {
     type,
     note: String(event.note || '').slice(0, NOTE_MAX),
     createdBy: event.createdBy || '',
+    ...(pondReminderId ? { pondReminderId } : {}),
   }
 }
 
