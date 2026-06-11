@@ -179,6 +179,7 @@ function mapDelivery(row) {
     driver: row.driver ?? '',
     notes: row.notes ?? '',
     createdBy: row.created_by ?? row.createdBy ?? '',
+    assignedUserIds: row.assigned_user_ids ?? row.assignedUserIds ?? [],
   }))
 }
 
@@ -192,6 +193,7 @@ function mapEvent(row) {
     note: row.note ?? '',
     createdBy: row.created_by ?? row.createdBy ?? '',
     pondReminderId: row.pond_reminder_id ?? row.pondReminderId ?? '',
+    assignedUserIds: row.assigned_user_ids ?? row.assignedUserIds ?? [],
   }))
 }
 
@@ -570,7 +572,9 @@ export async function sendPushTest() {
   return apiCall({ action: 'send_push_test' })
 }
 
-export async function notifyTeamPush({ title, body, message, url, tag, actor, actorRole, type }) {
+export async function notifyTeamPush({
+  title, body, message, url, tag, actor, actorRole, type, targetUserIds,
+}) {
   if (!isSupabaseConfigured) return
   return apiCall({
     action: 'notify_team_push',
@@ -582,6 +586,7 @@ export async function notifyTeamPush({ title, body, message, url, tag, actor, ac
     actor,
     actorRole,
     type,
+    targetUserIds,
   })
 }
 

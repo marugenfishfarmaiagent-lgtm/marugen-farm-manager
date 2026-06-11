@@ -17,17 +17,20 @@ import {
   samePondId, validateMaintenanceForm, validatePondFields, validateReminderForm, validateTreatmentForm,
 } from '../lib/pondOps'
 import { reminderDisplayLines } from '../lib/pondReminderCalendar'
+import { notifyAssignedStaff } from '../lib/teamAssignNotify'
 import { touchPondData, touchUpdatedAt } from '../lib/syncMeta'
+import StaffAssignPicker, { AssigneeBadges } from '../components/StaffAssignPicker'
 
 const POND_TYPE_COLOR = { koi: 'bg-cyan-500/20 text-cyan-300', arowana: 'bg-amber-500/20 text-amber-300', quarantine: 'bg-red-500/20 text-red-300', display: 'bg-purple-500/20 text-purple-300' }
 
-function ReminderDetails({ reminder, overdue = false }) {
+function ReminderDetails({ reminder, users, overdue = false }) {
   const { title, subtitle, note } = reminderDisplayLines(reminder)
   return (
     <div className="min-w-0 flex-1">
       <p className={`font-semibold ${overdue ? 'text-red-200' : 'text-white'}`}>{title}</p>
       <p className="text-slate-400 text-xs mt-0.5">{subtitle}</p>
       {note ? <p className="text-slate-300 text-xs mt-1 whitespace-pre-wrap">{note}</p> : null}
+      <AssigneeBadges users={users} assignedUserIds={reminder.assignedUserIds} className="mt-1" />
     </div>
   )
 }
@@ -49,7 +52,7 @@ function paramColor(kind, value) {
 }
 
 export default function PondManagement({
-  pondData, setPondData, addNotification, currentUser, canEdit = false, canDelete = false,
+  pondData, setPondData, addNotification, currentUser, users = [], canEdit = false, canDelete = false,
   onPersistPondData, onSyncReminderCalendar,
 }) {
   const { ponds, maintenanceLogs, treatmentLogs, reminders, treatmentGuides } = pondData
@@ -69,7 +72,7 @@ export default function PondManagement({
 
   const [maintForm, setMaintForm] = useState({ pondId: '', type: 'water_test', date: today(), notes: '', showParams: true, pH: '', ammonia: '', nitrite: '', saltLevel: '' })
   const [treatForm, setTreatForm] = useState({ pondId: '', medicine: '', dosage: '', reason: '', startDate: today(), endDate: '', waterChangeBefore: false, notes: '' })
-  const [remindForm, setRemindForm] = useState({ pondId: '', type: 'water_test', dueDate: today(), dueTime: '09:00', note: '', repeat: 'none' })
+  const [remindForm, setRemindForm] = useState({ pondId: '', type: 'water_test', dueDate: today(), dueTime: '09:00', note: '', repeat: 'none', assignedUserIds: [] })
   const [guideForm, setGuideForm] = useState({ title: '', category: '', steps: '', warning: '' })
   const [editingGuideId, setEditingGuideId] = useState(null)
   const [editingTreatmentId, setEditingTreatmentId] = useState(null)
@@ -283,6 +286,7 @@ export default function PondManagement({
       id: genId('REM'),
       pondName: pond.name,
       status: 'pending',
+      assignedUserIds: remindForm.assignedUserIds,
     }))
     let nextPond = null
     setPondData((prev) => {
@@ -298,11 +302,22 @@ export default function PondManagement({
     try {
       await onPersistPondData?.(nextPond)
       await onSyncReminderCalendar?.('upsert', newReminder)
+      const reminderMsg = `${reminderDisplayLines(newReminder).title} · ${newReminder.dueDate}`
       addNotification({
         type: 'success',
         title: 'Reminder Set',
-        message: `${reminderDisplayLines(newReminder).title} · ${newReminder.dueDate}`,
+        message: reminderMsg,
       })
+      if (newReminder.assignedUserIds?.length) {
+        notifyAssignedStaff({
+          assignedUserIds: newReminder.assignedUserIds,
+          title: 'Pond Task Assigned',
+          message: reminderMsg,
+          url: '/?tab=ponds',
+          actor: currentUser?.name,
+          actorRole: currentUser?.role,
+        })
+      }
     } catch {
       setPondData((prev) => touchPondData({
         ...prev,
@@ -396,7 +411,7 @@ export default function PondManagement({
   }
 
   const openNewReminder = () => {
-    setRemindForm({ pondId: ponds[0]?.id || '', type: 'water_test', dueDate: today(), dueTime: '09:00', note: '', repeat: 'none' })
+    setRemindForm({ pondId: ponds[0]?.id || '', type: 'water_test', dueDate: today(), dueTime: '09:00', note: '', repeat: 'none', assignedUserIds: [] })
     setRemindModal('new')
   }
 
@@ -624,7 +639,7 @@ export default function PondManagement({
               <p className="text-red-300 font-bold text-sm mb-2">Overdue</p>
               {overdueReminders.map((r) => (
                 <div key={r.id} className="flex justify-between items-start gap-3 py-2 text-sm border-b border-red-500/20 last:border-0">
-                  <ReminderDetails reminder={r} overdue />
+                  <ReminderDetails reminder={r} users={users} overdue />
                   <Btn variant="success" size="sm" disabled={completingReminderId === String(r.id)} onClick={() => markReminderDone(r.id)}><Check size={12} /></Btn>
                 </div>
               ))}
@@ -635,7 +650,7 @@ export default function PondManagement({
           )}
           {pendingReminders.map((r) => (
             <Card key={r.id} className="p-3 flex justify-between items-start gap-3 text-sm">
-              <ReminderDetails reminder={r} />
+              <ReminderDetails reminder={r} users={users} />
               <div className="flex gap-2 shrink-0">
                 <Btn variant="success" size="sm" disabled={completingReminderId === String(r.id)} onClick={() => markReminderDone(r.id)}>Done</Btn>
                 {canDelete && (
@@ -755,6 +770,13 @@ export default function PondManagement({
         <Input label="Due date" type="date" value={remindForm.dueDate} onChange={(e) => setRemindForm((f) => ({ ...f, dueDate: e.target.value }))} className="mt-3" />
         <Input label="Time" type="time" value={remindForm.dueTime} onChange={(e) => setRemindForm((f) => ({ ...f, dueTime: e.target.value }))} className="mt-3" />
         <Textarea label="Note" value={remindForm.note} onChange={(e) => setRemindForm((f) => ({ ...f, note: e.target.value }))} className="mt-3" />
+        <StaffAssignPicker
+          className="mt-3"
+          users={users}
+          value={remindForm.assignedUserIds}
+          onChange={(assignedUserIds) => setRemindForm((f) => ({ ...f, assignedUserIds }))}
+          excludeUserId={currentUser?.id}
+        />
         <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setRemindModal(null)} disabled={savingReminder}>Cancel</Btn><Btn onClick={saveReminder} disabled={!canEdit || savingReminder}>{savingReminder ? 'Saving…' : 'Save'}</Btn></div>
       </Modal>
 

@@ -1,4 +1,5 @@
 import { DELIVERY_STATUS, SG_AREAS, genId, getInvoiceStatus, today } from '../data/constants'
+import { formatAssignedStaffNames, normalizeAssignedUserIds } from './assignTeam'
 import { sameCustomerId, validateSingaporePostal } from './customerOps'
 import { touchUpdatedAt } from './syncMeta'
 
@@ -69,6 +70,7 @@ export function normalizeDeliveryRecord(delivery) {
     notes: String(delivery.notes || '').slice(0, NOTES_MAX),
     createdBy: delivery.createdBy || '',
     deliveredAt: delivery.deliveredAt || null,
+    assignedUserIds: normalizeAssignedUserIds(delivery.assignedUserIds ?? delivery.assigned_user_ids),
   }
 }
 
@@ -139,7 +141,7 @@ export function buildDeliveryStatusPatch(nextStatus, current = {}) {
   return { ok: true, patch }
 }
 
-export function buildNewDeliveryRecord(fields, { customers = [], invoices = [], createdBy } = {}) {
+export function buildNewDeliveryRecord(fields, { customers = [], invoices = [], createdBy, users = [] } = {}) {
   const check = validateDeliveryFields(fields, { customers, invoices, deliveries: [] })
   if (!check.ok) return check
   const area = resolveDeliveryArea({
@@ -147,6 +149,8 @@ export function buildNewDeliveryRecord(fields, { customers = [], invoices = [], 
     postalCode: check.postalCode,
     customerId: fields.customerId,
   }, customers)
+  const assignedUserIds = normalizeAssignedUserIds(fields.assignedUserIds)
+  const driverFromTeam = formatAssignedStaffNames(users, assignedUserIds)
   return {
     ok: true,
     delivery: touchUpdatedAt(normalizeDeliveryRecord({
@@ -160,16 +164,17 @@ export function buildNewDeliveryRecord(fields, { customers = [], invoices = [], 
       schedule: check.schedule,
       status: DELIVERY_STATUS.PENDING,
       items: fields.items?.trim() || '',
-      driver: fields.driver?.trim() || '',
+      driver: driverFromTeam || fields.driver?.trim() || '',
       notes: fields.notes?.trim() || '',
       createdBy: createdBy || 'Staff',
       deliveredAt: null,
+      assignedUserIds,
     })),
   }
 }
 
 export function buildUpdatedDeliveryRecord(fields, existing, {
-  customers = [], invoices = [], deliveries = [],
+  customers = [], invoices = [], deliveries = [], users = [],
 } = {}) {
   if (!existing) return { ok: false, message: 'Delivery not found.' }
   const check = validateDeliveryFields(fields, {
@@ -187,6 +192,10 @@ export function buildUpdatedDeliveryRecord(fields, existing, {
   } else if (check.status !== DELIVERY_STATUS.DELIVERED && existing.status === DELIVERY_STATUS.DELIVERED) {
     deliveredAt = null
   }
+  const assignedUserIds = normalizeAssignedUserIds(
+    fields.assignedUserIds ?? existing.assignedUserIds,
+  )
+  const driverFromTeam = formatAssignedStaffNames(users, assignedUserIds)
   return {
     ok: true,
     delivery: touchUpdatedAt(normalizeDeliveryRecord({
@@ -200,10 +209,11 @@ export function buildUpdatedDeliveryRecord(fields, existing, {
       schedule: check.schedule,
       status: check.status,
       items: fields.items?.trim() ?? existing.items ?? '',
-      driver: fields.driver?.trim() ?? existing.driver ?? '',
+      driver: driverFromTeam || (fields.driver?.trim() ?? existing.driver ?? ''),
       notes: fields.notes?.trim() ?? existing.notes ?? '',
       deliveredAt,
       createdBy: existing.createdBy || 'Staff',
+      assignedUserIds,
     })),
   }
 }

@@ -319,7 +319,7 @@ Deno.serve(async (req) => {
         db.from("farm_pond_data").select("data, updated_at").eq("id", "default").maybeSingle(),
         db.from("whatsapp_groups").select("*").order("name"),
         db.from("team_notifications")
-          .select("id, title, message, actor, actor_role, actor_user_id, notification_type, url, tag, created_at")
+          .select("id, title, message, actor, actor_role, actor_user_id, notification_type, url, tag, target_user_ids, created_at")
           .gte("created_at", teamNotifSince.toISOString())
           .order("created_at", { ascending: false })
           .limit(50),
@@ -332,9 +332,10 @@ Deno.serve(async (req) => {
       if (errors.length) return J({ error: errors[0]!.message }, 500);
 
       const canManageUsers = hasPermission(user, "users");
+      const allFarmUsers = users.data || [];
       const usersPayload = canManageUsers
-        ? (users.data || [])
-        : (users.data || []).filter((u) => Number(u.id) === Number(user.id));
+        ? allFarmUsers
+        : allFarmUsers.filter((u) => u.active !== false);
 
       const canExpenses = hasPermission(user, "expenses");
       const canKoiFish = hasPermission(user, "koifish");
@@ -368,7 +369,12 @@ Deno.serve(async (req) => {
         pondData: permittedObject(user, "ponds", pondRow.data?.data || {}),
         pondUpdatedAt: hasPermission(user, "ponds") ? (pondRow.data as { updated_at?: string } | null)?.updated_at ?? null : null,
         whatsappGroups: permittedRows(user, "deliveries", whatsappGroups.data || []),
-        teamNotifications: teamNotifications.data || [],
+        teamNotifications: (teamNotifications.data || []).filter((row: Record<string, unknown>) => {
+          if (user.role === "owner") return true;
+          const targets = row.target_user_ids as number[] | null | undefined;
+          if (!targets?.length) return true;
+          return targets.some((id) => Number(id) === Number(user.id));
+        }),
       });
     }
 
@@ -862,6 +868,7 @@ Deno.serve(async (req) => {
           customer_name: d.customerName, area: d.area ?? "",
           postal_code: d.postalCode ?? "", address: d.address, schedule: d.schedule, status: d.status ?? "scheduled",
           items: d.items ?? "", driver: d.driver ?? "", notes: d.notes ?? "", created_by: d.createdBy ?? "",
+          assigned_user_ids: Array.isArray(d.assignedUserIds) ? d.assignedUserIds : (d.assigned_user_ids ?? []),
         }, d)), "id", syncOpts);
       } else if (entity === "events") {
         const incoming = (data || []) as Record<string, unknown>[];
@@ -879,6 +886,7 @@ Deno.serve(async (req) => {
           id: e.id, title: e.title, date: e.date, time: e.time ?? "09:00", type: e.type ?? "other",
           note: e.note ?? "", created_by: e.createdBy ?? "",
           pond_reminder_id: e.pondReminderId ?? e.pond_reminder_id ?? "",
+          assigned_user_ids: Array.isArray(e.assignedUserIds) ? e.assignedUserIds : (e.assigned_user_ids ?? []),
         }, e)), "id", syncOpts);
       } else if (entity === "stock_activity") {
         const incoming = (data || []) as Record<string, unknown>[];
@@ -1271,6 +1279,11 @@ Deno.serve(async (req) => {
       const notificationType = String(body.type || "info").trim().slice(0, 20);
       if (!title) return J({ error: "title required" }, 400);
 
+      const rawTargets = body.targetUserIds ?? body.target_user_ids;
+      const targetUserIds = Array.isArray(rawTargets)
+        ? [...new Set(rawTargets.map((id: unknown) => Number(id)).filter((id: number) => Number.isFinite(id) && id > 0))]
+        : [];
+
       const { error: feedError } = await db.from("team_notifications").insert({
         title,
         message: pushBody || title,
@@ -1280,16 +1293,15 @@ Deno.serve(async (req) => {
         notification_type: notificationType,
         url,
         tag,
+        target_user_ids: targetUserIds.length ? targetUserIds : null,
       });
       if (feedError) throw feedError;
 
       if (!isPushConfigured()) return J({ ok: true, skipped: true, sent: 0, removed: 0 });
-      const stats = await sendPushToAllFarmUsers(db, {
-        title,
-        body: pushBody || title,
-        url,
-        tag,
-      }, { excludeUserId: user.id });
+      const payload = { title, body: pushBody || title, url, tag };
+      const stats = targetUserIds.length
+        ? await sendPushToUserIds(db, targetUserIds, payload, { excludeUserId: user.id })
+        : await sendPushToAllFarmUsers(db, payload, { excludeUserId: user.id });
       return J({ ok: true, ...stats });
     }
 

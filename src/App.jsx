@@ -123,7 +123,9 @@ import { logSyncEvent } from "./lib/syncAnalytics";
 import ConnectionStatus from "./components/ConnectionStatus";
 import PushNotificationPrompt from "./components/PushNotificationPrompt";
 import { mergeIncomingTeamNotifications } from "./lib/teamNotifications";
+import { notifyAssignedStaff } from "./lib/teamAssignNotify";
 import { ensurePushSubscription } from "./lib/webPush";
+import StaffAssignPicker, { AssigneeBadges } from "./components/StaffAssignPicker";
 
 function BookedBadge({ booked, bookedBy }) {
   if (booked) {
@@ -3401,11 +3403,11 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
 // ─────────────────────────────────────────────
 function DeliveryModule({
   deliveries, setDeliveries, customers, invoices, whatsappGroups, setWhatsappGroups,
-  addNotification, currentUser, cloudMode,
+  addNotification, currentUser, cloudMode, users = [],
 }) {
   const emptyDeliveryForm = () => ({
     invoiceId: "", customerId: "", customerName: "", postalCode: "", address: "",
-    schedule: "", items: "", driver: "", notes: "", status: "scheduled",
+    schedule: "", items: "", driver: "", notes: "", status: "scheduled", assignedUserIds: [],
   });
   const deliveryToForm = (d) => ({
     invoiceId: d.invoiceId || "",
@@ -3418,6 +3420,7 @@ function DeliveryModule({
     driver: d.driver || "",
     notes: d.notes || "",
     status: d.status || "scheduled",
+    assignedUserIds: d.assignedUserIds || [],
   });
   const [showAdd, setShowAdd] = useState(false);
   const [editDeliveryId, setEditDeliveryId] = useState(null);
@@ -3538,7 +3541,7 @@ function DeliveryModule({
         closeDeliveryForm();
         return;
       }
-      const built = buildUpdatedDeliveryRecord(form, existing, { customers, invoices, deliveries });
+      const built = buildUpdatedDeliveryRecord(form, existing, { customers, invoices, deliveries, users });
       if (!built.ok) {
         addNotification({ type: "error", title: "Cannot Save Delivery", message: built.message });
         return;
@@ -3547,9 +3550,19 @@ function DeliveryModule({
         sameDeliveryId(d.id, editDeliveryId) ? built.delivery : d
       )));
       addNotification({ type: "success", title: "Delivery Updated", message: `${editDeliveryId} saved.` });
+      if (built.delivery.assignedUserIds?.length) {
+        notifyAssignedStaff({
+          assignedUserIds: built.delivery.assignedUserIds,
+          title: "Delivery Assigned",
+          message: `${built.delivery.id} → ${built.delivery.customerName}`,
+          url: "/?tab=deliveries",
+          actor: currentUser?.name,
+          actorRole: currentUser?.role,
+        });
+      }
     } else {
       const built = buildNewDeliveryRecord(form, {
-        customers, invoices, createdBy: currentUser?.name || "Staff",
+        customers, invoices, createdBy: currentUser?.name || "Staff", users,
       });
       if (!built.ok) {
         addNotification({ type: "error", title: "Cannot Schedule Delivery", message: built.message });
@@ -3557,11 +3570,24 @@ function DeliveryModule({
       }
       const d = built.delivery;
       setDeliveries((prev) => [...prev, d]);
-      addNotification({
-        type: "info",
-        title: "Delivery Scheduled",
-        message: d.invoiceId ? `${d.id} linked to ${d.invoiceId} → ${d.customerName}` : `${d.id} → ${d.customerName}`,
-      });
+      const scheduleMsg = d.invoiceId ? `${d.id} linked to ${d.invoiceId} → ${d.customerName}` : `${d.id} → ${d.customerName}`;
+      if (d.assignedUserIds?.length) {
+        addNotification({ type: "success", title: "Delivery Scheduled", message: scheduleMsg });
+        notifyAssignedStaff({
+          assignedUserIds: d.assignedUserIds,
+          title: "Delivery Assigned",
+          message: scheduleMsg,
+          url: "/?tab=deliveries",
+          actor: currentUser?.name,
+          actorRole: currentUser?.role,
+        });
+      } else {
+        addNotification({
+          type: "info",
+          title: "Delivery Scheduled",
+          message: scheduleMsg,
+        });
+      }
     }
     closeDeliveryForm();
   };
@@ -3863,6 +3889,7 @@ function DeliveryModule({
                     {d.driver && <span>Driver: {d.driver}</span>}
                   </div>
                   {d.notes && <p className="text-slate-500 text-xs mt-1 italic">{d.notes}</p>}
+                  <AssigneeBadges users={users} assignedUserIds={d.assignedUserIds} className="mt-1" />
                   {d.createdBy && <p className="text-slate-600 text-[10px] mt-1">Scheduled by {d.createdBy}</p>}
                 </div>
                 <div className="flex flex-col gap-2">
@@ -3968,7 +3995,13 @@ function DeliveryModule({
               ]}
             />
           )}
-          <Input label="Driver Name" value={form.driver} onChange={e => setForm(f => ({ ...f, driver: e.target.value }))} />
+          <StaffAssignPicker
+            className="sm:col-span-2"
+            users={users}
+            value={form.assignedUserIds}
+            onChange={(assignedUserIds) => setForm((f) => ({ ...f, assignedUserIds }))}
+            excludeUserId={currentUser?.id}
+          />
           <Textarea label="Items" value={form.items} onChange={e => setForm(f => ({ ...f, items: e.target.value }))} placeholder="e.g. 1x Super Red Arowana, 2x Koi Pellets" className="sm:col-span-2" rows={2} />
           <Textarea label="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="sm:col-span-2" rows={2} />
         </div>
@@ -4095,7 +4128,7 @@ function DeliveryModule({
 // ─────────────────────────────────────────────
 // CALENDAR MODULE
 // ─────────────────────────────────────────────
-function CalendarEventCard({ e, canEdit, canDelete, onEdit, onDelete, onNavigateToPonds }) {
+function CalendarEventCard({ e, users, canEdit, canDelete, onEdit, onDelete, onNavigateToPonds }) {
   const isPondLinked = Boolean(e.pondReminderId);
   return (
     <div className={`p-3 rounded-xl border ${eventTypeColor[e.type] || eventTypeColor.other} flex items-start justify-between gap-3`}>
@@ -4110,6 +4143,7 @@ function CalendarEventCard({ e, canEdit, canDelete, onEdit, onDelete, onNavigate
         <p className="font-bold text-sm">{e.time && `${e.time} · `}{e.title}</p>
         <p className="text-xs opacity-70">{e.date}{e.type ? ` · ${e.type}` : ""}</p>
         {e.note && <p className="text-xs mt-1 opacity-60">{e.note}</p>}
+        <AssigneeBadges users={users} assignedUserIds={e.assignedUserIds} className="mt-1" />
         {e.createdBy && <p className="text-[10px] mt-1 opacity-50">Added by {e.createdBy}</p>}
       </div>
       <div className="flex flex-col gap-1 shrink-0">
@@ -4138,14 +4172,15 @@ function CalendarEventCard({ e, canEdit, canDelete, onEdit, onDelete, onNavigate
   );
 }
 
-function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification, currentUser }) {
-  const emptyEventForm = () => ({ title: "", date: today(), time: "09:00", type: "other", note: "" });
+function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification, currentUser, users = [] }) {
+  const emptyEventForm = () => ({ title: "", date: today(), time: "09:00", type: "other", note: "", assignedUserIds: [] });
   const eventToForm = (e) => ({
     title: e.title || "",
     date: e.date || today(),
     time: e.time || "09:00",
     type: e.type || "other",
     note: e.note || "",
+    assignedUserIds: e.assignedUserIds || [],
   });
 
   const [showAdd, setShowAdd] = useState(false);
@@ -4209,6 +4244,16 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
         sameEventId(e.id, editEventId) ? built.event : e
       )));
       addNotification({ type: "success", title: "Event Updated", message: `"${built.event.title}" saved.` });
+      if (built.event.assignedUserIds?.length) {
+        notifyAssignedStaff({
+          assignedUserIds: built.event.assignedUserIds,
+          title: "Event Assigned",
+          message: `${built.event.title} · ${built.event.date} ${built.event.time || ""}`.trim(),
+          url: "/?tab=calendar",
+          actor: currentUser?.name,
+          actorRole: currentUser?.role,
+        });
+      }
     } else {
       const built = buildNewEventRecord(form, {
         createdBy: currentUser?.name || "Staff",
@@ -4219,7 +4264,20 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
         return;
       }
       setEvents((prev) => [...prev, built.event]);
-      addNotification({ type: "info", title: "Event Added", message: `${built.event.title} on ${built.event.date}` });
+      const eventMsg = `${built.event.title} on ${built.event.date}`;
+      if (built.event.assignedUserIds?.length) {
+        addNotification({ type: "success", title: "Event Added", message: eventMsg });
+        notifyAssignedStaff({
+          assignedUserIds: built.event.assignedUserIds,
+          title: "Event Assigned",
+          message: `${built.event.title} · ${built.event.date} ${built.event.time || ""}`.trim(),
+          url: "/?tab=calendar",
+          actor: currentUser?.name,
+          actorRole: currentUser?.role,
+        });
+      } else {
+        addNotification({ type: "info", title: "Event Added", message: eventMsg });
+      }
     }
     closeEventForm();
   };
@@ -4280,7 +4338,7 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
             <Card className="p-4 border-cyan-500/30 bg-cyan-500/5">
               <h3 className="text-sm font-bold text-cyan-400 mb-3 flex items-center gap-2"><Zap size={14} />Today</h3>
               <div className="space-y-2">{todayEvents.map((e) => (
-                <CalendarEventCard key={e.id} e={e} canEdit={canEdit} canDelete={canDelete} onEdit={openEditEvent} onDelete={requestDeleteEvent} onNavigateToPonds={onNavigateToPonds} />
+                <CalendarEventCard key={e.id} e={e} users={users} canEdit={canEdit} canDelete={canDelete} onEdit={openEditEvent} onDelete={requestDeleteEvent} onNavigateToPonds={onNavigateToPonds} />
               ))}</div>
             </Card>
           )}
@@ -4289,7 +4347,7 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
             <Card className="p-4">
               <h3 className="text-sm font-bold text-white mb-3">Upcoming</h3>
               <div className="space-y-2">{upcoming.map((e) => (
-                <CalendarEventCard key={e.id} e={e} canEdit={canEdit} canDelete={canDelete} onEdit={openEditEvent} onDelete={requestDeleteEvent} onNavigateToPonds={onNavigateToPonds} />
+                <CalendarEventCard key={e.id} e={e} users={users} canEdit={canEdit} canDelete={canDelete} onEdit={openEditEvent} onDelete={requestDeleteEvent} onNavigateToPonds={onNavigateToPonds} />
               ))}</div>
             </Card>
           )}
@@ -4309,7 +4367,7 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
                 )}
               </div>
               <div className="space-y-2 opacity-50">{visiblePast.map((e) => (
-                <CalendarEventCard key={e.id} e={e} canEdit={canEdit} canDelete={canDelete} onEdit={openEditEvent} onDelete={requestDeleteEvent} onNavigateToPonds={onNavigateToPonds} />
+                <CalendarEventCard key={e.id} e={e} users={users} canEdit={canEdit} canDelete={canDelete} onEdit={openEditEvent} onDelete={requestDeleteEvent} onNavigateToPonds={onNavigateToPonds} />
               ))}</div>
             </Card>
           )}
@@ -4330,6 +4388,12 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
           </div>
           <Select label="Type" value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))} options={EVENT_TYPE_OPTIONS} />
           <Textarea label="Note" value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} rows={2} />
+          <StaffAssignPicker
+            users={users}
+            value={form.assignedUserIds}
+            onChange={(assignedUserIds) => setForm((f) => ({ ...f, assignedUserIds }))}
+            excludeUserId={currentUser?.id}
+          />
         </div>
         <div className="modal-actions">
           {isEditing && canDelete && (
@@ -5661,8 +5725,9 @@ export default function App() {
           actor: teamActor,
           actorRole: n.actorRole || currentUser?.role || "staff",
           type: n.type || "info",
-          url: teamPushUrl(n.title),
+          url: n.url || teamPushUrl(n.title),
           tag: `team-${String(n.title).replace(/\s+/g, "-").toLowerCase()}`,
+          targetUserIds: n.targetUserIds,
         }).catch(() => {});
       }
       return;
@@ -5705,6 +5770,7 @@ export default function App() {
     setNotifications((prev) => {
       const { list, added, latest } = mergeIncomingTeamNotifications(prev, remoteRows, {
         currentUserId: currentUser?.id,
+        isOwner: currentUser?.role === "owner",
       });
       if (added > 0 && typeof document !== "undefined" && document.visibilityState === "hidden" && latest) {
         db.notifySelfPush({
@@ -6957,12 +7023,12 @@ export default function App() {
       case "inventory": return guard("inventory", "Inventory", <InventoryModule products={products} setProducts={setProducts} stockLog={stockLog} setStockLog={setStockLog} invoices={invoices} addNotification={addNotification} currentUser={currentUser} />);
       case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} />);
-      case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondDataWithRef} addNotification={addNotification} currentUser={currentUser} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} onPersistPondData={syncPondDataNow} onSyncReminderCalendar={syncReminderCalendar} />);
+      case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondDataWithRef} addNotification={addNotification} currentUser={currentUser} users={users} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} onPersistPondData={syncPondDataNow} onSyncReminderCalendar={syncReminderCalendar} />);
       case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} openViewId={invoiceViewRequest?.id} onViewOpened={() => setInvoiceViewRequest(null)} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} />);
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} invoices={invoices} setInvoices={setInvoices} deliveries={deliveries} setDeliveries={setDeliveries} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpenses} addNotification={addNotification} currentUser={currentUser} />);
-      case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} />);
-      case "calendar": return guard("calendar", "Calendar", <CalendarModule events={events} setEvents={setEvents} onNavigateToPonds={() => goToTab("ponds")} addNotification={addNotification} currentUser={currentUser} />);
+      case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} users={users} />);
+      case "calendar": return guard("calendar", "Calendar", <CalendarModule events={events} setEvents={setEvents} onNavigateToPonds={() => goToTab("ponds")} addNotification={addNotification} currentUser={currentUser} users={users} />);
       case "chat": return guard("chat", "AI Chat", <ChatModule aiContext={aiContext} messages={chatMessages} setMessages={setChatMessages} isMobile={isMobile} />);
       case "users": return <ErrorBoundary><TeamModule users={users} setUsers={setUsers} currentUser={currentUser} addNotification={addNotification} onCurrentUserUpdate={handleUserUpdate} cloudMode={isSupabaseConfigured && cloudSync} apiEnabled={isSupabaseConfigured} onOpenChangePin={() => setShowChangePin(true)} getBackupData={getBackupData} /></ErrorBoundary>;
       default: return null;

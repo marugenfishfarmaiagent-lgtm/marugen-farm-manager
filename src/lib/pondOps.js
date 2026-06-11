@@ -1,4 +1,5 @@
 import { POND_TYPES, MAINTENANCE_TYPES, today } from '../data/constants'
+import { normalizeAssignedUserIds } from './assignTeam'
 import { touchPondData, touchUpdatedAt } from './syncMeta'
 
 const POND_TYPE_VALUES = new Set(POND_TYPES.map((t) => t.value))
@@ -159,15 +160,17 @@ export function isDoneReminder(reminder) {
 /** Keep status and completedAt consistent after cloud merge or local edits. */
 export function normalizeReminderRecord(reminder) {
   if (!reminder) return reminder
+  const assignedUserIds = normalizeAssignedUserIds(reminder.assignedUserIds)
   const status = normalizeReminderStatus(reminder.status)
   if (status === 'pending') {
-    const next = { ...reminder, status: 'pending' }
+    const next = { ...reminder, status: 'pending', assignedUserIds }
     delete next.completedAt
     return next
   }
   return {
     ...reminder,
     status: 'done',
+    assignedUserIds,
     completedAt: reminder.completedAt || today(),
   }
 }

@@ -1,4 +1,5 @@
 import { today } from '../data/constants'
+import { normalizeAssignedUserIds } from './assignTeam'
 import { touchUpdatedAt } from './syncMeta'
 
 export const EVENT_TYPE_OPTIONS = [
@@ -41,6 +42,7 @@ export function normalizeEventRecord(event) {
     type,
     note: String(event.note || '').slice(0, NOTE_MAX),
     createdBy: event.createdBy || '',
+    assignedUserIds: normalizeAssignedUserIds(event.assignedUserIds ?? event.assigned_user_ids),
     ...(pondReminderId ? { pondReminderId } : {}),
   }
 }
@@ -97,6 +99,7 @@ export function buildNewEventRecord(fields, { createdBy, existingEvents = [] } =
       type: check.type,
       note: check.note,
       createdBy: createdBy || 'Staff',
+      assignedUserIds: normalizeAssignedUserIds(fields.assignedUserIds),
     })),
   }
 }
@@ -121,6 +124,9 @@ export function buildUpdatedEventRecord(fields, existing) {
       type: check.type,
       note: check.note,
       createdBy: existing.createdBy || fields.createdBy || 'Staff',
+      assignedUserIds: normalizeAssignedUserIds(
+        fields.assignedUserIds ?? existing.assignedUserIds,
+      ),
     })),
   }
 }

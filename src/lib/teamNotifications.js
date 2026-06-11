@@ -1,3 +1,5 @@
+import { isTeamNotificationForUser } from './assignTeam'
+
 const STORAGE_KEY = 'marugen_last_team_notif_id'
 
 export function getLastTeamNotifId() {
@@ -41,7 +43,14 @@ export function mapCloudTeamNotification(row) {
     time: formatTeamNotifTime(row.created_at),
     read: false,
     team: true,
+    targetUserIds: normalizeTargetUserIds(row.target_user_ids ?? row.targetUserIds),
   }
+}
+
+function normalizeTargetUserIds(value) {
+  if (!Array.isArray(value) || !value.length) return null
+  const ids = value.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+  return ids.length ? ids : null
 }
 
 function isDuplicateTeamAlert(prev, row) {
@@ -56,7 +65,7 @@ function isDuplicateTeamAlert(prev, row) {
 /**
  * Merge new rows from cloud fetch into the local bell panel (deduped, skips actor's own rows).
  */
-export function mergeIncomingTeamNotifications(prev, remoteRows, { currentUserId } = {}) {
+export function mergeIncomingTeamNotifications(prev, remoteRows, { currentUserId, isOwner = false } = {}) {
   const lastId = getLastTeamNotifId()
   const existingCloudIds = new Set(
     prev.filter((n) => n.cloudId != null).map((n) => Number(n.cloudId)),
@@ -68,6 +77,7 @@ export function mergeIncomingTeamNotifications(prev, remoteRows, { currentUserId
       if (!Number.isFinite(id) || id <= lastId) return false
       if (existingCloudIds.has(id)) return false
       if (currentUserId != null && Number(row.actor_user_id) === Number(currentUserId)) return false
+      if (!isTeamNotificationForUser(row, { currentUserId, isOwner })) return false
       return true
     })
     .map(mapCloudTeamNotification)
