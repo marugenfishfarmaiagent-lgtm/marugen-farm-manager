@@ -4918,31 +4918,52 @@ function loadChatHistory() {
 // ─────────────────────────────────────────────
 // AI CHAT AGENT
 // ─────────────────────────────────────────────
-function AiUsageBar({ usage }) {
+function AiUsageBar({ usage, compact = false }) {
   if (!usage) return null;
   const tokens = usage.tokens ?? 0;
   const pct = Math.min(100, (tokens / usage.limit) * 100);
   const warn = tokens >= AI_WARN_AT_TOKENS;
   const over = tokens > usage.limit;
+  const statClass = over ? "text-amber-400" : warn ? "text-yellow-400" : "text-slate-400";
+  const barClass = over ? "bg-amber-500" : warn ? "bg-yellow-500" : "bg-cyan-500";
+  if (compact) {
+    return (
+      <div className="min-w-0">
+        <div className="flex justify-between gap-2 text-[10px] mb-0.5">
+          <span className="text-slate-500 truncate">AI tokens today</span>
+          <span className={`font-bold shrink-0 ${statClass}`}>
+            {formatTokens(tokens)}/{formatTokens(usage.limit)}
+          </span>
+        </div>
+        <div className="h-1 bg-slate-800 rounded-full overflow-hidden">
+          <div className={`h-full rounded-full transition-all ${barClass}`} style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="mb-3">
       <div className="flex justify-between text-xs mb-1">
         <span className="text-slate-500">Daily free AI tokens</span>
-        <span className={`font-bold ${over ? "text-amber-400" : warn ? "text-yellow-400" : "text-slate-400"}`}>
+        <span className={`font-bold ${statClass}`}>
           {formatTokens(tokens)}/{formatTokens(usage.limit)}{usage.remaining > 0 ? ` · ${formatTokens(usage.remaining)} left` : over ? " · over limit" : ""}
         </span>
       </div>
       <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all ${over ? "bg-amber-500" : warn ? "bg-yellow-500" : "bg-cyan-500"}`}
-          style={{ width: `${pct}%` }}
-        />
+        <div className={`h-full rounded-full transition-all ${barClass}`} style={{ width: `${pct}%` }} />
       </div>
     </div>
   );
 }
 
-function ChatModule({ aiContext, messages, setMessages }) {
+const CHAT_QUICK_PROMPTS = [
+  { label: "Unpaid invoices", text: "Who hasn't paid yet?" },
+  { label: "Koi in stock", text: "Show koi in stock" },
+  { label: "Identify koi", text: "What variety is this koi?" },
+  { label: "Read receipt", text: "Read this receipt" },
+];
+
+function ChatModule({ aiContext, messages, setMessages, isMobile = false }) {
   const aiContextRef = useRef(aiContext);
   const [input, setInput] = useState("");
   const [pendingImages, setPendingImages] = useState([]);
@@ -5189,23 +5210,39 @@ function ChatModule({ aiContext, messages, setMessages }) {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100dvh-12rem)] sm:h-[calc(100vh-180px)] min-h-[320px]">
-      <div className="mb-3 sm:mb-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h2 className="text-xl sm:text-2xl font-black text-white">AI Assistant</h2>
-            <p className="text-slate-400 text-sm">Powered by Gemini · photos supported · {formatTokens(AI_DAILY_FREE_TOKENS)} free tokens/day</p>
+    <div className={`flex flex-col min-h-0 ${isMobile ? "flex-1 h-full" : "h-[calc(100dvh-12rem)] sm:h-[calc(100vh-180px)] min-h-[320px]"}`}>
+      <div className={isMobile ? "px-3 pt-2 pb-1 shrink-0" : "mb-3 sm:mb-4"}>
+        {isMobile ? (
+          <div className="flex items-center gap-2">
+            <div className="flex-1 min-w-0">
+              <AiUsageBar usage={usage} compact />
+            </div>
+            <button
+              type="button"
+              onClick={() => setClearConfirmOpen(true)}
+              className="shrink-0 p-2.5 rounded-xl border border-slate-700 bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 touch-manipulation"
+              aria-label="Clear chat"
+            >
+              <Trash2 size={16} />
+            </button>
           </div>
-          <Btn variant="secondary" size="sm" onClick={() => setClearConfirmOpen(true)} className="w-full sm:w-auto justify-center shrink-0">
-            <Trash2 size={14} />Clear chat
-          </Btn>
-        </div>
+        ) : (
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="text-xl sm:text-2xl font-black text-white">AI Assistant</h2>
+              <p className="text-slate-400 text-sm">Powered by Gemini · photos supported · {formatTokens(AI_DAILY_FREE_TOKENS)} free tokens/day</p>
+            </div>
+            <Btn variant="secondary" size="sm" onClick={() => setClearConfirmOpen(true)} className="w-full sm:w-auto justify-center shrink-0">
+              <Trash2 size={14} />Clear chat
+            </Btn>
+          </div>
+        )}
         {!isSupabaseConfigured && (
-          <Card className="mt-3 p-3 border-amber-500/30 bg-amber-500/10 text-amber-200 text-xs">
+          <Card className={`${isMobile ? "mx-3 mt-2" : "mt-3"} p-3 border-amber-500/30 bg-amber-500/10 text-amber-200 text-xs`}>
             AI Chat requires Supabase. Configure VITE_SUPABASE_URL and deploy the gemini-chat edge function.
           </Card>
         )}
-        <AiUsageBar usage={usage} />
+        {!isMobile && <AiUsageBar usage={usage} />}
       </div>
 
       <Modal open={confirmOpen} onClose={handleConfirmDecline} title="Continue AI Usage?" size="sm">
@@ -5247,14 +5284,14 @@ function ChatModule({ aiContext, messages, setMessages }) {
         </div>
       </Modal>
 
-      <Card className="flex-1 overflow-hidden flex flex-col min-h-0">
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <Card className={`flex-1 overflow-hidden flex flex-col min-h-0 ${isMobile ? "rounded-none border-x-0 border-b-0" : ""}`}>
+        <div className={`flex-1 overflow-y-auto overscroll-contain space-y-4 ${isMobile ? "p-3" : "p-4"}`}>
           {messages.map((m, i) => (
             <div key={`${m.role}-${i}-${(m.content || "").slice(0, 24)}-${m.hadImages ? "img" : ""}`} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
               {m.role === "assistant" && (
-                <AppLogo size="sm" className="mr-2 mt-1 ring-1 ring-slate-600" />
+                <AppLogo size="sm" className={`mt-1 ring-1 ring-slate-600 shrink-0 ${isMobile ? "mr-1.5 w-7 h-7" : "mr-2"}`} />
               )}
-              <div className={`max-w-[85%] px-4 py-3 rounded-2xl text-sm whitespace-pre-wrap leading-relaxed ${m.role === "user" ? "bg-cyan-500 text-slate-900 font-medium rounded-br-sm" : "bg-slate-700 text-slate-100 rounded-bl-sm"}`}>
+              <div className={`${isMobile ? "max-w-[92%]" : "max-w-[85%]"} px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-2xl text-sm whitespace-pre-wrap leading-relaxed ${m.role === "user" ? "bg-cyan-500 text-slate-900 font-medium rounded-br-sm" : "bg-slate-700 text-slate-100 rounded-bl-sm"}`}>
                 {m.images?.length > 0 && (
                   <div className={`flex flex-wrap gap-2 ${m.content ? "mb-2" : ""}`}>
                     {m.images.map((src, j) => (
@@ -5289,17 +5326,17 @@ function ChatModule({ aiContext, messages, setMessages }) {
           <div ref={endRef} />
         </div>
 
-        <div className="border-t border-slate-700 p-4">
-          <div className="flex gap-3 flex-wrap mb-2">
-            {["Who hasn't paid yet?", "Show koi in stock", "What variety is this koi?", "Read this receipt"].map(q => (
+        <div className={`border-t border-slate-700 shrink-0 ${isMobile ? "p-3" : "p-4"}`}>
+          <div className="-mx-1 px-1 flex gap-2 overflow-x-auto scrollbar-hide flex-nowrap pb-2 mb-1">
+            {CHAT_QUICK_PROMPTS.map(({ label, text }) => (
               <button
-                key={q}
+                key={text}
                 type="button"
                 disabled={loading}
-                onClick={() => setInput(q)}
-                className="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-full transition-colors disabled:opacity-40"
+                onClick={() => setInput(text)}
+                className="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-full transition-colors disabled:opacity-40 shrink-0 touch-manipulation"
               >
-                {q}
+                {label}
               </button>
             ))}
           </div>
@@ -5344,25 +5381,27 @@ function ChatModule({ aiContext, messages, setMessages }) {
             className="hidden"
             onChange={(e) => handleChatImagePick(e.target.files?.[0])}
           />
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-end">
             <Btn
               variant="secondary"
               onClick={() => chatAlbumRef.current?.click()}
               disabled={loading || imageUploading || pendingImages.length >= MAX_CHAT_IMAGES}
-              className="px-3 py-3 shrink-0"
+              className={`shrink-0 touch-manipulation ${isMobile ? "px-3 py-2.5 min-h-[44px]" : "px-3 py-3"}`}
               title="Attach photo"
             >
               <ImagePlus size={16} />
             </Btn>
-            <Btn
-              variant="secondary"
-              onClick={() => chatCameraRef.current?.click()}
-              disabled={loading || imageUploading || pendingImages.length >= MAX_CHAT_IMAGES}
-              className="px-3 py-3 shrink-0 sm:hidden"
-              title="Take photo"
-            >
-              <ScanLine size={16} />
-            </Btn>
+            {!isMobile && (
+              <Btn
+                variant="secondary"
+                onClick={() => chatCameraRef.current?.click()}
+                disabled={loading || imageUploading || pendingImages.length >= MAX_CHAT_IMAGES}
+                className="px-3 py-3 shrink-0"
+                title="Take photo"
+              >
+                <ScanLine size={16} />
+              </Btn>
+            )}
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -5372,14 +5411,14 @@ function ChatModule({ aiContext, messages, setMessages }) {
                   sendMessage();
                 }
               }}
-              placeholder={pendingImages.length ? "Add a question about the photo…" : "Ask a question or attach a photo…"}
+              placeholder={pendingImages.length ? "Ask about the photo…" : isMobile ? "Ask or attach photo…" : "Ask a question or attach a photo…"}
               disabled={loading || imageUploading}
-              className="flex-1 min-w-0 bg-slate-900/50 border border-slate-600 rounded-xl px-4 py-3 text-white text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/50 disabled:opacity-60"
+              className={`flex-1 min-w-0 bg-slate-900/50 border border-slate-600 rounded-xl px-3.5 text-white focus:outline-none focus:ring-2 focus:ring-cyan-500/50 disabled:opacity-60 ${isMobile ? "py-2.5 min-h-[44px] text-base" : "px-4 py-3 text-sm"}`}
             />
             <Btn
               onClick={sendMessage}
               disabled={loading || imageUploading || (!input.trim() && !pendingImages.length) || !isSupabaseConfigured}
-              className="px-4 py-3 min-w-[48px] justify-center shrink-0"
+              className={`justify-center shrink-0 touch-manipulation ${isMobile ? "px-3.5 py-2.5 min-h-[44px] min-w-[44px]" : "px-4 py-3 min-w-[48px]"}`}
             >
               <Send size={16} />
             </Btn>
@@ -6841,7 +6880,7 @@ export default function App() {
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpenses} addNotification={addNotification} currentUser={currentUser} />);
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} />);
       case "calendar": return guard("calendar", "Calendar", <CalendarModule events={events} setEvents={setEvents} onNavigateToPonds={() => goToTab("ponds")} addNotification={addNotification} currentUser={currentUser} />);
-      case "chat": return guard("chat", "AI Chat", <ChatModule aiContext={aiContext} messages={chatMessages} setMessages={setChatMessages} />);
+      case "chat": return guard("chat", "AI Chat", <ChatModule aiContext={aiContext} messages={chatMessages} setMessages={setChatMessages} isMobile={isMobile} />);
       case "users": return <ErrorBoundary><TeamModule users={users} setUsers={setUsers} currentUser={currentUser} addNotification={addNotification} onCurrentUserUpdate={handleUserUpdate} cloudMode={isSupabaseConfigured && cloudSync} apiEnabled={isSupabaseConfigured} onOpenChangePin={() => setShowChangePin(true)} getBackupData={getBackupData} /></ErrorBoundary>;
       default: return null;
     }
@@ -7015,7 +7054,11 @@ export default function App() {
           />
         )}
 
-        <main className={`flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6 ${isMobile ? "pb-[calc(4.5rem+env(safe-area-inset-bottom))]" : ""}`}>
+        <main className={`flex-1 min-h-0 ${
+          isMobile && effectiveTab === "chat"
+            ? "flex flex-col overflow-hidden p-0 pb-[calc(3.75rem+env(safe-area-inset-bottom))]"
+            : `overflow-y-auto overflow-x-hidden p-4 sm:p-6 ${isMobile ? "pb-[calc(4.5rem+env(safe-area-inset-bottom))]" : ""}`
+        }`}>
           {cloudPulling ? <ModuleSkeleton tab={effectiveTab} /> : renderModule()}
         </main>
       </div>
