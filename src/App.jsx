@@ -1373,8 +1373,8 @@ function InvoiceModule({
   addNotification, currentUser, openDraft, onDraftApplied, openViewId, onViewOpened,
   onMarkInvoicePaid, onCancelInvoiceCloud, onCreateInvoiceCloud, onInventorySideEffect,
 }) {
-  const emptyItem = () => ({ name: "", qty: 1, price: "", productId: "", manual: true });
-  const buildFormFromDraft = (draft) => ({
+  const emptyItem = useCallback(() => ({ name: "", qty: 1, price: "", productId: "", manual: true }), []);
+  const buildFormFromDraft = useCallback((draft) => ({
     customerId: draft.customerId || "",
     customerName: draft.customerName || "",
     manualCustomer: !!draft.manualCustomer,
@@ -1383,11 +1383,11 @@ function InvoiceModule({
     due: draft.due || today(),
     discountType: draft.discountType || "none",
     discountValue: draft.discountValue || "",
-  });
-  const emptyForm = () => ({
+  }), [emptyItem]);
+  const emptyForm = useCallback(() => ({
     customerId: "", customerName: "", manualCustomer: false, items: [emptyItem()], notes: "", due: today(),
     discountType: "none", discountValue: "",
-  });
+  }), [emptyItem]);
 
   const [showNew, setShowNew] = useState(!!openDraft);
   const [viewInv, setViewInv] = useState(null);
@@ -1415,7 +1415,7 @@ function InvoiceModule({
       setFormError("");
       onDraftApplied?.();
     });
-  }, [openDraft, onDraftApplied]);
+  }, [openDraft, onDraftApplied, buildFormFromDraft]);
 
   useEffect(() => {
     if (!openViewId) return;
@@ -5787,7 +5787,7 @@ export default function App() {
     if (isSupabaseConfigured) {
       cacheWriteAllData(data).catch(() => {});
     }
-  }, [addNotification, touchLastSync, enrichCalendarEvents, mergeCloudTeamNotifications]);
+  }, [addNotification, touchLastSync, enrichCalendarEvents, mergeCloudTeamNotifications, setEventsWithRef, setPondDataWithRef]);
 
   const resetCloudBusinessState = useCallback(() => {
     setCustomers(INITIAL_CUSTOMERS);
@@ -5803,7 +5803,7 @@ export default function App() {
     setWhatsappGroups([]);
     clearAllDeletions();
     setCloudHydrated(false);
-  }, []);
+  }, [setPondDataWithRef]);
 
   useEffect(() => {
     if (!isSupabaseConfigured) return;
@@ -6025,7 +6025,7 @@ export default function App() {
 
     pondSyncChainRef.current = pondSyncChainRef.current.then(runPondSync, runPondSync);
     return pondSyncChainRef.current;
-  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
+  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth, setPondDataWithRef]);
 
   const syncEventsNow = useCallback(async (eventsOverride) => {
     if (!isSupabaseConfigured) return;
@@ -6143,7 +6143,7 @@ export default function App() {
     } finally {
       syncInFlightRef.current -= 1;
     }
-  }, [currentUser, handleSyncFailure, touchLastSync]);
+  }, [currentUser, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
   const cancelInvoiceCloud = useCallback(async (inv) => {
     const invId = String(inv.id);
@@ -6242,7 +6242,7 @@ export default function App() {
     }
   }, [
     currentUser, products, customers, koiFishList, handleSyncFailure, touchLastSync, ensureCloudSyncReady,
-    setProducts, setStockLog, setKoiFishList, setCustomerKoiList, setDeliveries, addNotification,
+    setProducts, setStockLog, setKoiFishList, setCustomerKoiList, setDeliveries, addNotification, resetSyncHealth,
   ]);
 
   const createInvoiceCloud = useCallback(async (inv) => {
@@ -6294,7 +6294,7 @@ export default function App() {
     } finally {
       syncInFlightRef.current -= 1;
     }
-  }, [currentUser, handleSyncFailure, touchLastSync, ensureCloudSyncReady]);
+  }, [currentUser, handleSyncFailure, touchLastSync, ensureCloudSyncReady, resetSyncHealth]);
 
   const requestInventorySideEffect = useCallback(() => {
     inventorySyncPendingRef.current = true;
@@ -6370,7 +6370,7 @@ export default function App() {
         syncInFlightRef.current -= 1;
       }
     })();
-  }, [products, stockLog, dataReady, cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync]);
+  }, [products, stockLog, dataReady, cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
   const retryCloudSync = useCallback(async () => {
     if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser || !cloudHydrated) return;
