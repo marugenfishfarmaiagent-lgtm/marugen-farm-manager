@@ -66,6 +66,13 @@ export function normalizeTargetUserIds(value) {
   return ids.length ? ids : null
 }
 
+/** Bell panel rows visible to the signed-in user (owner sees all). */
+export function filterNotificationsForUser(notifications, { currentUserId, isOwner = false } = {}) {
+  return (notifications || []).filter((row) => (
+    isTeamNotificationForUser(row, { currentUserId, isOwner })
+  ))
+}
+
 export function isTeamNotificationForUser(row, { currentUserId, isOwner = false } = {}) {
   if (isOwner) return true
   const raw = row?.target_user_ids ?? row?.targetUserIds

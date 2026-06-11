@@ -124,6 +124,7 @@ import ConnectionStatus from "./components/ConnectionStatus";
 import PushNotificationPrompt from "./components/PushNotificationPrompt";
 import { mergeIncomingTeamNotifications } from "./lib/teamNotifications";
 import { notifyAssignmentChange } from "./lib/teamAssignNotify";
+import { filterNotificationsForUser } from "./lib/assignTeam";
 import { ensurePushSubscription } from "./lib/webPush";
 import StaffAssignPicker, { AssigneeBadges } from "./components/StaffAssignPicker";
 
@@ -6781,7 +6782,14 @@ export default function App() {
     });
   }, [currentUser, addNotification]);
 
-  const unreadCount = notifications.filter(n => !n.read).length;
+  const visibleNotifications = useMemo(
+    () => filterNotificationsForUser(notifications, {
+      currentUserId: currentUser?.id,
+      isOwner: currentUser?.role === "owner",
+    }),
+    [notifications, currentUser],
+  );
+  const unreadCount = visibleNotifications.filter((n) => !n.read).length;
 
   const handleOpenInvoiceFromDashboard = useCallback((invoiceId) => {
     if (!invoiceId) return;
@@ -7182,7 +7190,7 @@ export default function App() {
                     <button onClick={() => setNotifOpen(false)} className="text-slate-400 hover:text-white p-2 touch-manipulation"><X size={14} /></button>
                   </div>
                   <NotificationPanel
-                    notifications={notifications}
+                    notifications={visibleNotifications}
                     onDismiss={id => setNotifications(prev => prev.filter(n => n.id !== id))}
                     onClear={() => setNotifications([])}
                     onMarkRead={id => setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n))}

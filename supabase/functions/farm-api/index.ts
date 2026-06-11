@@ -922,9 +922,7 @@ Deno.serve(async (req) => {
           customer_name: d.customerName, area: d.area ?? "",
           postal_code: d.postalCode ?? "", address: d.address, schedule: d.schedule, status: d.status ?? "scheduled",
           items: d.items ?? "", driver: d.driver ?? "", notes: d.notes ?? "", created_by: d.createdBy ?? "",
-          assigned_user_ids: normalizeAssignedUserIds(
-            Array.isArray(d.assignedUserIds) ? d.assignedUserIds : d.assigned_user_ids,
-          ),
+          assigned_user_ids: normalizeAssignedUserIds(d.assignedUserIds ?? d.assigned_user_ids),
         }, d)), "id", syncOpts);
       } else if (entity === "events") {
         const incoming = (data || []) as Record<string, unknown>[];
@@ -942,9 +940,7 @@ Deno.serve(async (req) => {
           id: e.id, title: e.title, date: e.date, time: e.time ?? "09:00", type: e.type ?? "other",
           note: e.note ?? "", created_by: e.createdBy ?? "",
           pond_reminder_id: e.pondReminderId ?? e.pond_reminder_id ?? "",
-          assigned_user_ids: normalizeAssignedUserIds(
-            Array.isArray(e.assignedUserIds) ? e.assignedUserIds : e.assigned_user_ids,
-          ),
+          assigned_user_ids: normalizeAssignedUserIds(e.assignedUserIds ?? e.assigned_user_ids),
         }, e)), "id", syncOpts);
       } else if (entity === "stock_activity") {
         const incoming = (data || []) as Record<string, unknown>[];

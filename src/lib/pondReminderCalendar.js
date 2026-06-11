@@ -1,5 +1,5 @@
 import { MAINTENANCE_TYPES } from '../data/constants'
-import { normalizeAssignedUserIds } from './assignTeam'
+import { normalizeAssignedUserIds, sameAssignedTeam } from './assignTeam'
 import { buildNewEventRecord, sortEventsBySchedule } from './calendarOps'
 import { isPendingReminder, normalizeReminderStatus } from './pondOps'
 import { touchUpdatedAt } from './syncMeta'
@@ -104,20 +104,20 @@ export function upsertCalendarEventForReminder(events, reminder, createdBy) {
   const fields = reminderToCalendarEventFields(reminder)
   const existing = (events || []).find((e) => sameReminderLink(e.pondReminderId, reminder.id))
   if (existing) {
-    if (reminderFieldsMatchEvent(reminder, existing)) return events || []
-    const next = (events || []).map((e) => (
+    const nextAssignees = normalizeAssignedUserIds(reminder.assignedUserIds ?? existing.assignedUserIds)
+    const fieldsMatch = reminderFieldsMatchEvent(reminder, existing)
+    const assigneesMatch = sameAssignedTeam(nextAssignees, existing.assignedUserIds)
+    if (fieldsMatch && assigneesMatch) return events || []
+    return (events || []).map((e) => (
       sameReminderLink(e.pondReminderId, reminder.id)
         ? touchUpdatedAt({
           ...e,
-          ...fields,
+          ...(fieldsMatch ? {} : fields),
           pondReminderId: reminder.id,
-          assignedUserIds: normalizeAssignedUserIds(
-            reminder.assignedUserIds ?? e.assignedUserIds,
-          ),
+          assignedUserIds: nextAssignees,
         })
         : e
     ))
-    return next
   }
   const built = buildNewEventRecord({
     ...fields,
@@ -149,7 +149,6 @@ export function backfillCalendarEventsForReminders(events, reminders, { createdB
   next = withoutStale
 
   for (const reminder of pending) {
-    if (next.some((e) => sameReminderLink(e.pondReminderId, reminder.id))) continue
     const updated = upsertCalendarEventForReminder(next, reminder, createdBy)
     if (updated !== next) {
       next = updated
