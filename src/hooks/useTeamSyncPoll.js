@@ -6,7 +6,10 @@ import { TEAM_SYNC_POLL_INTERVAL_MS } from '../lib/teamSyncDetect'
  */
 export function useTeamSyncPoll({ enabled, onPoll, intervalMs = TEAM_SYNC_POLL_INTERVAL_MS }) {
   const onPollRef = useRef(onPoll)
-  onPollRef.current = onPoll
+
+  useEffect(() => {
+    onPollRef.current = onPoll
+  })
 
   useEffect(() => {
     if (!enabled) return undefined

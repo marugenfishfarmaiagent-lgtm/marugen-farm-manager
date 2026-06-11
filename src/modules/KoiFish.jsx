@@ -474,7 +474,7 @@ export default function KoiFish({
   }
 
   const customerName = (id) => customers.find((c) => String(c.id) === String(id))?.name || '—'
-  const fabHidden = showAdd || !!editKoi || !!viewKoi || !!sellKoi || !!shipKoi || !!deathKoi || !!refundKoi
+  const fabHidden = !canEdit || showAdd || !!editKoi || !!viewKoi || !!sellKoi || !!shipKoi || !!deathKoi || !!refundKoi
 
   return (
     <div className="space-y-4 pb-20 lg:pb-12">

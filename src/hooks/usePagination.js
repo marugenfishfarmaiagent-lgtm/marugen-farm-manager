@@ -1,20 +1,22 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { LIST_PAGE_SIZE } from '../data/constants'
 
 export function usePagination(items, pageSize = LIST_PAGE_SIZE, resetKey = '') {
-  const [page, setPage] = useState(0)
+  const [pageState, setPageState] = useState({ key: resetKey, page: 0 })
 
-  useEffect(() => {
-    setPage(0)
+  const page = pageState.key === resetKey ? pageState.page : 0
+
+  const setPage = useCallback((updater) => {
+    setPageState((prev) => {
+      const current = prev.key === resetKey ? prev.page : 0
+      const nextPage = typeof updater === 'function' ? updater(current) : updater
+      return { key: resetKey, page: nextPage }
+    })
   }, [resetKey])
 
   const totalItems = items?.length ?? 0
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize) || 1)
   const safePage = Math.min(page, totalPages - 1)
-
-  useEffect(() => {
-    if (page > totalPages - 1) setPage(Math.max(0, totalPages - 1))
-  }, [page, totalPages])
 
   const paginatedItems = useMemo(
     () => (items || []).slice(safePage * pageSize, (safePage + 1) * pageSize),

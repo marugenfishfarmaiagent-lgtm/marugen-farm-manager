@@ -17,11 +17,11 @@ export default function StoredImage({
   ...rest
 }) {
   const retriedRef = useRef(false)
-  const [resolvedSrc, setResolvedSrc] = useState(src)
+  const [refreshState, setRefreshState] = useState({ src, url: null })
+  const resolvedSrc = refreshState.src === src && refreshState.url ? refreshState.url : src
 
   useEffect(() => {
     retriedRef.current = false
-    setResolvedSrc(src)
   }, [src])
 
   useEffect(() => {
@@ -32,7 +32,7 @@ export default function StoredImage({
     db.refreshSignedImage({ entity, id: recordId, field })
       .then((result) => {
         if (cancelled || !result?.url) return
-        setResolvedSrc(result.url)
+        setRefreshState({ src, url: result.url })
         onRefresh?.({ entity, id: recordId, field, url: result.url })
       })
       .catch(() => {})
@@ -62,7 +62,7 @@ export default function StoredImage({
         const result = await db.refreshSignedImage({ entity, id: recordId, field })
         const freshUrl = result?.url
         if (freshUrl) {
-          setResolvedSrc(freshUrl)
+          setRefreshState({ src, url: freshUrl })
           e.target.src = freshUrl
           onRefresh?.({ entity, id: recordId, field, url: freshUrl })
           return

@@ -1,5 +1,5 @@
 import {
-  calcCustomerTier, customerDeliveryFields, EXPENSE_CATEGORIES, formatSGD, genId, genInvoiceId,
+  calcCustomerTier, customerDeliveryFields, EXPENSE_CATEGORIES, formatSGD, genInvoiceId,
   getInvoiceStatus, today, KOI_STATUS, formatKoiSize, PRODUCT_CATEGORIES,
 } from '../data/constants'
 import { calcInvoiceAmounts } from './invoiceDesign'

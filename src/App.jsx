@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import { format } from "date-fns";
-import { Users, Fish, FishSymbol, Contact, Droplets, FileText, TrendingUp, Truck, Calendar, MessageSquare, Bell, LogOut, Plus, Search, X, Check, AlertTriangle, Home, Menu, DollarSign, Boxes, Eye, Send, Phone, MapPin, Navigation, Star, Zap, Clock, CheckCircle, XCircle, Info, Archive, ShoppingBag, Shield, UserCog, UserPlus, Edit2, Trash2, Lock, Printer, BookCheck, ImagePlus, Images, Camera, ScanLine, RefreshCw, Download, Loader2 } from "lucide-react";
+import { Users, Fish, FishSymbol, Contact, Droplets, FileText, TrendingUp, Truck, Calendar, MessageSquare, Bell, LogOut, Plus, Search, X, Check, AlertTriangle, Home, Menu, Boxes, Eye, Send, Phone, MapPin, Navigation, Star, Zap, Clock, CheckCircle, XCircle, Info, Archive, ShoppingBag, Shield, UserCog, UserPlus, Edit2, Trash2, Lock, Printer, BookCheck, ImagePlus, Images, Camera, ScanLine, RefreshCw, Download, Loader2 } from "lucide-react";
 import KoiFish from "./modules/KoiFish";
 import CustomerKoi from "./modules/CustomerKoi";
 import PondManagement from "./modules/PondManagement";
@@ -54,7 +54,7 @@ import {
 } from "./lib/chatOps";
 import {
   defaultPermissionsForRole, getUserDeactivateBlockReason, getUserDeleteBlockReason,
-  sameUserId, userInitial, validateUserFields, validateUserPin,
+  sameUserId, userInitial, validateUserFields,
 } from "./lib/teamOps";
 import {
   findLocalUserByPin, sanitizePinInput, validateChangePinForm,
@@ -100,7 +100,7 @@ import {
 } from "./lib/calendarOps";
 import {
   FISH_TYPES, PRODUCT_CATEGORIES, LIST_PAGE_SIZE,
-  CUSTOMER_TIERS, ALL_PERMISSIONS, DEFAULT_PERMISSIONS, SG_AREAS,
+  CUSTOMER_TIERS, ALL_PERMISSIONS,
   formatSGD, formatInvoiceDate, today, genId, genInvoiceId, getInvoiceStatus, calcCustomerTier, KOI_STATUS, CUSTOMER_KOI_STATUS,
   INITIAL_PRODUCTS, INITIAL_CUSTOMERS, INITIAL_INVOICES, INITIAL_EXPENSES,
   INITIAL_DELIVERIES, INITIAL_EVENTS, LOCAL_DEMO_USERS, customerDeliveryFields, invoiceDeliveryFields, makeBookedPatch,
@@ -1368,7 +1368,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
 // INVOICE MODULE
 // ─────────────────────────────────────────────
 function InvoiceModule({
-  invoices, setInvoices, setCustomers, setProducts, setStockLog, customers, products,
+  invoices, setInvoices, setProducts, setStockLog, customers, products,
   koiFishList, setKoiFishList, onKoiSold, setCustomerKoiList,
   addNotification, currentUser, openDraft, onDraftApplied, openViewId, onViewOpened,
   onMarkInvoicePaid, onCancelInvoiceCloud, onCreateInvoiceCloud, onInventorySideEffect,
@@ -1409,22 +1409,26 @@ function InvoiceModule({
 
   useEffect(() => {
     if (!openDraft) return;
-    setForm(buildFormFromDraft(openDraft));
-    setShowNew(true);
-    setFormError("");
-    onDraftApplied?.();
+    queueMicrotask(() => {
+      setForm(buildFormFromDraft(openDraft));
+      setShowNew(true);
+      setFormError("");
+      onDraftApplied?.();
+    });
   }, [openDraft, onDraftApplied]);
 
   useEffect(() => {
     if (!openViewId) return;
     const inv = invoices.find((i) => String(i.id) === String(openViewId));
-    if (inv) {
-      setViewInv(inv);
-      setHighlightInvId(inv.id);
-      setShowNew(false);
-      setFormError("");
-    }
-    onViewOpened?.();
+    queueMicrotask(() => {
+      if (inv) {
+        setViewInv(inv);
+        setHighlightInvId(inv.id);
+        setShowNew(false);
+        setFormError("");
+      }
+      onViewOpened?.();
+    });
   }, [openViewId, invoices, onViewOpened]);
 
   const filtered = useMemo(() => sortInvoices(invoices.filter((i) => {
@@ -2851,8 +2855,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
     }
   }, [viewExpenseId, viewExpense?.id, viewExpense?.imageUrl, viewExpense?.imageData, refreshReceiptUrl]);
 
-  if (!hasPermission(currentUser, "expenses")) return <AccessDenied moduleName="Expenses" />;
-
+  const hasExpenseAccess = hasPermission(currentUser, "expenses");
   const canDelete = canDeleteRecords(currentUser);
 
   const unbookedExpenseCount = expenses.filter((e) => !e.booked).length;
@@ -2884,6 +2887,8 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
     .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (Number(b.id) || 0) - (Number(a.id) || 0));
   const hiddenExpenseCount = expenses.filter((e) => !isAppVisibleExpense(e)).length;
   const expensePage = usePagination(visibleExpenses, LIST_PAGE_SIZE, `${bookedFilter}-${dateFrom}-${dateTo}-${showOlderExpenses}`);
+
+  if (!hasExpenseAccess) return <AccessDenied moduleName="Expenses" />;
 
   const resetUpload = () => {
     setUploadPreview(null);
@@ -3414,8 +3419,7 @@ function DeliveryModule({
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const deliveryAddressManual = useRef(false);
 
-  if (!hasPermission(currentUser, "deliveries")) return <AccessDenied moduleName="Deliveries" />;
-
+  const hasDeliveryAccess = hasPermission(currentUser, "deliveries");
   const canEdit = canEditRecords(currentUser);
   const canDelete = canDeleteRecords(currentUser);
 
@@ -3460,6 +3464,9 @@ function DeliveryModule({
       return a.localeCompare(b);
     });
   }, [deliveries, customers, todayStr]);
+
+  if (!hasDeliveryAccess) return <AccessDenied moduleName="Deliveries" />;
+
   const linkedInvoice = form.invoiceId ? invoices.find((i) => i.id === form.invoiceId) : null;
   const linkedInvoiceDoc = linkedInvoice ? enrichInvoiceCustomer(linkedInvoice, customers) : null;
   const linkableInvoices = [...invoices]
@@ -3861,7 +3868,7 @@ function DeliveryModule({
                       <Eye size={14} />
                     </Btn>
                   )}
-                  {(statusFlow[d.status] ?? []).map(next => (
+                  {canEdit && (statusFlow[d.status] ?? []).map(next => (
                     <Btn key={next} variant={next === "delivered" ? "success" : next === "cancelled" ? "danger" : "secondary"} size="sm"
                       onClick={() => updateStatus(d.id, next)}>
                       {next === "delivered" ? <Check size={12} /> : next === "transit" ? <Truck size={12} /> : <X size={12} />}
@@ -5466,7 +5473,12 @@ export default function App() {
     const session = auth.getSession();
     return session?.user ? auth.toAppUser(session.user) : null;
   });
-  const [activeTab, setActiveTab] = useState("dashboard");
+  const [activeTab, setActiveTab] = useState(() => {
+    if (typeof window === "undefined") return "dashboard";
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    if (tab && ALL_NAV_ITEMS.some((item) => item.id === tab)) return tab;
+    return "dashboard";
+  });
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== "undefined" && window.innerWidth >= 1024);
   const [notifOpen, setNotifOpen] = useState(false);
   const [showChangePin, setShowChangePin] = useState(false);
@@ -5487,7 +5499,7 @@ export default function App() {
   const syncWarnQueueRef = useRef([]);
   const syncWarnFlushTimerRef = useRef(null);
   const lastCloudPullAt = useRef(0);
-  const lastUserActivityAt = useRef(Date.now());
+  const lastUserActivityAt = useRef(0);
   const syncTimersRef = useRef({});
   const syncInFlightRef = useRef(0);
   const pondSyncChainRef = useRef(Promise.resolve());
@@ -6074,38 +6086,6 @@ export default function App() {
     if (!changed) return;
     await syncEventsNow(nextEvents);
   }, [currentUser, setEventsWithRef, syncEventsNow]);
-
-  const syncInvoicesNow = useCallback(async (invoicesOverride) => {
-    if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) {
-      throw new Error("Cloud sync is not ready.");
-    }
-    if (!hasPermission(currentUser, "invoices")) {
-      throw new Error("Permission denied (invoices).");
-    }
-    const timerKey = "invoices:Invoices";
-    if (syncTimersRef.current[timerKey]) {
-      clearTimeout(syncTimersRef.current[timerKey]);
-      delete syncTimersRef.current[timerKey];
-    }
-    if (!(await ensureCloudSyncReady())) {
-      throw new Error("Session needs refresh. Log out and log in again.");
-    }
-    const payload = invoicesOverride ?? syncStateRef.current.invoices;
-    if (invoicesOverride) {
-      syncStateRef.current = { ...syncStateRef.current, invoices: invoicesOverride };
-    }
-    syncInFlightRef.current += 1;
-    try {
-      await db.syncInvoices(payload);
-      resetSyncHealth();
-      touchLastSync();
-    } catch (err) {
-      handleSyncFailure(err);
-      throw err;
-    } finally {
-      syncInFlightRef.current -= 1;
-    }
-  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync]);
 
   const markInvoicePaidCloud = useCallback(async (inv, paidTotal) => {
     const invId = String(inv.id);
@@ -6780,7 +6760,8 @@ export default function App() {
         setCurrentUser(user);
         const allowed = ALL_NAV_ITEMS.filter((item) => hasPermission(user, item.id));
         setActiveTab(allowed[0]?.id || "dashboard");
-      } catch (err) {
+      } catch (loginErr) {
+        let cloudErr = loginErr;
         if (await auth.tryRefreshSession()) {
           try {
             const data = await db.fetchAllData();
@@ -6793,10 +6774,10 @@ export default function App() {
             setCloudHydrated(true);
             return;
           } catch (retryErr) {
-            err = retryErr;
+            cloudErr = retryErr;
           }
         }
-        if (auth.isSessionExpiredError(err?.message)) {
+        if (auth.isSessionExpiredError(cloudErr?.message)) {
           auth.clearSession();
           setCurrentUser(null);
           resetCloudBusinessState();
@@ -6804,11 +6785,11 @@ export default function App() {
           setCurrentUser(user);
         }
         setCloudSync(false);
-        setCloudError(err?.message || "Failed to load cloud data");
+        setCloudError(cloudErr?.message || "Failed to load cloud data");
         addNotification({
           type: "error",
-          title: auth.isSessionExpiredError(err?.message) ? "Session expired" : "Could not load farm data",
-          message: err?.message || "Please try again. Your connection may be unstable.",
+          title: auth.isSessionExpiredError(cloudErr?.message) ? "Session expired" : "Could not load farm data",
+          message: cloudErr?.message || "Please try again. Your connection may be unstable.",
         });
       }
       return;
@@ -6876,10 +6857,7 @@ export default function App() {
   }, [goToTab]);
 
   useEffect(() => {
-    const tab = new URLSearchParams(window.location.search).get("tab");
-    if (tab && ALL_NAV_ITEMS.some((item) => item.id === tab)) {
-      setActiveTab(tab);
-    }
+    lastUserActivityAt.current = Date.now();
   }, []);
 
   useEffect(() => {

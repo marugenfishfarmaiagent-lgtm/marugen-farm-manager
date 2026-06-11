@@ -161,8 +161,9 @@ export function normalizeReminderRecord(reminder) {
   if (!reminder) return reminder
   const status = normalizeReminderStatus(reminder.status)
   if (status === 'pending') {
-    const { completedAt, ...rest } = reminder
-    return { ...rest, status: 'pending' }
+    const next = { ...reminder, status: 'pending' }
+    delete next.completedAt
+    return next
   }
   return {
     ...reminder,

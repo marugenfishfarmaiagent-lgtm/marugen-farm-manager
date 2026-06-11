@@ -76,7 +76,7 @@ export function normalizeDeliveryRecord(delivery) {
  * @returns {{ ok: true, customerName: string, address: string, schedule: string, postalCode: string, status: string } | { ok: false, message: string }}
  */
 export function validateDeliveryFields(fields, {
-  customers = [], invoices = [], deliveries = [], editingId = null,
+  invoices = [], deliveries = [], editingId = null,
 } = {}) {
   const customerName = fields.customerName?.trim()
   if (!customerName) {

@@ -34,7 +34,7 @@ export default function PushNotificationPrompt({ addNotification }) {
   }, [])
 
   useEffect(() => {
-    refresh()
+    queueMicrotask(() => { void refresh() })
   }, [refresh])
 
   const handleEnable = async () => {

@@ -1,7 +1,7 @@
 /* Web Push handlers — loaded by the PWA service worker via workbox importScripts. */
 
 self.addEventListener('push', (event) => {
-  let payload = {}
+  let payload
   try {
     payload = event.data ? event.data.json() : {}
   } catch {
