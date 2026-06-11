@@ -34,6 +34,13 @@ import {
   type SessionUser,
   validateSession,
 } from "../_shared/supabase.ts";
+import {
+  getVapidPublicKey,
+  isPushConfigured,
+  sendPushToAllFarmUsers,
+  sendPushToSubscription,
+  sendPushToUserIds,
+} from "../_shared/webPush.ts";
 
 /** Postgres BIGINT columns reject ""; coerce empty/invalid values to null. */
 function nullableBigint(value: unknown): number | null {
@@ -1181,6 +1188,100 @@ Deno.serve(async (req) => {
         fetchWeekUsageByUser(),
       ]);
       return J({ today, week });
+    }
+
+    if (body.action === "get_push_config") {
+      return J({
+        enabled: isPushConfigured(),
+        publicKey: getVapidPublicKey(),
+      });
+    }
+
+    if (body.action === "register_push_subscription") {
+      const sub = body.subscription as Record<string, unknown> | undefined;
+      const endpoint = String(sub?.endpoint || "").trim();
+      const keys = sub?.keys as Record<string, unknown> | undefined;
+      const p256dh = String(keys?.p256dh || "").trim();
+      const authKey = String(keys?.auth || "").trim();
+      if (!endpoint || !p256dh || !authKey) {
+        return J({ error: "Valid push subscription required" }, 400);
+      }
+      if (!isPushConfigured()) {
+        return J({ error: "Push notifications are not configured on the server" }, 503);
+      }
+      const now = new Date().toISOString();
+      const { error } = await db.from("push_subscriptions").upsert({
+        user_id: user.id,
+        endpoint,
+        p256dh,
+        auth: authKey,
+        user_agent: String(req.headers.get("user-agent") || "").slice(0, 500),
+        updated_at: now,
+      }, { onConflict: "user_id,endpoint" });
+      if (error) throw error;
+      return J({ ok: true });
+    }
+
+    if (body.action === "unregister_push_subscription") {
+      const endpoint = String(body.endpoint || "").trim();
+      if (!endpoint) return J({ error: "endpoint required" }, 400);
+      await db.from("push_subscriptions").delete()
+        .eq("user_id", user.id)
+        .eq("endpoint", endpoint);
+      return J({ ok: true });
+    }
+
+    if (body.action === "send_push_test") {
+      if (!isPushConfigured()) {
+        return J({ error: "Push notifications are not configured on the server" }, 503);
+      }
+      const { data: rows, error } = await db.from("push_subscriptions")
+        .select("endpoint, p256dh, auth")
+        .eq("user_id", user.id)
+        .limit(1);
+      if (error) throw error;
+      const row = rows?.[0];
+      if (!row) return J({ error: "No push subscription for this device. Enable notifications first." }, 400);
+      const result = await sendPushToSubscription(row, {
+        title: "Marugen Farm",
+        body: "Phone notifications are working.",
+        url: "/?tab=dashboard",
+        tag: "push-test",
+      });
+      if (!result.ok) return J({ error: result.error }, 500);
+      return J({ ok: true });
+    }
+
+    if (body.action === "notify_team_push") {
+      const title = String(body.title || "").trim().slice(0, 120);
+      const pushBody = String(body.body || body.message || "").trim().slice(0, 500);
+      const url = String(body.url || "/?tab=dashboard").slice(0, 500);
+      const tag = String(body.tag || "team-activity").slice(0, 64);
+      if (!title) return J({ error: "title required" }, 400);
+      if (!isPushConfigured()) return J({ ok: true, skipped: true });
+      const stats = await sendPushToAllFarmUsers(db, {
+        title,
+        body: pushBody || title,
+        url,
+        tag,
+      }, { excludeUserId: user.id });
+      return J({ ok: true, ...stats });
+    }
+
+    if (body.action === "notify_self_push") {
+      const title = String(body.title || "").trim().slice(0, 120);
+      const pushBody = String(body.body || body.message || "").trim().slice(0, 500);
+      const url = String(body.url || "/?tab=dashboard").slice(0, 500);
+      const tag = String(body.tag || "self-alert").slice(0, 64);
+      if (!title) return J({ error: "title required" }, 400);
+      if (!isPushConfigured()) return J({ ok: true, skipped: true });
+      const stats = await sendPushToUserIds(db, [user.id], {
+        title,
+        body: pushBody || title,
+        url,
+        tag,
+      });
+      return J({ ok: true, ...stats });
     }
 
     return J({ error: "Unknown action" }, 400);

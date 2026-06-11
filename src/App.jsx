@@ -121,6 +121,7 @@ import { getConnectionState, onConnectionChange, isTransientSyncError } from "./
 import { cacheWriteAllData, cacheReadAllData } from "./lib/localCache";
 import { logSyncEvent } from "./lib/syncAnalytics";
 import ConnectionStatus from "./components/ConnectionStatus";
+import PushNotificationPrompt from "./components/PushNotificationPrompt";
 
 function BookedBadge({ booked, bookedBy }) {
   if (booked) {
@@ -5601,6 +5602,19 @@ export default function App() {
     syncWarnFlushTimerRef.current = setTimeout(() => flush(false), 400);
   }, [showProminentToast]);
 
+  const teamPushUrl = useCallback((title) => {
+    const t = String(title || "");
+    if (/invoice|payment|receipt/i.test(t)) return "/?tab=invoices";
+    if (/delivery/i.test(t)) return "/?tab=deliveries";
+    if (/pond|treatment|reminder|maintenance/i.test(t)) return "/?tab=ponds";
+    if (/koi|fish|sold|refund/i.test(t)) return "/?tab=koifish";
+    if (/customer/i.test(t)) return "/?tab=customers";
+    if (/expense/i.test(t)) return "/?tab=expenses";
+    if (/stock|inventory|product|restock/i.test(t)) return "/?tab=inventory";
+    if (/calendar|event/i.test(t)) return "/?tab=calendar";
+    return "/?tab=dashboard";
+  }, []);
+
   const addNotification = useCallback((n) => {
     if (isTeamNotification(n)) {
       const teamActor = n.actorRole === "system" ? n.actor || "System" : (n.actor || currentUser?.name || "Unknown");
@@ -5608,13 +5622,21 @@ export default function App() {
         buildTeamNotification({ ...n, actor: teamActor }, currentUser),
         ...prev,
       ].slice(0, 30));
+      if (isSupabaseConfigured && auth.hasCloudSession() && n.title) {
+        db.notifyTeamPush({
+          title: n.title,
+          message: n.message,
+          url: teamPushUrl(n.title),
+          tag: `team-${String(n.title).replace(/\s+/g, "-").toLowerCase()}`,
+        }).catch(() => {});
+      }
       return;
     }
     const toast = buildToastNotification(n);
     setToasts((prev) => [...prev, toast].slice(-4));
     const timer = setTimeout(() => dismissToast(toast.id), 4500);
     toastTimers.current.set(toast.id, timer);
-  }, [currentUser, dismissToast]);
+  }, [currentUser, dismissToast, teamPushUrl]);
 
   useEffect(() => {
     const list = isSupabaseConfigured
@@ -6800,13 +6822,38 @@ export default function App() {
     }
   };
 
-  const goToTab = (tabId) => {
+  const goToTab = useCallback((tabId) => {
     setActiveTab(tabId);
     if (isMobile) {
       setSidebarOpen(false);
       setNotifOpen(false);
     }
-  };
+  }, [isMobile]);
+
+  const goToTabRef = useRef(goToTab);
+  useEffect(() => {
+    goToTabRef.current = goToTab;
+  }, [goToTab]);
+
+  useEffect(() => {
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    if (tab && ALL_NAV_ITEMS.some((item) => item.id === tab)) {
+      setActiveTab(tab);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return undefined;
+    const onMessage = (event) => {
+      if (event.data?.type !== "push-navigate") return;
+      const tab = event.data.tab;
+      if (tab && ALL_NAV_ITEMS.some((item) => item.id === tab)) {
+        goToTabRef.current(tab);
+      }
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
+  }, []);
 
   const handleUserUpdate = (updatedFields) => {
     setCurrentUser((prev) => {
@@ -7052,6 +7099,10 @@ export default function App() {
             cacheCachedAt={cacheCachedAt}
             syncFailCount={syncFailCount}
           />
+        )}
+
+        {isSupabaseConfigured && currentUser && cloudHydrated && (
+          <PushNotificationPrompt addNotification={addNotification} />
         )}
 
         <main className={`flex-1 min-h-0 ${

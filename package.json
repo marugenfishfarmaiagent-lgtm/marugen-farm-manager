@@ -12,7 +12,8 @@
     "verify:migrations": "bash scripts/verify-migrations-order.sh",
     "verify:monitoring": "bash scripts/verify-monitoring.sh",
     "verify:smoke": "bash scripts/smoke-test-production.sh",
-    "verify:setup": "bash scripts/verify-migrations-order.sh && bash scripts/verify-monitoring.sh"
+    "verify:setup": "bash scripts/verify-migrations-order.sh && bash scripts/verify-monitoring.sh",
+    "generate:vapid": "bash scripts/generate-vapid-keys.sh"
   },
   "dependencies": {
     "@sentry/react": "^10.56.0",

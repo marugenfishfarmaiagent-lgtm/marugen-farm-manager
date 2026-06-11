@@ -549,4 +549,46 @@ export async function syncWhatsappGroups(groups, options) {
   await syncCall('whatsapp_groups', groups, options)
 }
 
+export async function getPushConfig() {
+  if (!isSupabaseConfigured) return { enabled: false, publicKey: null }
+  return apiCall({ action: 'get_push_config' })
+}
+
+export async function registerPushSubscription(subscription) {
+  if (!isSupabaseConfigured) return
+  return apiCall({ action: 'register_push_subscription', subscription })
+}
+
+export async function unregisterPushSubscription(endpoint) {
+  if (!isSupabaseConfigured) return
+  return apiCall({ action: 'unregister_push_subscription', endpoint })
+}
+
+export async function sendPushTest() {
+  if (!isSupabaseConfigured) return
+  return apiCall({ action: 'send_push_test' })
+}
+
+export async function notifyTeamPush({ title, body, message, url, tag }) {
+  if (!isSupabaseConfigured) return
+  return apiCall({
+    action: 'notify_team_push',
+    title,
+    body: body ?? message,
+    url,
+    tag,
+  })
+}
+
+export async function notifySelfPush({ title, body, message, url, tag }) {
+  if (!isSupabaseConfigured) return
+  return apiCall({
+    action: 'notify_self_push',
+    title,
+    body: body ?? message,
+    url,
+    tag,
+  })
+}
+
 export { isSupabaseConfigured }

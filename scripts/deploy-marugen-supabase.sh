@@ -28,6 +28,21 @@ elif [[ -f .env ]] && grep -q '^VITE_GEMINI_API_KEY=' .env; then
   supabase secrets set "GEMINI_API_KEY=$GEM" --project-ref "$PROJECT_REF"
 fi
 
+if [[ -f .env ]] && grep -q '^VAPID_PRIVATE_KEY=' .env && grep -q '^VAPID_PUBLIC_KEY=' .env; then
+  VAPID_PUB="$(grep '^VAPID_PUBLIC_KEY=' .env | cut -d= -f2-)"
+  VAPID_PRIV="$(grep '^VAPID_PRIVATE_KEY=' .env | cut -d= -f2-)"
+  VAPID_SUB="$(grep '^VAPID_SUBJECT=' .env | cut -d= -f2- || true)"
+  VAPID_SUB="${VAPID_SUB:-mailto:admin@marugenfarm.com}"
+  echo "→ Setting VAPID push notification secrets ..."
+  supabase secrets set \
+    "VAPID_PUBLIC_KEY=$VAPID_PUB" \
+    "VAPID_PRIVATE_KEY=$VAPID_PRIV" \
+    "VAPID_SUBJECT=$VAPID_SUB" \
+    --project-ref "$PROJECT_REF"
+else
+  echo "⚠ VAPID keys not in .env — phone push disabled until you run scripts/generate-vapid-keys.sh"
+fi
+
 echo ""
 echo "✓ Supabase deploy complete."
 echo ""
