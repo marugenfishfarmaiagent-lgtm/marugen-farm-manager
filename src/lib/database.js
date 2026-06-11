@@ -5,6 +5,7 @@ import { normalizeCustomerRecord } from './customerOps'
 import { normalizeExpenseRecord } from './expenseOps'
 import { normalizeDeliveryRecord } from './deliveryOps'
 import { normalizeEventRecord } from './calendarOps'
+import { normalizeAssignedUserIds } from './assignTeam'
 import { normalizeUserRecord } from './teamOps'
 import { emptyPondData } from './cloudData'
 import { normalizeCustomerKoiPhotoForSync, normalizeImageFieldForSync, storagePaths } from './farmImage'
@@ -179,7 +180,7 @@ function mapDelivery(row) {
     driver: row.driver ?? '',
     notes: row.notes ?? '',
     createdBy: row.created_by ?? row.createdBy ?? '',
-    assignedUserIds: row.assigned_user_ids ?? row.assignedUserIds ?? [],
+    assignedUserIds: normalizeAssignedUserIds(row.assigned_user_ids ?? row.assignedUserIds),
   }))
 }
 
@@ -193,7 +194,7 @@ function mapEvent(row) {
     note: row.note ?? '',
     createdBy: row.created_by ?? row.createdBy ?? '',
     pondReminderId: row.pond_reminder_id ?? row.pondReminderId ?? '',
-    assignedUserIds: row.assigned_user_ids ?? row.assignedUserIds ?? [],
+    assignedUserIds: normalizeAssignedUserIds(row.assigned_user_ids ?? row.assignedUserIds),
   }))
 }
 

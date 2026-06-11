@@ -123,7 +123,7 @@ import { logSyncEvent } from "./lib/syncAnalytics";
 import ConnectionStatus from "./components/ConnectionStatus";
 import PushNotificationPrompt from "./components/PushNotificationPrompt";
 import { mergeIncomingTeamNotifications } from "./lib/teamNotifications";
-import { notifyAssignedStaff } from "./lib/teamAssignNotify";
+import { notifyAssignmentChange } from "./lib/teamAssignNotify";
 import { ensurePushSubscription } from "./lib/webPush";
 import StaffAssignPicker, { AssigneeBadges } from "./components/StaffAssignPicker";
 
@@ -3550,16 +3550,16 @@ function DeliveryModule({
         sameDeliveryId(d.id, editDeliveryId) ? built.delivery : d
       )));
       addNotification({ type: "success", title: "Delivery Updated", message: `${editDeliveryId} saved.` });
-      if (built.delivery.assignedUserIds?.length) {
-        notifyAssignedStaff({
-          assignedUserIds: built.delivery.assignedUserIds,
-          title: "Delivery Assigned",
-          message: `${built.delivery.id} → ${built.delivery.customerName}`,
-          url: "/?tab=deliveries",
-          actor: currentUser?.name,
-          actorRole: currentUser?.role,
-        });
-      }
+      notifyAssignmentChange({
+        isNew: false,
+        previousAssignedUserIds: existing.assignedUserIds,
+        nextAssignedUserIds: built.delivery.assignedUserIds,
+        title: "Delivery Assigned",
+        message: `${built.delivery.id} → ${built.delivery.customerName}`,
+        url: "/?tab=deliveries",
+        actor: currentUser?.name,
+        actorRole: currentUser?.role,
+      });
     } else {
       const built = buildNewDeliveryRecord(form, {
         customers, invoices, createdBy: currentUser?.name || "Staff", users,
@@ -3573,8 +3573,9 @@ function DeliveryModule({
       const scheduleMsg = d.invoiceId ? `${d.id} linked to ${d.invoiceId} → ${d.customerName}` : `${d.id} → ${d.customerName}`;
       if (d.assignedUserIds?.length) {
         addNotification({ type: "success", title: "Delivery Scheduled", message: scheduleMsg });
-        notifyAssignedStaff({
-          assignedUserIds: d.assignedUserIds,
+        notifyAssignmentChange({
+          isNew: true,
+          nextAssignedUserIds: d.assignedUserIds,
           title: "Delivery Assigned",
           message: scheduleMsg,
           url: "/?tab=deliveries",
@@ -4244,16 +4245,16 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
         sameEventId(e.id, editEventId) ? built.event : e
       )));
       addNotification({ type: "success", title: "Event Updated", message: `"${built.event.title}" saved.` });
-      if (built.event.assignedUserIds?.length) {
-        notifyAssignedStaff({
-          assignedUserIds: built.event.assignedUserIds,
-          title: "Event Assigned",
-          message: `${built.event.title} · ${built.event.date} ${built.event.time || ""}`.trim(),
-          url: "/?tab=calendar",
-          actor: currentUser?.name,
-          actorRole: currentUser?.role,
-        });
-      }
+      notifyAssignmentChange({
+        isNew: false,
+        previousAssignedUserIds: existing.assignedUserIds,
+        nextAssignedUserIds: built.event.assignedUserIds,
+        title: "Event Assigned",
+        message: `${built.event.title} · ${built.event.date} ${built.event.time || ""}`.trim(),
+        url: "/?tab=calendar",
+        actor: currentUser?.name,
+        actorRole: currentUser?.role,
+      });
     } else {
       const built = buildNewEventRecord(form, {
         createdBy: currentUser?.name || "Staff",
@@ -4267,8 +4268,9 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
       const eventMsg = `${built.event.title} on ${built.event.date}`;
       if (built.event.assignedUserIds?.length) {
         addNotification({ type: "success", title: "Event Added", message: eventMsg });
-        notifyAssignedStaff({
-          assignedUserIds: built.event.assignedUserIds,
+        notifyAssignmentChange({
+          isNew: true,
+          nextAssignedUserIds: built.event.assignedUserIds,
           title: "Event Assigned",
           message: `${built.event.title} · ${built.event.date} ${built.event.time || ""}`.trim(),
           url: "/?tab=calendar",

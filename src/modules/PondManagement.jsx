@@ -17,7 +17,7 @@ import {
   samePondId, validateMaintenanceForm, validatePondFields, validateReminderForm, validateTreatmentForm,
 } from '../lib/pondOps'
 import { reminderDisplayLines } from '../lib/pondReminderCalendar'
-import { notifyAssignedStaff } from '../lib/teamAssignNotify'
+import { notifyAssignmentChange } from '../lib/teamAssignNotify'
 import { touchPondData, touchUpdatedAt } from '../lib/syncMeta'
 import StaffAssignPicker, { AssigneeBadges } from '../components/StaffAssignPicker'
 
@@ -308,16 +308,15 @@ export default function PondManagement({
         title: 'Reminder Set',
         message: reminderMsg,
       })
-      if (newReminder.assignedUserIds?.length) {
-        notifyAssignedStaff({
-          assignedUserIds: newReminder.assignedUserIds,
-          title: 'Pond Task Assigned',
-          message: reminderMsg,
-          url: '/?tab=ponds',
-          actor: currentUser?.name,
-          actorRole: currentUser?.role,
-        })
-      }
+      notifyAssignmentChange({
+        isNew: true,
+        nextAssignedUserIds: newReminder.assignedUserIds,
+        title: 'Pond Task Assigned',
+        message: reminderMsg,
+        url: '/?tab=ponds',
+        actor: currentUser?.name,
+        actorRole: currentUser?.role,
+      })
     } catch {
       setPondData((prev) => touchPondData({
         ...prev,
