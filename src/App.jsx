@@ -437,6 +437,16 @@ function NotificationPanel({ notifications, onDismiss, onClear, onMarkRead }) {
   );
 }
 
+function AuthDeveloperFooter() {
+  return (
+    <footer className="pb-4 sm:pb-6 text-center shrink-0">
+      <p className="text-[10px] sm:text-xs text-slate-600 tracking-wide">
+        Developed by <span className="text-slate-500">Nyi Nyi Khine</span>
+      </p>
+    </footer>
+  );
+}
+
 function SetupScreen({ onComplete }) {
   const [name, setName] = useState("Marugen Owner");
   const [pin, setPin] = useState("");
@@ -464,21 +474,24 @@ function SetupScreen({ onComplete }) {
   };
 
   return (
-    <div className="min-h-screen min-h-[100dvh] bg-slate-900 flex items-center justify-center p-4 safe-bottom" style={{ background: "radial-gradient(ellipse at 50% 0%, rgba(6,182,212,0.15) 0%, transparent 60%), #0f172a" }}>
-      <div className="w-full max-w-sm">
-        <div className="text-center mb-6">
-          <AppLogo size="lg" className="mx-auto mb-4 shadow-2xl shadow-black/50 ring-2 ring-slate-700" />
-          <h1 className="text-xl sm:text-2xl font-black text-white">Welcome to Marugen Farm</h1>
-          <p className="text-slate-400 text-sm mt-1">Create your owner account to get started</p>
+    <div className="min-h-screen min-h-[100dvh] bg-slate-900 flex flex-col safe-bottom" style={{ background: "radial-gradient(ellipse at 50% 0%, rgba(6,182,212,0.15) 0%, transparent 60%), #0f172a" }}>
+      <div className="flex-1 flex items-center justify-center p-4">
+        <div className="w-full max-w-sm">
+          <div className="text-center mb-6">
+            <AppLogo size="lg" className="mx-auto mb-4 shadow-2xl shadow-black/50 ring-2 ring-slate-700" />
+            <h1 className="text-xl sm:text-2xl font-black text-white">Welcome to Marugen Farm</h1>
+            <p className="text-slate-400 text-sm mt-1">Create your owner account to get started</p>
+          </div>
+          <Card className="p-5 sm:p-6 space-y-4">
+            <Input label="Owner Name" value={name} onChange={e => setName(e.target.value)} required />
+            <Input label="Choose PIN (4–6 digits)" type="password" inputMode="numeric" value={pin} onChange={e => setPin(sanitizePinInput(e.target.value))} required />
+            <Input label="Confirm PIN" type="password" inputMode="numeric" value={confirmPin} onChange={e => setConfirmPin(sanitizePinInput(e.target.value))} required />
+            {error && <div className="bg-red-500/20 border border-red-500/30 rounded-lg p-3 text-red-300 text-sm flex items-center gap-2"><AlertTriangle size={14} />{error}</div>}
+            <Btn onClick={handleSetup} disabled={loading} className="w-full justify-center" size="lg">{loading ? "Setting up..." : "Create Account →"}</Btn>
+          </Card>
         </div>
-        <Card className="p-5 sm:p-6 space-y-4">
-          <Input label="Owner Name" value={name} onChange={e => setName(e.target.value)} required />
-          <Input label="Choose PIN (4–6 digits)" type="password" inputMode="numeric" value={pin} onChange={e => setPin(sanitizePinInput(e.target.value))} required />
-          <Input label="Confirm PIN" type="password" inputMode="numeric" value={confirmPin} onChange={e => setConfirmPin(sanitizePinInput(e.target.value))} required />
-          {error && <div className="bg-red-500/20 border border-red-500/30 rounded-lg p-3 text-red-300 text-sm flex items-center gap-2"><AlertTriangle size={14} />{error}</div>}
-          <Btn onClick={handleSetup} disabled={loading} className="w-full justify-center" size="lg">{loading ? "Setting up..." : "Create Account →"}</Btn>
-        </Card>
       </div>
+      <AuthDeveloperFooter />
     </div>
   );
 }
@@ -533,40 +546,43 @@ function LoginScreen({ onLogin, users, cloudMode }) {
   const activeUsers = users.filter((u) => u.active !== false);
 
   return (
-    <div className="min-h-screen min-h-[100dvh] bg-slate-900 flex items-center justify-center p-4 safe-bottom" style={{ background: "radial-gradient(ellipse at 50% 0%, rgba(6,182,212,0.15) 0%, transparent 60%), #0f172a" }}>
-      <div className="w-full max-w-sm">
-        <div className="text-center mb-6 sm:mb-8">
-          <AppLogo size="lg" className="mx-auto mb-4 shadow-2xl shadow-black/50 ring-2 ring-slate-700" />
-          <h1 className="text-xl sm:text-2xl font-black text-white">Marugen Koi Farm</h1>
-          <p className="text-cyan-400 text-sm font-medium mt-1">Koi & Arowana Singapore</p>
-        </div>
-        <Card className="p-5 sm:p-6">
-          <div className="mb-4">
-            <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wide flex items-center gap-1"><Lock size={12} /> PIN Login</label>
-            <input type="password" inputMode="numeric" value={pin} onChange={e => setPin(sanitizePinInput(e.target.value))} placeholder="••••"
-              onKeyDown={e => { if (e.key === "Enter" && !loading) { e.preventDefault(); handleLogin(); } }}
-              className="w-full bg-slate-900/50 border border-slate-600 rounded-xl px-3 py-4 text-white text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 touch-manipulation" />
-            <p className="text-xs text-slate-500 mt-2 text-center">Enter your assigned PIN to login</p>
+    <div className="min-h-screen min-h-[100dvh] bg-slate-900 flex flex-col safe-bottom" style={{ background: "radial-gradient(ellipse at 50% 0%, rgba(6,182,212,0.15) 0%, transparent 60%), #0f172a" }}>
+      <div className="flex-1 flex items-center justify-center p-4">
+        <div className="w-full max-w-sm">
+          <div className="text-center mb-6 sm:mb-8">
+            <AppLogo size="lg" className="mx-auto mb-4 shadow-2xl shadow-black/50 ring-2 ring-slate-700" />
+            <h1 className="text-xl sm:text-2xl font-black text-white">Marugen Koi Farm</h1>
+            <p className="text-cyan-400 text-sm font-medium mt-1">Koi & Arowana Singapore</p>
           </div>
-          {cloudMode ? (
-            <p className="text-xs text-slate-500 mt-2 text-center">Enter your team PIN to sign in.</p>
-          ) : activeUsers.length > 0 ? (
-            <div className="mb-4 p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
-              <p className="text-xs text-slate-500 mb-2 uppercase tracking-wide font-semibold">Registered Users</p>
-              <div className="space-y-1">
-                {activeUsers.map(u => (
-                  <div key={u.id} className="flex items-center justify-between text-xs">
-                    <span className="text-slate-300">{u.name}</span>
-                    <Badge className={u.role === "owner" ? "bg-yellow-500/20 text-yellow-300" : "bg-blue-500/20 text-blue-300"}>{u.role}</Badge>
-                  </div>
-                ))}
-              </div>
+          <Card className="p-5 sm:p-6">
+            <div className="mb-4">
+              <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wide flex items-center gap-1"><Lock size={12} /> PIN Login</label>
+              <input type="password" inputMode="numeric" value={pin} onChange={e => setPin(sanitizePinInput(e.target.value))} placeholder="••••"
+                onKeyDown={e => { if (e.key === "Enter" && !loading) { e.preventDefault(); handleLogin(); } }}
+                className="w-full bg-slate-900/50 border border-slate-600 rounded-xl px-3 py-4 text-white text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 touch-manipulation" />
+              <p className="text-xs text-slate-500 mt-2 text-center">Enter your assigned PIN to login</p>
             </div>
-          ) : null}
-          {error && <div className="bg-red-500/20 border border-red-500/30 rounded-lg p-3 mb-4 text-red-300 text-sm flex items-center gap-2"><AlertTriangle size={14} />{error}</div>}
-          <Btn onClick={handleLogin} disabled={loading} className="w-full justify-center" size="lg">{loading ? "Logging in..." : "Login →"}</Btn>
-        </Card>
+            {cloudMode ? (
+              <p className="text-xs text-slate-500 mt-2 text-center">Enter your team PIN to sign in.</p>
+            ) : activeUsers.length > 0 ? (
+              <div className="mb-4 p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
+                <p className="text-xs text-slate-500 mb-2 uppercase tracking-wide font-semibold">Registered Users</p>
+                <div className="space-y-1">
+                  {activeUsers.map(u => (
+                    <div key={u.id} className="flex items-center justify-between text-xs">
+                      <span className="text-slate-300">{u.name}</span>
+                      <Badge className={u.role === "owner" ? "bg-yellow-500/20 text-yellow-300" : "bg-blue-500/20 text-blue-300"}>{u.role}</Badge>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {error && <div className="bg-red-500/20 border border-red-500/30 rounded-lg p-3 mb-4 text-red-300 text-sm flex items-center gap-2"><AlertTriangle size={14} />{error}</div>}
+            <Btn onClick={handleLogin} disabled={loading} className="w-full justify-center" size="lg">{loading ? "Logging in..." : "Login →"}</Btn>
+          </Card>
+        </div>
       </div>
+      <AuthDeveloperFooter />
     </div>
   );
 }
