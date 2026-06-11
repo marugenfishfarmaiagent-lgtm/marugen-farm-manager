@@ -1,4 +1,4 @@
-import { isTeamNotificationForUser } from './assignTeam'
+import { isTeamNotificationForUser, normalizeTargetUserIds } from './assignTeam'
 
 const STORAGE_KEY = 'marugen_last_team_notif_id'
 
@@ -45,12 +45,6 @@ export function mapCloudTeamNotification(row) {
     team: true,
     targetUserIds: normalizeTargetUserIds(row.target_user_ids ?? row.targetUserIds),
   }
-}
-
-function normalizeTargetUserIds(value) {
-  if (!Array.isArray(value) || !value.length) return null
-  const ids = value.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
-  return ids.length ? ids : null
 }
 
 function isDuplicateTeamAlert(prev, row) {

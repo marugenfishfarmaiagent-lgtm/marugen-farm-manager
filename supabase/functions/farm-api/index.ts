@@ -219,10 +219,40 @@ async function upsertSync(
 }
 
 function normalizeAssignedUserIds(value: unknown): number[] {
-  if (!Array.isArray(value)) return [];
+  if (value == null || value === "") return [];
+
+  let raw: unknown = value;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    if (trimmed.startsWith("[")) {
+      try {
+        raw = JSON.parse(trimmed);
+      } catch {
+        return [];
+      }
+    } else if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+      const inner = trimmed.slice(1, -1).trim();
+      raw = inner ? inner.split(",").map((part) => part.trim()) : [];
+    } else {
+      const n = Number(trimmed);
+      return Number.isFinite(n) && n > 0 ? [n] : [];
+    }
+  }
+
+  if (!Array.isArray(raw)) return [];
   return [...new Set(
-    value.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0),
+    raw.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0),
   )];
+}
+
+function isTeamNotificationForUser(row: Record<string, unknown>, user: SessionUser): boolean {
+  if (user.role === "owner") return true;
+  const raw = row.target_user_ids;
+  if (raw == null) return true;
+  const targets = normalizeAssignedUserIds(raw);
+  if (!targets.length) return false;
+  return targets.includes(Number(user.id));
 }
 
 async function fetchTeamNotifications(
@@ -398,12 +428,7 @@ Deno.serve(async (req) => {
         pondData: permittedObject(user, "ponds", pondRow.data?.data || {}),
         pondUpdatedAt: hasPermission(user, "ponds") ? (pondRow.data as { updated_at?: string } | null)?.updated_at ?? null : null,
         whatsappGroups: permittedRows(user, "deliveries", whatsappGroups.data || []),
-        teamNotifications: teamNotificationsRows.filter((row: Record<string, unknown>) => {
-          if (user.role === "owner") return true;
-          const targets = row.target_user_ids as number[] | null | undefined;
-          if (!targets?.length) return true;
-          return targets.some((id) => Number(id) === Number(user.id));
-        }),
+        teamNotifications: teamNotificationsRows.filter((row) => isTeamNotificationForUser(row, user)),
       });
     }
 
@@ -1312,10 +1337,7 @@ Deno.serve(async (req) => {
       const notificationType = String(body.type || "info").trim().slice(0, 20);
       if (!title) return J({ error: "title required" }, 400);
 
-      const rawTargets = body.targetUserIds ?? body.target_user_ids;
-      const targetUserIds = Array.isArray(rawTargets)
-        ? [...new Set(rawTargets.map((id: unknown) => Number(id)).filter((id: number) => Number.isFinite(id) && id > 0))]
-        : [];
+      const targetUserIds = normalizeAssignedUserIds(body.targetUserIds ?? body.target_user_ids);
 
       const feedRow: Record<string, unknown> = {
         title,

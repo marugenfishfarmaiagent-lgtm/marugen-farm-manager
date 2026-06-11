@@ -59,11 +59,19 @@ export function formatAssignedStaffNames(users, assignedUserIds) {
     .join(', ')
 }
 
+/** Bell/push targeting list — null means broadcast (legacy rows). */
+export function normalizeTargetUserIds(value) {
+  if (value == null) return null
+  const ids = normalizeAssignedUserIds(value)
+  return ids.length ? ids : null
+}
+
 export function isTeamNotificationForUser(row, { currentUserId, isOwner = false } = {}) {
   if (isOwner) return true
-  const targets = row?.target_user_ids ?? row?.targetUserIds
-  if (!targets || !Array.isArray(targets) || targets.length === 0) return true
+  const raw = row?.target_user_ids ?? row?.targetUserIds
+  if (raw == null) return true
+  const targets = normalizeAssignedUserIds(raw)
+  if (!targets.length) return false
   if (currentUserId == null) return false
-  const uid = Number(currentUserId)
-  return targets.some((id) => Number(id) === uid)
+  return targets.includes(Number(currentUserId))
 }
