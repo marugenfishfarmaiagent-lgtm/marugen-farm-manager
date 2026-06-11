@@ -70,14 +70,14 @@ import {
 import { isSupabaseConfigured } from "./lib/supabase";
 import * as auth from "./lib/auth";
 import { markDeleted, clearAllDeletions, peekDeletions } from "./lib/syncDeletions";
-import { mergeRecords, mergePondData, mergeInvoices, mergeKoiFish, mergeCustomerKoi } from "./lib/cloudMerge";
+import { mergeRecords, mergePondData, mergeInvoices, mergeKoiFish, mergeCustomerKoi, resolveInvoiceConflict } from "./lib/cloudMerge";
 import {
   countIncomingTeamChanges,
   TEAM_SYNC_EVENT_THROTTLE_MS,
   TEAM_SYNC_POLL_THROTTLE_MS,
   TEAM_SYNC_USER_IDLE_MS,
 } from "./lib/teamSyncDetect";
-import { applyInvoicePins, pinInvoice, unpinInvoice } from "./lib/invoicePins";
+import { applyInvoicePins, pinInvoice, unpinInvoice, releaseInvoicePinAfterConfirm } from "./lib/invoicePins";
 import { touchPondData, touchUpdatedAt } from "./lib/syncMeta";
 import {
   applyCustomerPaidDelta, buildNewCustomerRecord, buildUpdatedCustomerRecord, getCustomerDeleteWarnings,
@@ -6101,6 +6101,7 @@ export default function App() {
       syncStateRef.current.invoices.map((i) => (String(i.id) === invId ? optimistic : i)),
     );
     syncStateRef.current = { ...syncStateRef.current, invoices: nextInvoices };
+    setInvoices(applyInvoicePins(nextInvoices));
 
     if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) {
       setCustomers((prev) => applyCustomerPaidDelta(prev, inv.customerId, paidTotal));
@@ -6110,13 +6111,15 @@ export default function App() {
     syncInFlightRef.current += 1;
     try {
       const { invoice: confirmed, customer: confirmedCustomer } = await db.markInvoicePaidCloud(invId);
-      unpinInvoice(invId);
       const confirmedRow = touchUpdatedAt(db.sanitizeInvoiceForSync(confirmed));
+      const localRow = syncStateRef.current.invoices.find((i) => String(i.id) === invId);
+      const mergedRow = localRow ? resolveInvoiceConflict(localRow, confirmedRow) : confirmedRow;
       const finalInvoices = sortInvoices(
-        syncStateRef.current.invoices.map((i) => (String(i.id) === invId ? confirmedRow : i)),
+        syncStateRef.current.invoices.map((i) => (String(i.id) === invId ? mergedRow : i)),
       );
       syncStateRef.current = { ...syncStateRef.current, invoices: finalInvoices };
-      setInvoices(finalInvoices);
+      releaseInvoicePinAfterConfirm(invId, confirmedRow);
+      setInvoices(applyInvoicePins(finalInvoices));
       if (confirmedCustomer) {
         setCustomers((prev) => prev.map((c) => (
           String(c.id) === String(confirmedCustomer.id) ? confirmedCustomer : c
@@ -6156,6 +6159,7 @@ export default function App() {
       syncStateRef.current.invoices.map((i) => (String(i.id) === invId ? optimistic : i)),
     );
     syncStateRef.current = { ...syncStateRef.current, invoices: nextInvoices };
+    setInvoices(applyInvoicePins(nextInvoices));
 
     const applyCancelSideEffects = () => {
       restoreStockForInvoice(setProducts, setStockLog, products, inv.items || [], {
@@ -6210,13 +6214,15 @@ export default function App() {
     syncInFlightRef.current += 1;
     try {
       const confirmed = await db.cancelInvoiceCloud(invId);
-      unpinInvoice(invId);
       const confirmedRow = touchUpdatedAt(db.sanitizeInvoiceForSync(confirmed));
+      const localRow = syncStateRef.current.invoices.find((i) => String(i.id) === invId);
+      const mergedRow = localRow ? resolveInvoiceConflict(localRow, confirmedRow) : confirmedRow;
       const finalInvoices = sortInvoices(
-        syncStateRef.current.invoices.map((i) => (String(i.id) === invId ? confirmedRow : i)),
+        syncStateRef.current.invoices.map((i) => (String(i.id) === invId ? mergedRow : i)),
       );
       syncStateRef.current = { ...syncStateRef.current, invoices: finalInvoices };
-      setInvoices(finalInvoices);
+      releaseInvoicePinAfterConfirm(invId, confirmedRow);
+      setInvoices(applyInvoicePins(finalInvoices));
       resetSyncHealth();
       touchLastSync();
     } catch (err) {
@@ -6263,13 +6269,15 @@ export default function App() {
     syncInFlightRef.current += 1;
     try {
       const confirmed = await db.upsertInvoiceCloud(optimistic);
-      unpinInvoice(invId);
       const confirmedRow = touchUpdatedAt(db.sanitizeInvoiceForSync(confirmed));
+      const localRow = syncStateRef.current.invoices.find((i) => String(i.id) === invId);
+      const mergedRow = localRow ? resolveInvoiceConflict(localRow, confirmedRow) : confirmedRow;
       const finalInvoices = sortInvoices(
-        syncStateRef.current.invoices.map((i) => (String(i.id) === invId ? confirmedRow : i)),
+        syncStateRef.current.invoices.map((i) => (String(i.id) === invId ? mergedRow : i)),
       );
       syncStateRef.current = { ...syncStateRef.current, invoices: finalInvoices };
-      setInvoices(finalInvoices);
+      releaseInvoicePinAfterConfirm(invId, confirmedRow);
+      setInvoices(applyInvoicePins(finalInvoices));
       resetSyncHealth();
       touchLastSync();
     } catch (err) {
@@ -6298,7 +6306,7 @@ export default function App() {
         if (!ready) {
           throw new Error("Session needs refresh. Log out and log in again.");
         }
-        const refKey = perm === "ponds" ? "pondData" : perm === "calendar" ? "events" : null;
+        const refKey = perm === "ponds" ? "pondData" : perm === "calendar" ? "events" : perm === "invoices" ? "invoices" : null;
         const payload = refKey ? (syncStateRef.current[refKey] ?? data) : data;
         await fn(payload);
       })()
