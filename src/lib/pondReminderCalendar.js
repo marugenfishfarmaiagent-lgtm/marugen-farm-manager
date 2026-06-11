@@ -1,7 +1,7 @@
 import { MAINTENANCE_TYPES } from '../data/constants'
 import { coalesceAssignedUserIds, normalizeAssignedUserIds, sameAssignedTeam } from './assignTeam'
 import { buildNewEventRecord, sortEventsBySchedule } from './calendarOps'
-import { isPendingReminder, normalizeReminderStatus } from './pondOps'
+import { isPendingReminder, normalizeReminderRecord, normalizeReminderStatus } from './pondOps'
 import { touchUpdatedAt } from './syncMeta'
 
 function recordTs(record) {
@@ -132,6 +132,36 @@ export function removeCalendarEventForReminder(events, reminderId) {
   const id = String(reminderId)
   const next = (events || []).filter((e) => !sameReminderLink(e.pondReminderId, id))
   return next.length === (events || []).length ? (events || []) : next
+}
+
+/** When calendar has assignees but pond reminder JSON is still empty, copy calendar → reminder. */
+export function reconcileReminderAssigneesWithCalendar(reminders, events) {
+  let changed = false
+  const next = (reminders || []).map((reminder) => {
+    if (!isPendingReminder(reminder)) return reminder
+    const linked = (events || []).find((e) => sameReminderLink(e.pondReminderId, reminder.id))
+    if (!linked) return reminder
+    const merged = coalesceAssignedUserIds(reminder.assignedUserIds, linked.assignedUserIds)
+    if (sameAssignedTeam(reminder.assignedUserIds, merged)) return reminder
+    changed = true
+    return touchUpdatedAt(normalizeReminderRecord({ ...reminder, assignedUserIds: merged }))
+  })
+  return { reminders: changed ? next : (reminders || []), changed }
+}
+
+/** Two-way assignee sync: pond reminders ↔ linked calendar events. */
+export function syncPondCalendarAssignees(events, reminders, options = {}) {
+  const { reminders: reconciled, changed: remindersChanged } = reconcileReminderAssigneesWithCalendar(
+    reminders,
+    events,
+  )
+  const nextEvents = backfillCalendarEventsForReminders(events, reconciled, options)
+  return {
+    events: nextEvents,
+    reminders: reconciled,
+    remindersChanged,
+    eventsChanged: nextEvents !== events,
+  }
 }
 
 /** Link pending pond reminders to calendar events; drop events for completed/deleted reminders. */

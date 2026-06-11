@@ -91,7 +91,7 @@ import {
   resolveDeliveryArea, sameDeliveryId,
 } from "./lib/deliveryOps";
 import {
-  backfillCalendarEventsForReminders, pendingRemindersSyncKey,
+  pendingRemindersSyncKey, syncPondCalendarAssignees,
   removeCalendarEventForReminder, upsertCalendarEventForReminder,
 } from "./lib/pondReminderCalendar";
 import {
@@ -124,7 +124,7 @@ import ConnectionStatus from "./components/ConnectionStatus";
 import PushNotificationPrompt from "./components/PushNotificationPrompt";
 import { mergeIncomingTeamNotifications } from "./lib/teamNotifications";
 import { notifyAssignmentChange } from "./lib/teamAssignNotify";
-import { filterNotificationsForUser, hasAssignedTeam, isTeamNotificationForUser } from "./lib/assignTeam";
+import { filterNotificationsForUser, hasAssignedTeam, isTeamNotificationForUser, normalizeAssignedUserIds } from "./lib/assignTeam";
 import { ensurePushSubscription } from "./lib/webPush";
 import StaffAssignPicker, { AssigneeBadges } from "./components/StaffAssignPicker";
 
@@ -3421,7 +3421,7 @@ function DeliveryModule({
     driver: d.driver || "",
     notes: d.notes || "",
     status: d.status || "scheduled",
-    assignedUserIds: d.assignedUserIds || [],
+    assignedUserIds: normalizeAssignedUserIds(d.assignedUserIds),
   });
   const [showAdd, setShowAdd] = useState(false);
   const [editDeliveryId, setEditDeliveryId] = useState(null);
@@ -3573,7 +3573,7 @@ function DeliveryModule({
       setDeliveries((prev) => [...prev, d]);
       const scheduleMsg = d.invoiceId ? `${d.id} linked to ${d.invoiceId} → ${d.customerName}` : `${d.id} → ${d.customerName}`;
       if (hasAssignedTeam(d.assignedUserIds)) {
-        addNotification({ type: "success", title: "Delivery Scheduled", message: scheduleMsg });
+        addNotification({ type: "success", title: "Delivery Scheduled", message: scheduleMsg, team: false });
         notifyAssignmentChange({
           isNew: true,
           nextAssignedUserIds: d.assignedUserIds,
@@ -4182,7 +4182,7 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
     time: e.time || "09:00",
     type: e.type || "other",
     note: e.note || "",
-    assignedUserIds: e.assignedUserIds || [],
+    assignedUserIds: normalizeAssignedUserIds(e.assignedUserIds),
   });
 
   const [showAdd, setShowAdd] = useState(false);
@@ -5765,10 +5765,10 @@ export default function App() {
     if (!user || !hasPermission(user, "calendar") || !hasPermission(user, "ponds")) {
       return eventsList || [];
     }
-    return backfillCalendarEventsForReminders(eventsList, reminders, {
+    return syncPondCalendarAssignees(eventsList, reminders, {
       createdBy: user.name || "Staff",
       pondsReady: true,
-    });
+    }).events;
   }, []);
 
   const mergeCloudTeamNotifications = useCallback((remoteRows) => {
@@ -6645,8 +6645,18 @@ export default function App() {
     if (!dataReady || !cloudHydrated) return;
     const user = currentUserRef.current;
     if (!user || !hasPermission(user, "calendar") || !hasPermission(user, "ponds")) return;
-    setEventsWithRef((prev) => enrichCalendarEvents(prev, pondData.reminders));
-  }, [dataReady, cloudHydrated, pendingRemindersKey, enrichCalendarEvents, pondData.reminders, setEventsWithRef]);
+    const prevEvents = syncStateRef.current.events || [];
+    const synced = syncPondCalendarAssignees(prevEvents, pondData.reminders, {
+      createdBy: user.name || "Staff",
+      pondsReady: true,
+    });
+    if (synced.remindersChanged) {
+      setPondDataWithRef((prev) => touchPondData({ ...prev, reminders: synced.reminders }));
+    }
+    if (synced.eventsChanged) {
+      setEventsWithRef(synced.events);
+    }
+  }, [dataReady, cloudHydrated, pendingRemindersKey, pondData.reminders, setEventsWithRef, setPondDataWithRef]);
 
   useEffect(() => syncDebounced("customers", "Customers", db.syncCustomers, customers), [customers, syncDebounced]);
   useEffect(() => syncDebounced("inventory", "Inventory", db.syncProducts, products), [products, syncDebounced]);
