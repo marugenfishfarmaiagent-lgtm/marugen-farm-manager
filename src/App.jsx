@@ -124,7 +124,13 @@ import ConnectionStatus from "./components/ConnectionStatus";
 import PushNotificationPrompt from "./components/PushNotificationPrompt";
 import { mergeIncomingTeamNotifications } from "./lib/teamNotifications";
 import { notifyAssignmentChange } from "./lib/teamAssignNotify";
-import { filterNotificationsForUser, hasAssignedTeam, isTeamNotificationForUser, normalizeAssignedUserIds } from "./lib/assignTeam";
+import {
+  filterNotificationsForUser,
+  hasAssignedTeam,
+  isTeamNotificationForUser,
+  newlyAssignedUserIds,
+  normalizeAssignedUserIds,
+} from "./lib/assignTeam";
 import { ensurePushSubscription } from "./lib/webPush";
 import StaffAssignPicker, { AssigneeBadges } from "./components/StaffAssignPicker";
 
@@ -3551,16 +3557,18 @@ function DeliveryModule({
         sameDeliveryId(d.id, editDeliveryId) ? built.delivery : d
       )));
       addNotification({ type: "success", title: "Delivery Updated", message: `${editDeliveryId} saved.` });
-      notifyAssignmentChange({
-        isNew: false,
-        previousAssignedUserIds: existing.assignedUserIds,
-        nextAssignedUserIds: built.delivery.assignedUserIds,
-        title: "Delivery Assigned",
-        message: `${built.delivery.id} → ${built.delivery.customerName}`,
-        url: "/?tab=deliveries",
-        actor: currentUser?.name,
-        actorRole: currentUser?.role,
-      });
+      if (newlyAssignedUserIds(existing.assignedUserIds, built.delivery.assignedUserIds).length) {
+        notifyAssignmentChange({
+          isNew: false,
+          previousAssignedUserIds: existing.assignedUserIds,
+          nextAssignedUserIds: built.delivery.assignedUserIds,
+          title: "Delivery Assigned",
+          message: `${built.delivery.id} → ${built.delivery.customerName}`,
+          url: "/?tab=deliveries",
+          actor: currentUser?.name,
+          actorRole: currentUser?.role,
+        });
+      }
     } else {
       const built = buildNewDeliveryRecord(form, {
         customers, invoices, createdBy: currentUser?.name || "Staff", users,
@@ -4246,16 +4254,18 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
         sameEventId(e.id, editEventId) ? built.event : e
       )));
       addNotification({ type: "success", title: "Event Updated", message: `"${built.event.title}" saved.` });
-      notifyAssignmentChange({
-        isNew: false,
-        previousAssignedUserIds: existing.assignedUserIds,
-        nextAssignedUserIds: built.event.assignedUserIds,
-        title: "Event Assigned",
-        message: `${built.event.title} · ${built.event.date} ${built.event.time || ""}`.trim(),
-        url: "/?tab=calendar",
-        actor: currentUser?.name,
-        actorRole: currentUser?.role,
-      });
+      if (newlyAssignedUserIds(existing.assignedUserIds, built.event.assignedUserIds).length) {
+        notifyAssignmentChange({
+          isNew: false,
+          previousAssignedUserIds: existing.assignedUserIds,
+          nextAssignedUserIds: built.event.assignedUserIds,
+          title: "Event Assigned",
+          message: `${built.event.title} · ${built.event.date} ${built.event.time || ""}`.trim(),
+          url: "/?tab=calendar",
+          actor: currentUser?.name,
+          actorRole: currentUser?.role,
+        });
+      }
     } else {
       const built = buildNewEventRecord(form, {
         createdBy: currentUser?.name || "Staff",
@@ -5839,8 +5849,19 @@ export default function App() {
       setInvoices(sortInvoices(applyInvoicePins(cleaned.invoices)));
       setExpenses(cleaned.expenses);
       setDeliveries(cleaned.deliveries);
-      setPondDataWithRef(cleaned.pondData);
-      setEvents(enrichCalendarEvents(cleaned.events, cleaned.pondData?.reminders));
+      const syncedOnLoad = syncPondCalendarAssignees(
+        cleaned.events || [],
+        cleaned.pondData?.reminders || [],
+        {
+          createdBy: currentUserRef.current?.name || "Staff",
+          pondsReady: true,
+        },
+      );
+      setPondDataWithRef(touchPondData({
+        ...(cleaned.pondData || emptyPondData()),
+        reminders: syncedOnLoad.reminders,
+      }));
+      setEventsWithRef(syncedOnLoad.events);
       setStockLog(cleaned.stockLog);
       setKoiFishList(cleaned.koiFishList);
       setCustomerKoiList(cleaned.customerKoiList);
@@ -5885,7 +5906,7 @@ export default function App() {
     setInvoices(INITIAL_INVOICES);
     setExpenses(INITIAL_EXPENSES);
     setDeliveries(INITIAL_DELIVERIES);
-    setEvents(INITIAL_EVENTS);
+    setEventsWithRef(INITIAL_EVENTS);
     setStockLog([]);
     setKoiFishList([]);
     setCustomerKoiList([]);
@@ -5893,7 +5914,7 @@ export default function App() {
     setWhatsappGroups([]);
     clearAllDeletions();
     setCloudHydrated(false);
-  }, [setPondDataWithRef]);
+  }, [setEventsWithRef, setPondDataWithRef]);
 
   useEffect(() => {
     if (!isSupabaseConfigured) return;
@@ -6645,16 +6666,17 @@ export default function App() {
     if (!dataReady || !cloudHydrated) return;
     const user = currentUserRef.current;
     if (!user || !hasPermission(user, "calendar") || !hasPermission(user, "ponds")) return;
-    const prevEvents = syncStateRef.current.events || [];
-    const synced = syncPondCalendarAssignees(prevEvents, pondData.reminders, {
-      createdBy: user.name || "Staff",
-      pondsReady: true,
+    let patchedReminders = null;
+    setEventsWithRef((prevEvents) => {
+      const synced = syncPondCalendarAssignees(prevEvents, pondData.reminders, {
+        createdBy: user.name || "Staff",
+        pondsReady: true,
+      });
+      if (synced.remindersChanged) patchedReminders = synced.reminders;
+      return synced.eventsChanged ? synced.events : prevEvents;
     });
-    if (synced.remindersChanged) {
-      setPondDataWithRef((prev) => touchPondData({ ...prev, reminders: synced.reminders }));
-    }
-    if (synced.eventsChanged) {
-      setEventsWithRef(synced.events);
+    if (patchedReminders) {
+      setPondDataWithRef((prev) => touchPondData({ ...prev, reminders: patchedReminders }));
     }
   }, [dataReady, cloudHydrated, pendingRemindersKey, pondData.reminders, setEventsWithRef, setPondDataWithRef]);
 
@@ -7051,7 +7073,7 @@ export default function App() {
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} invoices={invoices} setInvoices={setInvoices} deliveries={deliveries} setDeliveries={setDeliveries} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpenses} addNotification={addNotification} currentUser={currentUser} />);
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} users={users} />);
-      case "calendar": return guard("calendar", "Calendar", <CalendarModule events={events} setEvents={setEvents} onNavigateToPonds={() => goToTab("ponds")} addNotification={addNotification} currentUser={currentUser} users={users} />);
+      case "calendar": return guard("calendar", "Calendar", <CalendarModule events={events} setEvents={setEventsWithRef} onNavigateToPonds={() => goToTab("ponds")} addNotification={addNotification} currentUser={currentUser} users={users} />);
       case "chat": return guard("chat", "AI Chat", <ChatModule aiContext={aiContext} messages={chatMessages} setMessages={setChatMessages} isMobile={isMobile} />);
       case "users": return <ErrorBoundary><TeamModule users={users} setUsers={setUsers} currentUser={currentUser} addNotification={addNotification} onCurrentUserUpdate={handleUserUpdate} cloudMode={isSupabaseConfigured && cloudSync} apiEnabled={isSupabaseConfigured} onOpenChangePin={() => setShowChangePin(true)} getBackupData={getBackupData} /></ErrorBoundary>;
       default: return null;
