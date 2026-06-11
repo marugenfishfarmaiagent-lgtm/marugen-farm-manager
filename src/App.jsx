@@ -560,11 +560,11 @@ function LoginScreen({ onLogin, users, cloudMode }) {
               <input type="password" inputMode="numeric" value={pin} onChange={e => setPin(sanitizePinInput(e.target.value))} placeholder="••••"
                 onKeyDown={e => { if (e.key === "Enter" && !loading) { e.preventDefault(); handleLogin(); } }}
                 className="w-full bg-slate-900/50 border border-slate-600 rounded-xl px-3 py-4 text-white text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 touch-manipulation" />
-              <p className="text-xs text-slate-500 mt-2 text-center">Enter your assigned PIN to login</p>
+              <p className="text-xs text-slate-500 mt-2 text-center">
+                {cloudMode ? "Sign in with the PIN your owner gave you." : "Enter your PIN to sign in."}
+              </p>
             </div>
-            {cloudMode ? (
-              <p className="text-xs text-slate-500 mt-2 text-center">Enter your team PIN to sign in.</p>
-            ) : activeUsers.length > 0 ? (
+            {cloudMode ? null : activeUsers.length > 0 ? (
               <div className="mb-4 p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
                 <p className="text-xs text-slate-500 mb-2 uppercase tracking-wide font-semibold">Registered Users</p>
                 <div className="space-y-1">
