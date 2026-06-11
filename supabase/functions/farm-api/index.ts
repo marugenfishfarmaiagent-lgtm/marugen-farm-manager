@@ -218,6 +218,26 @@ async function upsertSync(
   }
 }
 
+async function upsertSyncAssignedTeam(
+  table: "deliveries" | "events",
+  rows: Record<string, unknown>[],
+  idField: string,
+  options: Parameters<typeof upsertSync>[3],
+) {
+  try {
+    await upsertSync(table, rows, idField, options);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes("assigned_user_ids")) throw err;
+    const stripped = rows.map((row) => {
+      const next = { ...row };
+      delete next.assigned_user_ids;
+      return next;
+    });
+    await upsertSync(table, stripped, idField, options);
+  }
+}
+
 function normalizeAssignedUserIds(value: unknown): number[] {
   if (value == null || value === "") return [];
 
@@ -248,7 +268,7 @@ function normalizeAssignedUserIds(value: unknown): number[] {
 
 function isTeamNotificationForUser(row: Record<string, unknown>, user: SessionUser): boolean {
   if (user.role === "owner") return true;
-  const raw = row.target_user_ids;
+  const raw = row.target_user_ids ?? row.targetUserIds;
   if (raw == null) return true;
   const targets = normalizeAssignedUserIds(raw);
   if (!targets.length) return false;
@@ -916,7 +936,7 @@ Deno.serve(async (req) => {
             return J({ error: `Invalid delivery status: ${d.status}` }, 400);
           }
         }
-        await upsertSync("deliveries", incoming.map((d: Record<string, unknown>) => withTs({
+        await upsertSyncAssignedTeam("deliveries", incoming.map((d: Record<string, unknown>) => withTs({
           id: d.id, invoice_id: d.invoiceId ?? "",
           customer_id: nullableBigint(d.customerId),
           customer_name: d.customerName, area: d.area ?? "",
@@ -936,7 +956,7 @@ Deno.serve(async (req) => {
           const type = String(e.type ?? "other");
           if (!EVENT_TYPES.has(type)) return J({ error: `Invalid event type: ${e.type}` }, 400);
         }
-        await upsertSync("events", incoming.map((e: Record<string, unknown>) => withTs({
+        await upsertSyncAssignedTeam("events", incoming.map((e: Record<string, unknown>) => withTs({
           id: e.id, title: e.title, date: e.date, time: e.time ?? "09:00", type: e.type ?? "other",
           note: e.note ?? "", created_by: e.createdBy ?? "",
           pond_reminder_id: e.pondReminderId ?? e.pond_reminder_id ?? "",

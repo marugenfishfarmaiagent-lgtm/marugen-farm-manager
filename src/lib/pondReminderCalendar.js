@@ -1,5 +1,5 @@
 import { MAINTENANCE_TYPES } from '../data/constants'
-import { normalizeAssignedUserIds, sameAssignedTeam } from './assignTeam'
+import { coalesceAssignedUserIds, normalizeAssignedUserIds, sameAssignedTeam } from './assignTeam'
 import { buildNewEventRecord, sortEventsBySchedule } from './calendarOps'
 import { isPendingReminder, normalizeReminderStatus } from './pondOps'
 import { touchUpdatedAt } from './syncMeta'
@@ -68,6 +68,7 @@ export function reminderSyncKeyPart(reminder) {
     reminder.pondName || '',
     fields.note,
     normalizeReminderStatus(reminder.status),
+    normalizeAssignedUserIds(reminder.assignedUserIds).join(','),
   ].join(':')
 }
 
@@ -104,7 +105,7 @@ export function upsertCalendarEventForReminder(events, reminder, createdBy) {
   const fields = reminderToCalendarEventFields(reminder)
   const existing = (events || []).find((e) => sameReminderLink(e.pondReminderId, reminder.id))
   if (existing) {
-    const nextAssignees = normalizeAssignedUserIds(reminder.assignedUserIds ?? existing.assignedUserIds)
+    const nextAssignees = coalesceAssignedUserIds(reminder.assignedUserIds, existing.assignedUserIds)
     const fieldsMatch = reminderFieldsMatchEvent(reminder, existing)
     const assigneesMatch = sameAssignedTeam(nextAssignees, existing.assignedUserIds)
     if (fieldsMatch && assigneesMatch) return events || []

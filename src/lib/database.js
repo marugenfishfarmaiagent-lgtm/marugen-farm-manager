@@ -6,6 +6,7 @@ import { normalizeExpenseRecord } from './expenseOps'
 import { normalizeDeliveryRecord } from './deliveryOps'
 import { normalizeEventRecord } from './calendarOps'
 import { normalizeAssignedUserIds } from './assignTeam'
+import { normalizeReminderRecord } from './pondOps'
 import { normalizeUserRecord } from './teamOps'
 import { emptyPondData } from './cloudData'
 import { normalizeCustomerKoiPhotoForSync, normalizeImageFieldForSync, storagePaths } from './farmImage'
@@ -265,6 +266,7 @@ function mapPondData(payload, updatedAt) {
   const base = {
     ...emptyPondData(),
     ...payload,
+    reminders: (payload.reminders || []).map((row) => normalizeReminderRecord(row)),
     treatmentGuides: payload.treatmentGuides?.length
       ? payload.treatmentGuides
       : emptyPondData().treatmentGuides,

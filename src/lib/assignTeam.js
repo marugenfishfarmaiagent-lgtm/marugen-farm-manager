@@ -27,6 +27,17 @@ export function normalizeAssignedUserIds(value) {
   )]
 }
 
+/** Prefer primary assignees when set; otherwise keep fallback (pond→calendar sync). */
+export function coalesceAssignedUserIds(primary, fallback) {
+  const primaryIds = normalizeAssignedUserIds(primary)
+  if (primaryIds.length) return primaryIds
+  return normalizeAssignedUserIds(fallback)
+}
+
+export function hasAssignedTeam(value) {
+  return normalizeAssignedUserIds(value).length > 0
+}
+
 export function sameAssignedTeam(a, b) {
   const left = normalizeAssignedUserIds(a).sort((x, y) => x - y)
   const right = normalizeAssignedUserIds(b).sort((x, y) => x - y)

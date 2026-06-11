@@ -124,7 +124,7 @@ import ConnectionStatus from "./components/ConnectionStatus";
 import PushNotificationPrompt from "./components/PushNotificationPrompt";
 import { mergeIncomingTeamNotifications } from "./lib/teamNotifications";
 import { notifyAssignmentChange } from "./lib/teamAssignNotify";
-import { filterNotificationsForUser } from "./lib/assignTeam";
+import { filterNotificationsForUser, hasAssignedTeam, isTeamNotificationForUser } from "./lib/assignTeam";
 import { ensurePushSubscription } from "./lib/webPush";
 import StaffAssignPicker, { AssigneeBadges } from "./components/StaffAssignPicker";
 
@@ -3572,7 +3572,7 @@ function DeliveryModule({
       const d = built.delivery;
       setDeliveries((prev) => [...prev, d]);
       const scheduleMsg = d.invoiceId ? `${d.id} linked to ${d.invoiceId} → ${d.customerName}` : `${d.id} → ${d.customerName}`;
-      if (d.assignedUserIds?.length) {
+      if (hasAssignedTeam(d.assignedUserIds)) {
         addNotification({ type: "success", title: "Delivery Scheduled", message: scheduleMsg });
         notifyAssignmentChange({
           isNew: true,
@@ -4267,7 +4267,7 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
       }
       setEvents((prev) => [...prev, built.event]);
       const eventMsg = `${built.event.title} on ${built.event.date}`;
-      if (built.event.assignedUserIds?.length) {
+      if (hasAssignedTeam(built.event.assignedUserIds)) {
         addNotification({ type: "success", title: "Event Added", message: eventMsg });
         notifyAssignmentChange({
           isNew: true,
@@ -5717,10 +5717,13 @@ export default function App() {
   const addNotification = useCallback((n) => {
     if (isTeamNotification(n)) {
       const teamActor = n.actorRole === "system" ? n.actor || "System" : (n.actor || currentUser?.name || "Unknown");
-      setNotifications((prev) => [
-        buildTeamNotification({ ...n, actor: teamActor }, currentUser),
-        ...prev,
-      ].slice(0, 30));
+      const teamRow = buildTeamNotification({ ...n, actor: teamActor }, currentUser);
+      if (isTeamNotificationForUser(teamRow, {
+        currentUserId: currentUser?.id,
+        isOwner: currentUser?.role === "owner",
+      })) {
+        setNotifications((prev) => [teamRow, ...prev].slice(0, 30));
+      }
       if (isSupabaseConfigured && auth.hasCloudSession() && n.title) {
         db.notifyTeamPush({
           title: n.title,
