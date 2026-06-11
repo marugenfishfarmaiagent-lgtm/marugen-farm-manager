@@ -5442,6 +5442,8 @@ export default function App() {
   const syncFailCountRef = useRef(0);
   const lowStockNotified = useRef(false);
   const lastSyncWarnRef = useRef(0);
+  const syncWarnQueueRef = useRef([]);
+  const syncWarnFlushTimerRef = useRef(null);
   const lastCloudPullAt = useRef(0);
   const lastUserActivityAt = useRef(Date.now());
   const syncTimersRef = useRef({});
@@ -5501,10 +5503,10 @@ export default function App() {
 
   const showProminentToast = useCallback((n) => {
     const id = n.id || `prominent-${Date.now()}`;
-    const toast = { ...buildToastNotification({ ...n, id }), prominent: true };
+    const toast = { ...buildToastNotification({ ...n, id }), prominent: true, id };
     const existingTimer = toastTimers.current.get(id);
     if (existingTimer) clearTimeout(existingTimer);
-    setToasts((prev) => [...prev.filter((t) => t.id !== id), toast].slice(-5));
+    setToasts((prev) => [...prev.filter((t) => t.id !== id), toast].slice(-3));
     const duration = n.duration ?? 15000;
     if (duration > 0) {
       const timer = setTimeout(() => dismissToast(id), duration);
@@ -5517,18 +5519,47 @@ export default function App() {
   }, []);
 
   const warnCloudSaveFailed = useCallback((detail, { force = false } = {}) => {
-    const now = Date.now();
-    if (!force && now - lastSyncWarnRef.current < 20000) return;
-    lastSyncWarnRef.current = now;
-    showProminentToast({
-      id: "cloud-sync-warn",
-      type: "error",
-      title: "Not saved to cloud",
-      message: detail
-        ? `Sync failed: ${detail}. Do not refresh — use Retry save when back online.`
-        : "Cloud sync failed. Changes are only on this screen until sync succeeds.",
-      duration: 20000,
-    });
+    if (detail) syncWarnQueueRef.current.push(detail);
+
+    const flush = (forced) => {
+      syncWarnFlushTimerRef.current = null;
+      const parts = [...new Set(syncWarnQueueRef.current)];
+      syncWarnQueueRef.current = [];
+      if (!parts.length) return;
+
+      const now = Date.now();
+      if (!forced && now - lastSyncWarnRef.current < 20000) return;
+      lastSyncWarnRef.current = now;
+
+      const moduleNames = parts.map((part) => {
+        const match = String(part).match(/^([^:]+):/);
+        return match ? match[1].trim() : part;
+      });
+      const uniqueModules = [...new Set(moduleNames)];
+      const message = uniqueModules.length === 1 && parts.length === 1
+        ? `Sync failed: ${parts[0]}. Do not refresh — use Retry save when back online.`
+        : `Sync failed: ${uniqueModules.join(", ")}. Check internet connection, then use Retry save when back online.`;
+
+      showProminentToast({
+        id: "cloud-sync-warn",
+        type: "error",
+        title: "Not saved to cloud",
+        message,
+        duration: 20000,
+      });
+    };
+
+    if (force) {
+      if (syncWarnFlushTimerRef.current) {
+        clearTimeout(syncWarnFlushTimerRef.current);
+        syncWarnFlushTimerRef.current = null;
+      }
+      flush(true);
+      return;
+    }
+
+    if (syncWarnFlushTimerRef.current) clearTimeout(syncWarnFlushTimerRef.current);
+    syncWarnFlushTimerRef.current = setTimeout(() => flush(false), 400);
   }, [showProminentToast]);
 
   const addNotification = useCallback((n) => {

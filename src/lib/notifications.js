@@ -79,7 +79,7 @@ export function buildTeamNotification(n, currentUser) {
 export function buildToastNotification(n) {
   return {
     ...n,
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    id: n.id || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     team: false,
   }
 }
