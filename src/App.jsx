@@ -5770,17 +5770,6 @@ export default function App() {
   useEffect(() => { if (!isSupabaseConfigured) saveProducts(products) }, [products]);
   useEffect(() => { if (!isSupabaseConfigured) saveStockLog(stockLog) }, [stockLog]);
 
-  const enrichCalendarEvents = useCallback((eventsList, reminders) => {
-    const user = currentUserRef.current;
-    if (!user || !hasPermission(user, "calendar") || !hasPermission(user, "ponds")) {
-      return eventsList || [];
-    }
-    return syncPondCalendarAssignees(eventsList, reminders, {
-      createdBy: user.name || "Staff",
-      pondsReady: true,
-    }).events;
-  }, []);
-
   const mergeCloudTeamNotifications = useCallback((remoteRows) => {
     if (!remoteRows?.length) return;
     setNotifications((prev) => {
@@ -5828,17 +5817,24 @@ export default function App() {
       setInvoices((prev) => applyInvoicePins(mergeInvoices(prev, cleaned.invoices, peekDeletions("invoices"))));
       setExpenses((prev) => mergeRecords(prev, cleaned.expenses, peekDeletions("expenses")));
       setDeliveries((prev) => mergeRecords(prev, cleaned.deliveries, peekDeletions("deliveries")));
-      let mergedPondReminders = cleaned.pondData?.reminders;
-      setPondDataWithRef((prev) => {
-        const base = syncStateRef.current.pondData || prev;
-        const merged = mergePondData(base, cleaned.pondData);
-        mergedPondReminders = merged.reminders;
-        return merged;
-      });
-      setEventsWithRef((prev) => enrichCalendarEvents(
-        mergeRecords(prev, cleaned.events, peekDeletions("events")),
-        mergedPondReminders,
-      ));
+      const mergedPond = mergePondData(syncStateRef.current.pondData || emptyPondData(), cleaned.pondData);
+      const mergedEvents = mergeRecords(
+        syncStateRef.current.events || [],
+        cleaned.events,
+        peekDeletions("events"),
+      );
+      const mergeSyncUser = currentUserRef.current;
+      if (mergeSyncUser && hasPermission(mergeSyncUser, "calendar") && hasPermission(mergeSyncUser, "ponds")) {
+        const syncedOnMerge = syncPondCalendarAssignees(mergedEvents, mergedPond.reminders, {
+          createdBy: mergeSyncUser.name || "Staff",
+          pondsReady: true,
+        });
+        setPondDataWithRef(touchPondData({ ...mergedPond, reminders: syncedOnMerge.reminders }));
+        setEventsWithRef(syncedOnMerge.events);
+      } else {
+        setPondDataWithRef(mergedPond);
+        setEventsWithRef(mergedEvents);
+      }
       setStockLog((prev) => mergeRecords(prev, cleaned.stockLog, peekDeletions("stock_activity")));
       setKoiFishList((prev) => mergeKoiFish(prev, cleaned.koiFishList, peekDeletions("koi_fish")));
       setCustomerKoiList((prev) => mergeCustomerKoi(prev, cleaned.customerKoiList, peekDeletions("customer_koi")));
@@ -5898,7 +5894,7 @@ export default function App() {
     if (isSupabaseConfigured) {
       cacheWriteAllData(data).catch(() => {});
     }
-  }, [addNotification, touchLastSync, enrichCalendarEvents, mergeCloudTeamNotifications, setEventsWithRef, setPondDataWithRef]);
+  }, [addNotification, touchLastSync, mergeCloudTeamNotifications, setEventsWithRef, setPondDataWithRef]);
 
   const resetCloudBusinessState = useCallback(() => {
     setCustomers(INITIAL_CUSTOMERS);
