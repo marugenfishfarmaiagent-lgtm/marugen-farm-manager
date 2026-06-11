@@ -110,8 +110,10 @@ done
 echo ""
 echo "── Automated: in-repo feature wiring (deploy readiness) ──"
 
-if repo_has 'monthlyRevenue' "$ROOT/src/App.jsx" && repo_has 'kpiCards' "$ROOT/src/App.jsx"; then
-  pass "#3 Dashboard KPI cards wired in App.jsx"
+if repo_has 'computeDashboardMetrics' "$ROOT/src/App.jsx" \
+  && repo_has 'monthlyRevenue' "$ROOT/src/lib/dashboardMetrics.js" \
+  && repo_has 'kpiCards' "$ROOT/src/lib/dashboardMetrics.js"; then
+  pass "#3 Dashboard KPI cards wired (dashboardMetrics + App)"
 else
   fail "#3 Dashboard KPI cards missing"
 fi
@@ -128,7 +130,9 @@ else
   fail "#5 PayNow QR not found"
 fi
 
-if repo_has 'driver' "$ROOT/src/App.jsx" && repo_has 'deliveredAt' "$ROOT/src/App.jsx"; then
+if repo_has 'driver' "$ROOT/src/App.jsx" \
+  && repo_has 'deliveredAt' "$ROOT/src/lib/deliveryOps.js" \
+  && repo_has 'buildDeliveryStatusPatch' "$ROOT/src/lib/deliveryOps.js"; then
   pass "#6 Delivery driver + deliveredAt status workflow"
 else
   fail "#6 Delivery workflow incomplete"
@@ -152,7 +156,9 @@ else
   fail "#11 PondWaterChart missing"
 fi
 
-if repo_has 'buildChatThread' "$ROOT/src/App.jsx" && repo_has 'MAX_CHAT_HISTORY' "$ROOT/supabase/functions/gemini-chat/index.ts"; then
+if repo_has 'buildChatApiThread' "$ROOT/src/lib/chatOps.js" \
+  && repo_has 'buildChatApiThread' "$ROOT/src/App.jsx" \
+  && repo_has 'MAX_CHAT_HISTORY' "$ROOT/supabase/functions/gemini-chat/index.ts"; then
   pass "#12–13 AI chat + conversation history"
 else
   fail "#12–13 AI chat history missing"
