@@ -91,4 +91,4 @@ export const TEAM_SYNC_POLL_THROTTLE_MS = 28_000
 export const TEAM_SYNC_EVENT_THROTTLE_MS = 15_000
 
 /** Skip background polls while the user interacted within this window. */
-export const TEAM_SYNC_USER_IDLE_MS = 45_000
+export const TEAM_SYNC_USER_IDLE_MS = 12_000

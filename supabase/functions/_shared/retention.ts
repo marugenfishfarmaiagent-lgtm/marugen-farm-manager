@@ -144,4 +144,8 @@ export async function purgeExpiredCloudData(db: ReturnType<typeof import("./supa
     const filtered = filterPondDataForCloud(pondRow.data as Record<string, unknown>)
     await db.from("farm_pond_data").upsert({ id: "default", data: filtered }, { onConflict: "id" })
   }
+
+  const teamNotifCut = new Date()
+  teamNotifCut.setDate(teamNotifCut.getDate() - 30)
+  await db.from("team_notifications").delete().lt("created_at", teamNotifCut.toISOString())
 }

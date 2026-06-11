@@ -299,9 +299,12 @@ Deno.serve(async (req) => {
     if (body.action === "fetch") {
       await purgeExpiredCloudData(db);
 
+      const teamNotifSince = new Date();
+      teamNotifSince.setDate(teamNotifSince.getDate() - 30);
+
       const [
         users, customers, products, invoices, expenses, deliveries, events, stockActivity,
-        koiFish, customerKoi, pondRow, whatsappGroups,
+        koiFish, customerKoi, pondRow, whatsappGroups, teamNotifications,
       ] = await Promise.all([
         db.from("farm_users").select("id, name, role, active, permissions, is_system").order("id"),
         db.from("customers").select("*").order("id"),
@@ -315,11 +318,16 @@ Deno.serve(async (req) => {
         db.from("customer_koi").select("*").order("purchase_date", { ascending: false }),
         db.from("farm_pond_data").select("data, updated_at").eq("id", "default").maybeSingle(),
         db.from("whatsapp_groups").select("*").order("name"),
+        db.from("team_notifications")
+          .select("id, title, message, actor, actor_role, actor_user_id, notification_type, url, tag, created_at")
+          .gte("created_at", teamNotifSince.toISOString())
+          .order("created_at", { ascending: false })
+          .limit(50),
       ]);
 
       const errors = [
         users, customers, products, invoices, expenses, deliveries, events, stockActivity,
-        koiFish, customerKoi, pondRow, whatsappGroups,
+        koiFish, customerKoi, pondRow, whatsappGroups, teamNotifications,
       ].map((r) => r.error).filter(Boolean);
       if (errors.length) return J({ error: errors[0]!.message }, 500);
 
@@ -360,6 +368,7 @@ Deno.serve(async (req) => {
         pondData: permittedObject(user, "ponds", pondRow.data?.data || {}),
         pondUpdatedAt: hasPermission(user, "ponds") ? (pondRow.data as { updated_at?: string } | null)?.updated_at ?? null : null,
         whatsappGroups: permittedRows(user, "deliveries", whatsappGroups.data || []),
+        teamNotifications: teamNotifications.data || [],
       });
     }
 
@@ -1257,8 +1266,24 @@ Deno.serve(async (req) => {
       const pushBody = String(body.body || body.message || "").trim().slice(0, 500);
       const url = String(body.url || "/?tab=dashboard").slice(0, 500);
       const tag = String(body.tag || "team-activity").slice(0, 64);
+      const actor = String(body.actor || user.name || "Unknown").trim().slice(0, 80);
+      const actorRole = String(body.actorRole || user.role || "staff").trim().slice(0, 40);
+      const notificationType = String(body.type || "info").trim().slice(0, 20);
       if (!title) return J({ error: "title required" }, 400);
-      if (!isPushConfigured()) return J({ ok: true, skipped: true });
+
+      const { error: feedError } = await db.from("team_notifications").insert({
+        title,
+        message: pushBody || title,
+        actor,
+        actor_role: actorRole,
+        actor_user_id: user.id,
+        notification_type: notificationType,
+        url,
+        tag,
+      });
+      if (feedError) throw feedError;
+
+      if (!isPushConfigured()) return J({ ok: true, skipped: true, sent: 0, removed: 0 });
       const stats = await sendPushToAllFarmUsers(db, {
         title,
         body: pushBody || title,

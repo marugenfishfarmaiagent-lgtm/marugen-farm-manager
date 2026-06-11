@@ -65,6 +65,25 @@ export async function subscribeToPush(publicKey) {
   return subscription
 }
 
+/** Re-register push subscription after login, PWA update, or when permission is already granted. */
+export async function ensurePushSubscription() {
+  if (!isPushSupported() || Notification.permission !== 'granted') {
+    return { ok: false, reason: 'not_granted' }
+  }
+  try {
+    const config = await getPushConfig()
+    const publicKey = config.publicKey || import.meta.env.VITE_VAPID_PUBLIC_KEY
+    if (!config.enabled || !publicKey) {
+      return { ok: false, reason: 'not_configured' }
+    }
+    const subscription = await subscribeToPush(publicKey)
+    await db.registerPushSubscription(subscription.toJSON())
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, reason: err?.message || 'register_failed' }
+  }
+}
+
 export async function enablePhoneNotifications() {
   if (!isPushSupported()) {
     return { ok: false, message: 'This browser does not support phone notifications.' }

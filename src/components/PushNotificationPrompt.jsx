@@ -5,6 +5,7 @@ import {
   dismissPushPrompt,
   disablePhoneNotifications,
   enablePhoneNotifications,
+  ensurePushSubscription,
   getPushPermission,
   isPushPromptDismissed,
   isPushSupported,
@@ -22,8 +23,14 @@ export default function PushNotificationPrompt({ addNotification }) {
       return
     }
     const permission = getPushPermission()
-    setEnabled(permission === 'granted')
-    setVisible(permission !== 'granted' && !isPushPromptDismissed())
+    if (permission === 'granted') {
+      await ensurePushSubscription()
+      setEnabled(true)
+      setVisible(false)
+      return
+    }
+    setEnabled(false)
+    setVisible(!isPushPromptDismissed())
   }, [])
 
   useEffect(() => {

@@ -372,6 +372,7 @@ export async function fetchAllData() {
     koiFish: (data.koiFish || []).map(mapKoiFish),
     customerKoi: (data.customerKoi || []).map(mapCustomerKoi),
     pondData: mapPondData(data.pondData, data.pondUpdatedAt),
+    teamNotifications: data.teamNotifications || [],
     whatsappGroups: (data.whatsappGroups || []).map(mapWhatsappGroup),
   }
 }
@@ -569,14 +570,18 @@ export async function sendPushTest() {
   return apiCall({ action: 'send_push_test' })
 }
 
-export async function notifyTeamPush({ title, body, message, url, tag }) {
+export async function notifyTeamPush({ title, body, message, url, tag, actor, actorRole, type }) {
   if (!isSupabaseConfigured) return
   return apiCall({
     action: 'notify_team_push',
     title,
     body: body ?? message,
+    message: body ?? message,
     url,
     tag,
+    actor,
+    actorRole,
+    type,
   })
 }
 

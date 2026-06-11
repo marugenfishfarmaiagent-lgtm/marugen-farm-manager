@@ -122,6 +122,8 @@ import { cacheWriteAllData, cacheReadAllData } from "./lib/localCache";
 import { logSyncEvent } from "./lib/syncAnalytics";
 import ConnectionStatus from "./components/ConnectionStatus";
 import PushNotificationPrompt from "./components/PushNotificationPrompt";
+import { mergeIncomingTeamNotifications } from "./lib/teamNotifications";
+import { ensurePushSubscription } from "./lib/webPush";
 
 function BookedBadge({ booked, bookedBy }) {
   if (booked) {
@@ -5626,6 +5628,9 @@ export default function App() {
         db.notifyTeamPush({
           title: n.title,
           message: n.message,
+          actor: teamActor,
+          actorRole: n.actorRole || currentUser?.role || "staff",
+          type: n.type || "info",
           url: teamPushUrl(n.title),
           tag: `team-${String(n.title).replace(/\s+/g, "-").toLowerCase()}`,
         }).catch(() => {});
@@ -5664,6 +5669,24 @@ export default function App() {
       pondsReady: true,
     });
   }, []);
+
+  const mergeCloudTeamNotifications = useCallback((remoteRows) => {
+    if (!remoteRows?.length) return;
+    setNotifications((prev) => {
+      const { list, added, latest } = mergeIncomingTeamNotifications(prev, remoteRows, {
+        currentUserId: currentUser?.id,
+      });
+      if (added > 0 && typeof document !== "undefined" && document.visibilityState === "hidden" && latest) {
+        db.notifySelfPush({
+          title: latest.title,
+          message: latest.message || latest.title,
+          url: teamPushUrl(latest.title),
+          tag: `team-cloud-${latest.cloudId}`,
+        }).catch(() => {});
+      }
+      return list;
+    });
+  }, [currentUser, teamPushUrl]);
 
   const applyCloudData = useCallback((data, { mode = "replace" } = {}) => {
     if (!data) return;
@@ -5741,6 +5764,10 @@ export default function App() {
         actorRole: "system",
       });
     }
+    if (data.teamNotifications?.length) {
+      mergeCloudTeamNotifications(data.teamNotifications);
+    }
+
     setCloudHydrated(true);
     setIsFromCache(false);
     setCacheCachedAt(null);
@@ -5748,7 +5775,7 @@ export default function App() {
     if (isSupabaseConfigured) {
       cacheWriteAllData(data).catch(() => {});
     }
-  }, [addNotification, touchLastSync, enrichCalendarEvents]);
+  }, [addNotification, touchLastSync, enrichCalendarEvents, mergeCloudTeamNotifications]);
 
   const resetCloudBusinessState = useCallback(() => {
     setCustomers(INITIAL_CUSTOMERS);
@@ -6488,6 +6515,11 @@ export default function App() {
       window.removeEventListener("keydown", markActive);
     };
   }, []);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !currentUser || !cloudHydrated) return;
+    ensurePushSubscription().catch(() => {});
+  }, [currentUser, cloudHydrated]);
 
   useTeamSyncPoll({
     enabled: isSupabaseConfigured && Boolean(currentUser) && cloudHydrated && cloudSync,
