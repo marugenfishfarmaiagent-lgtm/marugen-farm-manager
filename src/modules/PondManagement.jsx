@@ -86,7 +86,6 @@ export default function PondManagement({
   const update = (patch) => setPondData((prev) => touchPondData({ ...prev, ...patch }))
 
   const markReminderDone = async (reminderId) => {
-    if (!canEdit) { denyEdit(); return }
     const id = String(reminderId)
     if (completingReminderRef.current === id) return
 

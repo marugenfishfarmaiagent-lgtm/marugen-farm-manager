@@ -73,5 +73,8 @@ export function sessionTokenFrom(req: Request): string | null {
 }
 
 export function hasPermission(user: SessionUser, perm: string): boolean {
-  return user.role === "owner" || (user.permissions || []).includes(perm);
+  if (user.role === "owner") return true;
+  // Pond Mgmt is open to all active team members (sync + reminder completion).
+  if (perm === "ponds") return user.active !== false;
+  return (user.permissions || []).includes(perm);
 }

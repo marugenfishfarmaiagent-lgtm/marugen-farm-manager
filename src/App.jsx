@@ -190,6 +190,8 @@ function AppLogo({ size = "md", className = "" }) {
 function hasPermission(user, permission) {
   if (!user) return false;
   if (user.role === "owner") return true;
+  // Pond Mgmt is available to every active team member (view + complete reminders).
+  if (permission === "ponds") return user.active !== false;
   return user.permissions?.includes(permission) ?? false;
 }
 
