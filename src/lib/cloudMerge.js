@@ -13,6 +13,18 @@ function isTerminalInvoiceStatus(status) {
   return status === 'paid' || status === 'cancelled'
 }
 
+/** Prefer manual calendar rows over pond-linked duplicates when timestamps tie. */
+export function resolveEventConflict(local, remote) {
+  const lt = ts(local)
+  const rt = ts(remote)
+  const localManual = !String(local?.pondReminderId || '').trim()
+  const remoteManual = !String(remote?.pondReminderId || '').trim()
+  if (localManual && !remoteManual) return local
+  if (remoteManual && !localManual) return remote
+  if (lt !== rt) return lt > rt ? local : remote
+  return local
+}
+
 /** Prefer booked when timestamps tie — avoids cloud pull reverting a just-marked receipt. */
 export function resolveExpenseConflict(local, remote) {
   const lt = ts(local)

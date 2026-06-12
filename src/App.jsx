@@ -70,7 +70,7 @@ import {
 import { isSupabaseConfigured } from "./lib/supabase";
 import * as auth from "./lib/auth";
 import { markDeleted, clearAllDeletions, peekDeletions } from "./lib/syncDeletions";
-import { mergeRecords, mergePondData, mergeInvoices, mergeProducts, mergeKoiFish, mergeCustomerKoi, resolveInvoiceConflict, resolveExpenseConflict } from "./lib/cloudMerge";
+import { mergeRecords, mergePondData, mergeInvoices, mergeProducts, mergeKoiFish, mergeCustomerKoi, resolveInvoiceConflict, resolveExpenseConflict, resolveEventConflict } from "./lib/cloudMerge";
 import {
   countIncomingTeamChanges,
   TEAM_SYNC_EVENT_THROTTLE_MS,
@@ -4503,21 +4503,23 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
 
   const commitEventList = async (buildNext) => {
     if (savingEventRef.current) return null;
-    let nextList = null;
-    let snapshot = null;
-    let unchanged = false;
-    setEvents((prev) => {
-      snapshot = prev;
-      const built = buildNext(prev);
-      if (built === prev) {
-        unchanged = true;
-        return prev;
+    const snapshot = events;
+    const nextList = buildNext(snapshot);
+    if (nextList === snapshot) return null;
+
+    setEvents(nextList);
+    if (!onPersistEvents) {
+      if (isSupabaseConfigured) {
+        addNotification({
+          type: "error",
+          title: "Save failed",
+          message: "Cloud save is unavailable. Try again after refresh.",
+        });
+        setEvents(snapshot);
+        return null;
       }
-      nextList = built;
       return nextList;
-    });
-    if (unchanged || !nextList) return null;
-    if (!onPersistEvents) return nextList;
+    }
 
     savingEventRef.current = true;
     try {
@@ -6169,6 +6171,7 @@ export default function App() {
         syncStateRef.current.events || [],
         cleaned.events,
         peekDeletions("events"),
+        resolveEventConflict,
       );
       const mergeSyncUser = currentUserRef.current;
       if (mergeSyncUser && hasPermission(mergeSyncUser, "calendar") && hasPermission(mergeSyncUser, "ponds")) {
@@ -6458,20 +6461,27 @@ export default function App() {
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
   const flushEventSync = useCallback(async (eventsOverride) => {
-    if (!isSupabaseConfigured) return;
+    if (!isSupabaseConfigured) {
+      throw new Error("Cloud sync is not configured.");
+    }
     if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
       throw new Error("Cloud sync is not ready.");
     }
     if (!hasPermission(currentUser, "calendar")) {
       throw new Error("Permission denied (calendar).");
     }
-    if (!(await ensureCloudSyncReady())) {
-      throw new Error("Session needs refresh. Log out and log in again.");
-    }
     const syncKey = "calendar:Calendar";
     if (syncTimersRef.current[syncKey]) {
       clearTimeout(syncTimersRef.current[syncKey]);
       delete syncTimersRef.current[syncKey];
+    }
+    let waited = 0;
+    while (syncInFlightRef.current > 0 && waited < 3000) {
+      await new Promise((r) => setTimeout(r, 100));
+      waited += 100;
+    }
+    if (!(await ensureCloudSyncReady())) {
+      throw new Error("Session needs refresh. Log out and log in again.");
     }
     const raw = eventsOverride ?? syncStateRef.current.events ?? [];
     const payload = raw.map((e) => touchUpdatedAt(e));
