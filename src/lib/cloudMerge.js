@@ -13,6 +13,16 @@ function isTerminalInvoiceStatus(status) {
   return status === 'paid' || status === 'cancelled'
 }
 
+/** Prefer booked when timestamps tie — avoids cloud pull reverting a just-marked receipt. */
+export function resolveExpenseConflict(local, remote) {
+  const lt = ts(local)
+  const rt = ts(remote)
+  if (local?.booked && !remote?.booked) return local
+  if (remote?.booked && !local?.booked) return remote
+  if (lt !== rt) return lt > rt ? local : remote
+  return local
+}
+
 /** Prefer paid/cancelled when timestamps tie — avoids cloud pull reverting a just-marked invoice. */
 export function resolveInvoiceConflict(local, remote) {
   const lt = ts(local)

@@ -70,7 +70,7 @@ import {
 import { isSupabaseConfigured } from "./lib/supabase";
 import * as auth from "./lib/auth";
 import { markDeleted, clearAllDeletions, peekDeletions } from "./lib/syncDeletions";
-import { mergeRecords, mergePondData, mergeInvoices, mergeProducts, mergeKoiFish, mergeCustomerKoi, resolveInvoiceConflict } from "./lib/cloudMerge";
+import { mergeRecords, mergePondData, mergeInvoices, mergeProducts, mergeKoiFish, mergeCustomerKoi, resolveInvoiceConflict, resolveExpenseConflict } from "./lib/cloudMerge";
 import {
   countIncomingTeamChanges,
   TEAM_SYNC_EVENT_THROTTLE_MS,
@@ -5873,7 +5873,7 @@ export default function App() {
       setCustomers((prev) => mergeRecords(prev, cleaned.customers, peekDeletions("customers")));
       setProducts((prev) => mergeProducts(prev, cleaned.products, peekDeletions("products")));
       setInvoices((prev) => applyInvoicePins(mergeInvoices(prev, cleaned.invoices, peekDeletions("invoices"))));
-      setExpenses((prev) => mergeRecords(prev, cleaned.expenses, peekDeletions("expenses")));
+      setExpenses((prev) => mergeRecords(prev, cleaned.expenses, peekDeletions("expenses"), resolveExpenseConflict));
       setDeliveries((prev) => mergeRecords(prev, cleaned.deliveries, peekDeletions("deliveries")));
       const mergedPond = mergePondData(syncStateRef.current.pondData || emptyPondData(), cleaned.pondData);
       const mergedEvents = mergeRecords(
@@ -6187,10 +6187,9 @@ export default function App() {
     const raw = expensesOverride ?? syncStateRef.current.expenses ?? [];
     const payload = raw.map((e) => touchUpdatedAt(e));
     syncStateRef.current = { ...syncStateRef.current, expenses: payload };
-    setExpensesWithRef(payload);
     syncInFlightRef.current += 1;
     try {
-      await db.syncExpenses(payload);
+      await db.syncExpenses(payload, { force: true });
       resetSyncHealth();
       touchLastSync();
     } catch (err) {
@@ -6199,7 +6198,7 @@ export default function App() {
     } finally {
       syncInFlightRef.current -= 1;
     }
-  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth, setExpensesWithRef]);
+  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
   const flushKoiFishSync = useCallback(async (koiOverride) => {
     if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
@@ -6578,7 +6577,7 @@ export default function App() {
         if (!ready) {
           throw new Error("Session needs refresh. Log out and log in again.");
         }
-        const refKey = perm === "ponds" ? "pondData" : perm === "calendar" ? "events" : perm === "invoices" ? "invoices" : null;
+        const refKey = perm === "ponds" ? "pondData" : perm === "calendar" ? "events" : perm === "invoices" ? "invoices" : perm === "expenses" ? "expenses" : null;
         const payload = refKey ? (syncStateRef.current[refKey] ?? data) : data;
         await fn(payload);
       })()

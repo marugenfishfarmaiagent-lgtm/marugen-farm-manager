@@ -150,11 +150,12 @@ async function upsertSync(
     prune?: boolean;
     deletedIds?: unknown[];
     beforeDelete?: (ids: unknown[]) => Promise<void>;
+    force?: boolean;
   } = {},
 ) {
   const db = adminClient();
   const now = new Date().toISOString();
-  const { prune = false, deletedIds = [], beforeDelete } = options;
+  const { prune = false, deletedIds = [], beforeDelete, force = false } = options;
 
   if (deletedIds.length) {
     if (beforeDelete) await beforeDelete(deletedIds);
@@ -180,6 +181,7 @@ async function upsertSync(
   );
 
   const toUpsert = rows.filter((row) => {
+    if (force) return true;
     const serverTs = existingMap.get(normId(row[idField]));
     if (!serverTs) return true;
     const clientRaw = row.updated_at ?? row.updatedAt;
@@ -768,6 +770,7 @@ Deno.serve(async (req) => {
       const syncOpts = {
         prune: Boolean(prune),
         deletedIds: Array.isArray(deletedIds) ? deletedIds : [],
+        force: Boolean(force),
       };
       const withTs = (fields: Record<string, unknown>, client: Record<string, unknown>) => ({
         ...fields,
