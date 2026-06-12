@@ -54,6 +54,41 @@ export function mergeInvoices(local = [], remote = [], pendingDeleteIds = []) {
   return sortInvoices(mergeRecords(local, remote, pendingDeleteIds, resolveInvoiceConflict))
 }
 
+const PRODUCT_CATALOG_FIELDS = ['name', 'category', 'sku', 'price', 'unit', 'description', 'trackStock', 'minStock']
+
+function productCatalogFieldsDiffer(a, b) {
+  return PRODUCT_CATALOG_FIELDS.some((key) => {
+    const av = a?.[key]
+    const bv = b?.[key]
+    if (key === 'price' || key === 'minStock') return Number(av) !== Number(bv)
+    if (key === 'trackStock') return Boolean(av) !== Boolean(bv)
+    return String(av ?? '') !== String(bv ?? '')
+  })
+}
+
+/** Prefer local catalog edits during close-timestamp races with stock sync pulls. */
+export function resolveProductConflict(local, remote) {
+  const lt = ts(local)
+  const rt = ts(remote)
+  if (lt >= rt) return local
+  if (rt - lt < 5000 && productCatalogFieldsDiffer(local, remote)) {
+    return { ...remote, ...pickProductCatalogFields(local), updatedAt: local.updatedAt }
+  }
+  return remote
+}
+
+function pickProductCatalogFields(product) {
+  const picked = {}
+  for (const key of PRODUCT_CATALOG_FIELDS) {
+    if (product?.[key] !== undefined) picked[key] = product[key]
+  }
+  return picked
+}
+
+export function mergeProducts(local = [], remote = [], pendingDeleteIds = []) {
+  return mergeRecords(local, remote, pendingDeleteIds, resolveProductConflict)
+}
+
 const TERMINAL_KOI_STATUSES = new Set([KOI_STATUS.SOLD, KOI_STATUS.DECEASED])
 
 /** Prefer sold/deceased when timestamps tie — avoids cloud pull reverting a just-marked sale. */

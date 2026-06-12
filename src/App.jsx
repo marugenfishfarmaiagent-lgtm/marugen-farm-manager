@@ -70,7 +70,7 @@ import {
 import { isSupabaseConfigured } from "./lib/supabase";
 import * as auth from "./lib/auth";
 import { markDeleted, clearAllDeletions, peekDeletions } from "./lib/syncDeletions";
-import { mergeRecords, mergePondData, mergeInvoices, mergeKoiFish, mergeCustomerKoi, resolveInvoiceConflict } from "./lib/cloudMerge";
+import { mergeRecords, mergePondData, mergeInvoices, mergeProducts, mergeKoiFish, mergeCustomerKoi, resolveInvoiceConflict } from "./lib/cloudMerge";
 import {
   countIncomingTeamChanges,
   TEAM_SYNC_EVENT_THROTTLE_MS,
@@ -874,7 +874,7 @@ function Dashboard({
 // ─────────────────────────────────────────────
 const EMPTY_PRODUCT_FORM = { name: "", category: "Fish Food", sku: "", price: "", unit: "kg", stock: "", minStock: "", description: "", trackStock: true };
 
-function InventoryModule({ products, setProducts, stockLog, setStockLog, invoices = [], addNotification, currentUser }) {
+function InventoryModule({ products, setProducts, stockLog, setStockLog, invoices = [], addNotification, currentUser, onProductsSaved }) {
   const canEdit = canEditRecords(currentUser);
   const canDelete = canDeleteRecords(currentUser);
   const [tab, setTab] = useState("stock");
@@ -961,16 +961,21 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
+    const current = products.find((p) => sameProductId(p.id, editProduct.id));
     const catalogOnly = editProduct.trackStock === false;
     const check = validateProductFields(editProduct, { catalogOnly });
     if (!check.ok) {
       addNotification({ type: "error", title: "Invalid Product", message: check.message });
       return;
     }
-    const prevName = products.find((p) => sameProductId(p.id, editProduct.id))?.name;
     const normalized = normalizeProductRecord(editProduct, { catalogOnly });
-    const updated = touchUpdatedAt({ ...editProduct, ...normalized });
-    setProducts((prev) => prev.map((p) => (sameProductId(p.id, updated.id) ? updated : p)));
+    const base = current
+      ? { ...current, ...normalized, id: current.id }
+      : { ...editProduct, ...normalized };
+    const updated = touchUpdatedAt(base);
+    const prevName = current?.name;
+    const nextProducts = products.map((p) => (sameProductId(p.id, updated.id) ? updated : p));
+    setProducts(nextProducts);
     if (prevName && prevName !== updated.name) {
       setStockLog((prev) => prev.map((l) => (
         sameProductId(l.productId, updated.id) ? { ...l, productName: updated.name } : l
@@ -978,6 +983,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     }
     addNotification({ type: "success", title: "Product Updated", message: `${updated.name} saved` });
     setEditProduct(null);
+    onProductsSaved?.(nextProducts);
   };
 
   const confirmDeleteProduct = () => {
@@ -1359,7 +1365,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
         <Textarea label="Note (optional)" value={useNote} onChange={e => setUseNote(e.target.value)} rows={2} className="mb-4" />
         <div className="flex justify-end gap-2">
           <Btn variant="secondary" onClick={() => setShowUse(null)}>Cancel</Btn>
-          <Btn onClick={() => confirmUseStock(showUse)} disabled={parseStockQty(useQty) <= 0 || parseStockQty(useQty) > (showUse?.stock || 0)}><Archive size={14} />Confirm Use</Btn>
+          <Btn onClick={() => confirmUseStock(showUse)} disabled={parseStockQty(useQty) <= 0}><Archive size={14} />Confirm Use</Btn>
         </div>
       </Modal>
 
@@ -1384,7 +1390,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
         </div>
         <div className="flex justify-end gap-2">
           <Btn variant="secondary" onClick={() => setShowSell(null)}>Cancel</Btn>
-          <Btn variant="success" onClick={() => sellStock(showSell)} disabled={parseStockQty(sellQty) <= 0 || parseStockQty(sellQty) > (showSell?.stock || 0)}><ShoppingBag size={14} />Confirm Sale</Btn>
+          <Btn variant="success" onClick={() => sellStock(showSell)} disabled={parseStockQty(sellQty) <= 0}><ShoppingBag size={14} />Confirm Sale</Btn>
         </div>
       </Modal>
     </div>
@@ -5813,7 +5819,7 @@ export default function App() {
     setUsers(cleaned.users || data.users);
     if (merge) {
       setCustomers((prev) => mergeRecords(prev, cleaned.customers, peekDeletions("customers")));
-      setProducts((prev) => mergeRecords(prev, cleaned.products, peekDeletions("products")));
+      setProducts((prev) => mergeProducts(prev, cleaned.products, peekDeletions("products")));
       setInvoices((prev) => applyInvoicePins(mergeInvoices(prev, cleaned.invoices, peekDeletions("invoices"))));
       setExpenses((prev) => mergeRecords(prev, cleaned.expenses, peekDeletions("expenses")));
       setDeliveries((prev) => mergeRecords(prev, cleaned.deliveries, peekDeletions("deliveries")));
@@ -6057,6 +6063,28 @@ export default function App() {
     syncInFlightRef.current += 1;
     try {
       await Promise.all(tasks.map((e) => e.sync(syncStateRef.current[e.key])));
+      resetSyncHealth();
+      touchLastSync();
+    } catch (err) {
+      handleSyncFailure(err);
+    } finally {
+      syncInFlightRef.current -= 1;
+    }
+  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
+
+  const flushProductSync = useCallback(async (productsOverride) => {
+    if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
+    if (!hasPermission(currentUser, "inventory")) return;
+    if (!(await ensureCloudSyncReady())) return;
+    const productKey = "inventory:Inventory";
+    if (syncTimersRef.current[productKey]) {
+      clearTimeout(syncTimersRef.current[productKey]);
+      delete syncTimersRef.current[productKey];
+    }
+    const payload = productsOverride ?? syncStateRef.current.products ?? [];
+    syncInFlightRef.current += 1;
+    try {
+      await db.syncProducts(payload);
       resetSyncHealth();
       touchLastSync();
     } catch (err) {
@@ -7061,7 +7089,7 @@ export default function App() {
           cloudStale={dashboardCloudStale}
         />
       ));
-      case "inventory": return guard("inventory", "Inventory", <InventoryModule products={products} setProducts={setProducts} stockLog={stockLog} setStockLog={setStockLog} invoices={invoices} addNotification={addNotification} currentUser={currentUser} />);
+      case "inventory": return guard("inventory", "Inventory", <InventoryModule products={products} setProducts={setProducts} stockLog={stockLog} setStockLog={setStockLog} invoices={invoices} addNotification={addNotification} currentUser={currentUser} onProductsSaved={flushProductSync} />);
       case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} />);
       case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondDataWithRef} addNotification={addNotification} currentUser={currentUser} users={users} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} onPersistPondData={syncPondDataNow} onSyncReminderCalendar={syncReminderCalendar} />);

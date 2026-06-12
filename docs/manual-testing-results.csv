@@ -1,0 +1,103 @@
+Module,Test ID,Status,Result,Notes
+Build,—,PASS,Production build succeeds (vite build),No compile errors
+Lint,—,FAIL,32 ESLint issues (23 errors),Code quality only — not runtime blockers
+Smoke (Production),auto,PASS,23/26 automated endpoint checks,health.json PWA edge functions OK
+Smoke (Production),#3,FAIL,Dashboard KPI grep pattern in repo,Script false-negative — KPIs work in browser
+Smoke (Production),#6,FAIL,Delivery workflow grep in repo,Script false-negative — Deliveries module loads
+Smoke (Production),#12-13,FAIL,AI chat history grep in repo,Script false-negative — chat works
+Global,1.1.1,PASS,All 12 nav modules open without crash,Desktop Chrome cloud session
+Global,1.2.1,PASS,Supabase sync + Last synced indicator,Owner session
+Global,1.2.5,PARTIAL,Team sync notification (8 updates),Multi-device poll observed
+Global,1.3,PASS,Toast notifications work,Customer validation + team sync toasts
+Global,Console,PASS,Zero JS runtime errors during session,window error hook empty
+Auth & Setup,0.1-0.3,SKIP,Login / Setup / Change PIN,Session already active — not re-tested
+Dashboard,2.1,PASS,KPI cards show live data,Revenue S$9857 deliveries koi expenses
+Dashboard,2.4,PASS,Recent invoices list,5 invoices with status badges
+Dashboard,2.5,PASS,Click invoice → Invoices module,Navigation works
+Dashboard,2.7,PASS,Today schedule,2 events shown
+Dashboard,2.9,PASS,Koi summary,Available 0 Sold 2 In Pond 0
+Dashboard,2.10,PASS,Pending accounts,29 pending (28 inv + 1 receipt)
+Invoices,7.2.1,PASS,View invoice modal,Company info + customer + items
+Invoices,7.2.2,PASS,Download PDF triggered,Generating state — no error
+Invoices,7.3.1,PASS,Status + accounts filters visible,all/pending/paid filters present
+Invoices,7.3.2,SKIP,Export CSV,Not clicked this session
+Invoices,7.1.3,PASS,Product from inventory line,Mud Booster JPD014 auto-fill qty/price; stock validated
+Invoices,7.1.4,PASS,Koi taken away disposition,Default Taken away UI; historical taken-away koi invoices verified
+Invoices,7.1.5,PASS,Koi keep at farm,INV20260612-05 Kohaku Q12 → Customer Koi pond record created
+Invoices,7.1.8,PASS,Fixed S$5 discount,INV20260612-04 total S$42.00 (S$47 − S$5)
+Invoices,7.1.10,PASS,Insufficient stock blocked,Qty 99 Mud Booster → toast 10 bag available need 99
+Invoices,7.1.11,PASS,Same koi twice blocked,Fish dropdown disabled after first koi on invoice
+Invoices,7.2.4,PASS,WhatsApp prompt no phone,okok INV20260611-04 → number input + Send/Cancel (no WA redirect)
+Invoices,7.2.6,PASS,Cancel invoice INV20260612-04,Confirm modal → cancelled filter; status badge cancelled
+Invoices,7.2.5,SKIP,Mark paid,Not run this session
+Invoices,7.5.1,PASS,Product stock deduct on create,Mud Booster 10→9 after INV20260612-04 create (prior session)
+Invoices,7.5.2,BUG,Stock restore on cancel,Cancel restored +1 bag but Mud Booster 10→11 (expected 10); possible double-restore
+Invoices,7.6,PASS,Mobile invoice card layout,390×844: cards View/WA/PDF/Mark Paid + bottom nav + FAB
+Customers,8.1.4,PASS,Empty name validation,Invalid Customer toast
+Customers,8.1.1,PASS,Add customer QA Test Customer,Count 1→2 registered
+Customers,8.2,SKIP,Search tier filter postal lookup,Not fully exercised
+Customers,8.3,SKIP,WhatsApp button,Opens external app
+Inventory,3.1.1,PASS,Add stock-tracked product,QA Test Feed 500g SKU QA-INV-001 stock 5 minStock 2 S$15; KPI 31→32 products
+Inventory,3.1.2,PASS,Validation empty name,Toast Invalid Product — Enter product name
+Inventory,3.1.3,PASS,Search and category filter,Mud Booster + JPD014 single result; Water Treatment shows MRG only
+Inventory,3.1.4,PASS,Pagination 32 products,Page 1 JPD/MRG001; Next → page 2 MRG002–007 + QA product
+Inventory,3.1.5,FIXED,Edit product price persistence,saveEditProduct merges live product + immediate flushProductSync; mergeProducts resolveProductConflict for catalog fields
+Inventory,3.1.6,PASS,Delete unused product,QA Test Feed 500g deleted; search QA-INV-001 no match; KPI 32→31
+Inventory,3.1.7,PASS,Block delete on active invoice,2kg Mud Booster → Cannot Delete toast (on active invoice)
+Inventory,3.1.8,PASS,Use stock qty 1 + note,QA product stock 5→4; note QA pond feed
+Inventory,3.1.9,FIXED,Use insufficient qty toast,Confirm Use enabled for qty>stock; confirmUseStock shows Insufficient Stock toast (Sell modal same)
+Inventory,3.1.10,PASS,Sell stock qty 1 S$15,Sale Recorded toast; stock decreased
+Inventory,3.1.11,PASS,Restock +2 qty,Restocked toast; stock increased
+Inventory,3.1.12,PASS,Low stock warning,Use 3 → stock 2 (minStock 2); Low Stock toast; KPI low stock 0→1
+Inventory,3.2.1,PASS,Add price list catalog item,QA Catalog Item S$25; KPI price list 48→49; not in stock tab
+Inventory,3.2.2,PASS,Price item in invoice picker,New Invoice search QA Catalog → QA Catalog Item S$25 price list
+Inventory,3.3.1,PARTIAL,Activity log entries,Shows restock 5 Opening stock + use 3; sell/restock/note entries missing (sync race)
+Inventory,3.4.1,SKIP,Staff inventory read-only,Simon PIN 111111 tested prior session — no Add/Sell/Use/Restock
+Koi Fish,4.1,PASS,Module loads filters tabs,0 available 2 sold
+Koi Fish,4.3-4.6,SKIP,Sell transfer refund death,Not run — no available koi
+Customer Koi,5.1,SKIP,Module not opened this session,Navigate only via dashboard link
+Pond Mgmt,6.1,PASS,Ponds tab A1 water params,pH 7.5 NH3 0 tabs visible
+Pond Mgmt,6.2-6.5,SKIP,Calculator maintenance treatment reminder CRUD,Not run
+Expenses,9.1,PASS,Receipt grid loads 1 receipt,Filters + export button visible
+Expenses,9.1-9.2,SKIP,Upload camera view delete,Needs file/camera
+Deliveries,10.1,PASS,List + route view + maps buttons,1 scheduled delivery shown
+Deliveries,10.2,SKIP,Status workflow scheduled→delivered,Not run
+Calendar,11.1,PASS,Today upcoming past sections,Events with edit/delete
+Calendar,11.3,SKIP,Add edit delete event,Not run
+AI Chat,12.1.2,PASS,Myanmar question sent,Gemini tool calls returned data
+AI Chat,12.1.1,SKIP,Full English reply verification,Reply truncated in automation
+AI Chat,12.2,SKIP,AI action confirm (create customer),Not run
+AI Chat,12.1.4,SKIP,Photo attach,Needs image file
+Team,13.1,PASS,Team list 1 owner 1 staff,Edit/deactivate visible
+Team,13.3,SKIP,Backup export download,Not clicked
+Team,13.2,SKIP,Staff permission matrix,Needs staff PIN login
+Integration,14.1,SKIP,Full sale E2E flow,Not run
+Integration,14.5,SKIP,Offline edit then sync,Needs network toggle
+Responsive,15.1,PASS,Invoice list mobile cards,390×844 iPhone viewport — card UI + actions visible
+Responsive,15.2,SKIP,Android Safari Chrome,Not tested this session
+Responsive,15.3,SKIP,Mobile hamburger drawer,Desktop width only
+Push,1.4,SKIP,Push notification prompt,PWA permission
+WhatsApp,7.2.3,SKIP,Open WhatsApp with phone,External app — not opened
+Maps,10.3.2,SKIP,Google/Apple Maps open,External app
+Images,4.1.2,SKIP,Koi/expense/death photo upload,Needs camera/files
+Images,9.1.4,SKIP,4h signed URL refresh,Needs 4+ hour wait
+Accounting,7.4.1,SKIP,Mark invoice in accounts,Not clicked this session
+Accounting,7.4.2,PASS,Accounting perm denied (staff),Simon staff: no Mark Paid/Cancel; read-only invoice view (prior session)
+Refund,4.6,SKIP,Koi refund flow,No sold koi to refund in session
+Permissions,13.2,SKIP,Access denied for staff,Needs staff login
+Auth prod,16.1,SKIP,Production PIN login,Tested on localhost with session
+Staff (Simon PIN 111111),0.2.1,PASS,Login with staff PIN,Dashboard shows Welcome back Simon
+Staff (Simon PIN 111111),13.1,PASS,Team module hidden,No Team in sidebar; ?tab=users stays on Dashboard
+Staff (Simon PIN 111111),2.10,PASS,Pending Accounts card hidden,Dashboard has no owner accounting card
+Staff (Simon PIN 111111),8.4.1,PASS,No Add/Edit/Delete customer,Only View + WhatsApp on customer cards
+Staff (Simon PIN 111111),7.2.1,PASS,Invoice view read-only,WhatsApp + PDF only; no Mark Paid/Cancel
+Staff (Simon PIN 111111),7.1,PASS,New Invoice button visible,Staff can access invoice creation
+Staff (Simon PIN 111111),4.6.3,PASS,Refund button hidden,Sold koi cards show View only
+Staff (Simon PIN 111111),6.7.1,PASS,Pond edit hidden,No Add Pond / Edit / Delete on ponds
+Staff (Simon PIN 111111),11.3,PASS,Calendar read-only,No Add/Edit/Delete event buttons
+Staff (Simon PIN 111111),3.4.1,PASS,Inventory read-only,No Add Product / Sell / Use / Restock
+Staff (Simon PIN 111111),9.4.1,PASS,Expenses read-only,No Upload / Delete / Mark accounts
+Staff (Simon PIN 111111),10.1,PASS,No Schedule Delivery FAB,Deliveries list viewable
+Staff (Simon PIN 111111),10.2,PARTIAL,Delivery status buttons visible,transit/cancelled shown — verify if intentional for drivers
+Staff (Simon PIN 111111),4.1,BUG,Koi Add FAB not hidden,FAB opens modal without edit perm; save blocked (modal stays open)
+Staff (Simon PIN 111111),13.2,SKIP,Full permission matrix per toggle,Simon cloud permissions may differ from default staff
