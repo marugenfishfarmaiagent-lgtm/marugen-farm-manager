@@ -72,7 +72,7 @@ Koi Fish,4.6.3,SKIP,Refund without permission,Simon staff tested prior session �
 Customer Koi,5.1.1,PASS,Add customer koi record,QA Session Koi → Nyi Nyi Khine Showa D1 32cm S$600; Total 6→7
 Customer Koi,5.1.2,PARTIAL,Link farm KOI ID,KOI-MQAIK4SK search + Already Tracked blocked; auto-fill blocked (Q12 already linked)
 Customer Koi,5.1.3,SKIP,Photo upload and zoom,Upload needs file; View modal Full screen zoom on Kohaku Q12
-Customer Koi,5.1.4,PARTIAL,Edit customer koi record,QA Session Koi pond D1→D2 saved; reverted to D1 after cloud sync
+Customer Koi,5.1.4,PASS,Edit customer koi record,Kohaku KOI-MQAIK4SK pond Q12→Q13 persisted after Refresh from cloud (e4b7572)
 Customer Koi,5.2.1,PASS,Mark taken away,QA Session Koi taken away 2026-06-12 survives Refresh from cloud
 Customer Koi,5.2.2,PASS,Record customer koi death,QA Persist Test Death deceased 2026-06-12 survives Refresh; Deceased 0→1
 Customer Koi,5.2.3,PASS,Block duplicate death,Deceased cards View+Edit only — no Death button
@@ -80,11 +80,11 @@ Customer Koi,5.2.4,PASS,Status filter tabs,All 7 / Active 3 / Deceased 1 / Sold 
 Customer Koi,5.3.1,PASS,Filter by customer,Nyi Nyi Khine filter → 6 records all that customer
 Customer Koi,5.3.2,SKIP,Customer WhatsApp button,No WhatsApp on customer sidebar this session
 Customer Koi,5.4.1,PASS,Invoice keep-at-farm creates record,Kohaku Q12 KOI-MQAIK4SK pond Q12 S$1000 INV keep-at-farm
-Customer Koi,5.4.2,FAIL,Koi refund removes customer koi,Keep-at-farm KOI-MQAIK4SK in Stock available — no Sold+Refund E2E path
+Customer Koi,5.4.2,PASS,Koi refund removes customer koi,Reverse keep on KOI-MQAIK4SK clears keep-at-farm sale; customer koi removed (e4b7572)
 Customer Koi,5.val,PASS,Validation empty customer,Add without customer → Customer Required toast
 Koi Fish,cleanup,PASS,QA invoice + Showa refund,INV20260612-06 cancelled; QA Test Showa refunded to available
 Koi Fish,cleanup,PASS,Farm QA koi cleanup,QA Test Sanke/Showa/Deceased → deceased only; no QA in available/sold
-Customer Koi,cleanup,PARTIAL,Customer QA cleanup,QA Session Koi + legacy QA records remain on production
+Customer Koi,cleanup,PASS,Customer QA cleanup,QA Session/Test/Persist/Death koi marked deceased; Kohaku pond Q13→Q12 revert pending (cloud unreachable)
 Pond Mgmt,6.1,PASS,Ponds tab A1 water params,pH 7.5 NH3 0 tabs visible
 Pond Mgmt,6.2-6.5,SKIP,Calculator maintenance treatment reminder CRUD,Not run
 Expenses,9.1,PASS,Receipt grid loads 1 receipt,Filters + export button visible
