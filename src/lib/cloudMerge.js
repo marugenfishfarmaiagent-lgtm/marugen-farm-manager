@@ -1,5 +1,5 @@
 import { sortInvoices } from './invoiceDesign'
-import { KOI_STATUS } from '../data/constants'
+import { CUSTOMER_KOI_STATUS, KOI_STATUS } from '../data/constants'
 import { pickPersistedImageRef } from './farmImage'
 import { normalizeReminderRecord } from './pondOps'
 
@@ -117,6 +117,42 @@ function mergeImageFields(picked, other) {
   }
 }
 
+const TERMINAL_CUSTOMER_KOI_STATUSES = new Set([
+  CUSTOMER_KOI_STATUS.COLLECTED,
+  CUSTOMER_KOI_STATUS.DECEASED,
+])
+
+/** Prefer taken-away / deceased over in-pond when cloud pull races a fresh status change. */
+export function resolveCustomerKoiConflict(local, remote) {
+  const lt = ts(local)
+  const rt = ts(remote)
+  const ls = local?.status || CUSTOMER_KOI_STATUS.IN_POND
+  const rs = remote?.status || CUSTOMER_KOI_STATUS.IN_POND
+  if (TERMINAL_CUSTOMER_KOI_STATUSES.has(ls) && rs === CUSTOMER_KOI_STATUS.IN_POND) return local
+  if (TERMINAL_CUSTOMER_KOI_STATUSES.has(rs) && ls === CUSTOMER_KOI_STATUS.IN_POND) return remote
+  if (lt >= rt) return local
+  if (rt - lt < 5000 && ls !== rs) {
+    return {
+      ...remote,
+      status: local.status,
+      collectedDate: local.collectedDate,
+      deathDate: local.deathDate,
+      deathCause: local.deathCause,
+      deathNotes: local.deathNotes,
+      deathPhoto: local.deathPhoto,
+      pondName: local.pondName,
+      updatedAt: local.updatedAt,
+    }
+  }
+  return remote
+}
+
+function mergeCustomerKoiRow(local, remote) {
+  const picked = resolveCustomerKoiConflict(local, remote)
+  const other = picked === local ? remote : local
+  return mergeImageFields(picked, other)
+}
+
 export function mergeCustomerKoi(local = [], remote = [], pendingDeleteIds = []) {
   const delSet = new Set((pendingDeleteIds || []).map(String))
   const localMap = new Map((local || []).map((r) => [String(r.id), r]))
@@ -128,13 +164,8 @@ export function mergeCustomerKoi(local = [], remote = [], pendingDeleteIds = [])
     if (delSet.has(id)) continue
     const l = localMap.get(id)
     const r = remoteMap.get(id)
-    if (l && r) {
-      const picked = ts(l) >= ts(r) ? l : r
-      const other = picked === l ? r : l
-      merged.push(mergeImageFields(picked, other))
-    } else {
-      merged.push(l || r)
-    }
+    if (l && r) merged.push(mergeCustomerKoiRow(l, r))
+    else merged.push(l || r)
   }
   return merged
 }

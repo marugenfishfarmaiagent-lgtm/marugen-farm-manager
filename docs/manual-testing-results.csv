@@ -53,9 +53,35 @@ Inventory,3.2.1,PASS,Add price list catalog item,QA Catalog Item S$25; KPI price
 Inventory,3.2.2,PASS,Price item in invoice picker,New Invoice search QA Catalog → QA Catalog Item S$25 price list
 Inventory,3.3.1,PARTIAL,Activity log entries,Shows restock 5 Opening stock + use 3; sell/restock/note entries missing (sync race)
 Inventory,3.4.1,SKIP,Staff inventory read-only,Simon PIN 111111 tested prior session — no Add/Sell/Use/Restock
-Koi Fish,4.1,PASS,Module loads filters tabs,0 available 2 sold
-Koi Fish,4.3-4.6,SKIP,Sell transfer refund death,Not run — no available koi
-Customer Koi,5.1,SKIP,Module not opened this session,Navigate only via dashboard link
+Koi Fish,4.1.1,PASS,Add koi QA Test Sanke,Sanke 30cm B2 S$800; available count increased; koi card listed
+Koi Fish,4.1.2,SKIP,Large photo auto-compress,Requires large image file upload
+Koi Fish,4.1.3,PASS,Invalid size 0 rejected,Toast Invalid Koi; modal stayed open
+Koi Fish,4.1.4,PASS,Edit available/sick koi,Kohaku Q12 Edited S$1200 saved; sick→edit status→recover flow OK
+Koi Fish,4.1.5,PASS,Block edit sold/deceased,Sold cards show View+Refund only — UI hides Edit (toast path exists in code)
+Koi Fish,4.2.1,PASS,Status variety pond filters,Available/Sold/Sick/Deceased + Sanke + Pond B2 filters correct
+Koi Fish,4.2.2,PASS,Search name variety ID,Q12 Kohaku KOI-MQAIK4SK each return expected koi
+Koi Fish,4.3.1,PASS,Ship to different pond,Kohaku Q12 Edited Q12→B1 Pond Transfer toast
+Koi Fish,4.3.2,PASS,Same pond transfer blocked,Toast Same Pond — choose different pond
+Koi Fish,4.4.1,PASS,Mark koi sold taken away,QA Test Sanke sold to Nyi Nyi Khine; counts updated
+Koi Fish,4.4.2,PASS,Create invoice from sale,Invoices opened pre-filled; INV20260612-06 created for QA Test Showa
+Koi Fish,4.5.1,PASS,Record farm koi death,QA Test Deceased added then deceased in C1; deceased count 1
+Koi Fish,4.5.2,PASS,Block death on sold koi,Sold cards hide Death button — UI prevents action (toast path exists in code)
+Koi Fish,4.6.1,PASS,Refund sold koi,QA Test Sanke refunded; status back to available
+Koi Fish,4.6.2,PASS,Linked invoice warning on refund,QA Test Showa refund modal lists INV20260612-06 pending
+Koi Fish,4.6.3,SKIP,Refund without permission,Simon staff tested prior session — Refund hidden
+Customer Koi,5.1.1,PASS,Add customer koi record,QA Test Customer Koi → Nyi Nyi Khine Kohaku A3 S$500
+Customer Koi,5.1.2,PASS,Link farm KOI ID,KOI-MQAIK4SK search + duplicate Already Tracked blocked; KOI-MQAWNYVP auto-fill
+Customer Koi,5.1.3,SKIP,Photo upload and zoom,Requires image file
+Customer Koi,5.2.1,PARTIAL,Mark taken away,Taken away confirmed in-session; reverted after cloud refresh (sync race)
+Customer Koi,5.2.2,PARTIAL,Record customer koi death,Death recorded in-session; reverted after cloud refresh (sync race)
+Customer Koi,5.2.3,PASS,Block duplicate death,Deceased cards View+Edit only — no Death button
+Customer Koi,5.2.4,PASS,Status filter tabs,All/Active/Sold(collected)/Deceased counts correct in session
+Customer Koi,5.3.1,PASS,Filter by customer,QA Test Customer filter → QA Test Death Koi only
+Customer Koi,5.3.2,SKIP,Customer WhatsApp button,External app — not opened
+Customer Koi,5.4.1,PASS,Invoice keep-at-farm creates record,INV20260612-05 Kohaku Q12 Nyi Nyi Khine S$1000 in Customer Koi
+Customer Koi,5.4.2,PARTIAL,Koi refund removes customer koi,Showa refunded post-cancel; no linked customer koi to verify removal E2E
+Koi Fish,cleanup,PASS,QA invoice + Showa refund,INV20260612-06 cancelled; QA Test Showa refunded to available
+Koi Fish,cleanup,PARTIAL,Remaining QA farm koi,QA Test Sanke sold; QA Test Deceased available C1; QA customer koi records remain
 Pond Mgmt,6.1,PASS,Ponds tab A1 water params,pH 7.5 NH3 0 tabs visible
 Pond Mgmt,6.2-6.5,SKIP,Calculator maintenance treatment reminder CRUD,Not run
 Expenses,9.1,PASS,Receipt grid loads 1 receipt,Filters + export button visible

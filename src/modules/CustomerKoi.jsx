@@ -217,7 +217,7 @@ function statusDetail(rec) {
   return formatCustomerKoiStatus(rec.status)
 }
 
-export default function CustomerKoi({ records, setRecords, customers, farmKoiList, registeredPondNames = [], addNotification, canEdit = false }) {
+export default function CustomerKoi({ records, setRecords, customers, farmKoiList, registeredPondNames = [], addNotification, canEdit = false, onRecordsSaved }) {
   const refreshCustomerKoiImage = useCallback(async ({ entity, id, field }) => {
     if (!isSupabaseConfigured) return
     try {
@@ -324,6 +324,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       const nextList = [...records, rec]
       await persistCustomerKoiList(nextList)
       setRecords(nextList)
+      onRecordsSaved?.(nextList)
       addNotification({ type: 'success', title: 'Record Added', message: `${displayFishName(rec)} added for ${customer.name}` })
       setShowAdd(false)
       setForm(emptyRecord())
@@ -355,8 +356,10 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
         return
       }
     }
+    const current = records.find((r) => sameRecordId(r.id, editRec.id))
     const sizeCm = normalizeCustomerKoiSizeField(editRec.size)
     let updated = {
+      ...(current || editRec),
       ...editRec,
       fishName: editRec.fishName?.trim() || '',
       size: sizeCm,
@@ -389,6 +392,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       const nextList = records.map((r) => (sameRecordId(r.id, editRec.id) ? updated : r))
       await persistCustomerKoiList(nextList)
       setRecords(nextList)
+      onRecordsSaved?.(nextList)
       addNotification({ type: 'success', title: 'Updated', message: `${displayFishName(updated)} — ${formatCustomerKoiStatus(updated.status)}` })
       setEditRec(null)
     } catch (err) {
@@ -398,7 +402,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
     }
   }
 
-  const confirmCollect = () => {
+  const confirmCollect = async () => {
     if (!collectRec) return
     if (!canEdit) { denyEdit(); return }
     if (collectRec.status !== CUSTOMER_KOI_STATUS.IN_POND) {
@@ -413,13 +417,24 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       addNotification({ type: 'error', title: 'Date Required', message: 'Choose the taken away date.' })
       return
     }
-    setRecords((prev) => prev.map((r) => (
+    if (saving) return
+    const nextList = records.map((r) => (
       sameRecordId(r.id, collectRec.id)
         ? buildCollectedCustomerKoiPatch(r, collectDate)
         : r
-    )))
-    addNotification({ type: 'success', title: 'Marked Taken Away', message: `${displayFishName(collectRec)} — customer collected on ${collectDate}` })
-    setCollectRec(null)
+    ))
+    try {
+      setSaving(true)
+      await persistCustomerKoiList(nextList)
+      setRecords(nextList)
+      onRecordsSaved?.(nextList)
+      addNotification({ type: 'success', title: 'Marked Taken Away', message: `${displayFishName(collectRec)} — customer collected on ${collectDate}` })
+      setCollectRec(null)
+    } catch (err) {
+      addNotification({ type: 'error', title: 'Save Failed', message: err?.message || 'Could not save taken away status.' })
+    } finally {
+      setSaving(false)
+    }
   }
 
   const confirmDeath = async () => {
@@ -444,6 +459,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       const nextList = records.map((r) => (sameRecordId(r.id, deathRec.id) ? patch : r))
       await persistCustomerKoiList(nextList)
       setRecords(nextList)
+      onRecordsSaved?.(nextList)
       addNotification({ type: 'warning', title: 'Death Recorded', message: `${displayFishName(deathRec)} (${deathRec.customerName}) recorded deceased` })
       setDeathRec(null)
     } catch (err) {
@@ -743,7 +759,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
             <Input label="Taken away date" type="date" value={collectDate} onChange={(e) => setCollectDate(e.target.value)} required />
             <div className="flex justify-end gap-2">
               <Btn variant="secondary" onClick={() => setCollectRec(null)}>Cancel</Btn>
-              <Btn variant="success" onClick={confirmCollect}><PackageCheck size={14} />Confirm</Btn>
+              <Btn variant="success" onClick={confirmCollect} disabled={saving}><PackageCheck size={14} />{saving ? 'Saving…' : 'Confirm'}</Btn>
             </div>
           </div>
         )}
