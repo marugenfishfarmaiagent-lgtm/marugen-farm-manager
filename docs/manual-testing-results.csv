@@ -72,8 +72,8 @@ Koi Fish,4.6.3,SKIP,Refund without permission,Simon staff tested prior session �
 Customer Koi,5.1.1,PASS,Add customer koi record,QA Test Customer Koi → Nyi Nyi Khine Kohaku A3 S$500
 Customer Koi,5.1.2,PASS,Link farm KOI ID,KOI-MQAIK4SK search + duplicate Already Tracked blocked; KOI-MQAWNYVP auto-fill
 Customer Koi,5.1.3,SKIP,Photo upload and zoom,Requires image file
-Customer Koi,5.2.1,PARTIAL,Mark taken away,Taken away confirmed in-session; reverted after cloud refresh (sync race)
-Customer Koi,5.2.2,PARTIAL,Record customer koi death,Death recorded in-session; reverted after cloud refresh (sync race)
+Customer Koi,5.2.1,PASS,Mark taken away (retest e6b21ed),Kohaku Q12 taken away 2026-06-12 survives Refresh from cloud
+Customer Koi,5.2.2,PASS,Record customer koi death (retest e6b21ed),QA Persist Test Death deceased survives Refresh from cloud
 Customer Koi,5.2.3,PASS,Block duplicate death,Deceased cards View+Edit only — no Death button
 Customer Koi,5.2.4,PASS,Status filter tabs,All/Active/Sold(collected)/Deceased counts correct in session
 Customer Koi,5.3.1,PASS,Filter by customer,QA Test Customer filter → QA Test Death Koi only
@@ -81,7 +81,8 @@ Customer Koi,5.3.2,SKIP,Customer WhatsApp button,External app — not opened
 Customer Koi,5.4.1,PASS,Invoice keep-at-farm creates record,INV20260612-05 Kohaku Q12 Nyi Nyi Khine S$1000 in Customer Koi
 Customer Koi,5.4.2,PARTIAL,Koi refund removes customer koi,Showa refunded post-cancel; no linked customer koi to verify removal E2E
 Koi Fish,cleanup,PASS,QA invoice + Showa refund,INV20260612-06 cancelled; QA Test Showa refunded to available
-Koi Fish,cleanup,PARTIAL,Remaining QA farm koi,QA Test Sanke sold; QA Test Deceased available C1; QA customer koi records remain
+Koi Fish,cleanup,PASS,Farm QA koi cleanup,QA Test Sanke/Showa/Deceased → deceased only; no QA in available/sold
+Customer Koi,cleanup,PARTIAL,Customer QA cleanup,QA Test Customer Koi/Death Koi marked deceased in-session; cloud outage can revert — use Deceased filter
 Pond Mgmt,6.1,PASS,Ponds tab A1 water params,pH 7.5 NH3 0 tabs visible
 Pond Mgmt,6.2-6.5,SKIP,Calculator maintenance treatment reminder CRUD,Not run
 Expenses,9.1,PASS,Receipt grid loads 1 receipt,Filters + export button visible
