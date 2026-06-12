@@ -217,16 +217,24 @@ function reminderIsDone(row) {
   return String(row.status || 'pending').toLowerCase() === 'done'
 }
 
+const POND_RECORD_MERGE_GRACE_MS = 15000
+
 function mergePondRecords(local = [], remote = [], { preferDone = false } = {}) {
   const map = new Map()
   const pick = (a, b) => {
+    if (!a) return b
+    if (!b) return a
     if (preferDone) {
       const aDone = reminderIsDone(a)
       const bDone = reminderIsDone(b)
       if (aDone && !bDone) return a
       if (bDone && !aDone) return b
     }
-    return ts(a) >= ts(b) ? a : b
+    const lt = ts(a)
+    const rt = ts(b)
+    if (lt >= rt) return a
+    if (rt - lt < POND_RECORD_MERGE_GRACE_MS) return a
+    return b
   }
 
   for (const row of remote || []) {
