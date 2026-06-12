@@ -6169,8 +6169,13 @@ export default function App() {
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
   const flushExpenseSync = useCallback(async (expensesOverride) => {
-    if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
-    if (!hasPermission(currentUser, "expenses")) return;
+    if (!isSupabaseConfigured) return;
+    if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
+      throw new Error("Cloud sync is not ready.");
+    }
+    if (!hasPermission(currentUser, "expenses")) {
+      throw new Error("Permission denied (expenses).");
+    }
     if (!(await ensureCloudSyncReady())) {
       throw new Error("Session needs refresh. Log out and log in again.");
     }
@@ -6179,8 +6184,10 @@ export default function App() {
       clearTimeout(syncTimersRef.current[syncKey]);
       delete syncTimersRef.current[syncKey];
     }
-    const payload = expensesOverride ?? syncStateRef.current.expenses ?? [];
+    const raw = expensesOverride ?? syncStateRef.current.expenses ?? [];
+    const payload = raw.map((e) => touchUpdatedAt(e));
     syncStateRef.current = { ...syncStateRef.current, expenses: payload };
+    setExpensesWithRef(payload);
     syncInFlightRef.current += 1;
     try {
       await db.syncExpenses(payload);
@@ -6192,7 +6199,7 @@ export default function App() {
     } finally {
       syncInFlightRef.current -= 1;
     }
-  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
+  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth, setExpensesWithRef]);
 
   const flushKoiFishSync = useCallback(async (koiOverride) => {
     if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
