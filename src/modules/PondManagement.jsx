@@ -344,21 +344,26 @@ export default function PondManagement({
       status: 'pending',
       assignedUserIds: remindForm.assignedUserIds,
     }))
-    let nextPond = null
-    setPondData((prev) => {
-      nextPond = touchPondData({
-        ...prev,
-        reminders: [...(prev.reminders || []), newReminder],
-      })
-      return nextPond
-    })
     setRemindModal(null)
     savingReminderRef.current = true
     setSavingReminder(true)
     try {
-      await onPersistPondData?.(nextPond)
-      await onSyncReminderCalendar?.('upsert', newReminder)
+      const saved = await commitPondData((prev) => touchPondData({
+        ...prev,
+        reminders: [...(prev.reminders || []), newReminder],
+      }))
+      if (!saved) return
+
       const reminderMsg = `${reminderDisplayLines(newReminder).title} · ${newReminder.dueDate}`
+      try {
+        await onSyncReminderCalendar?.('upsert', newReminder)
+      } catch {
+        addNotification({
+          type: 'warning',
+          title: 'Calendar sync skipped',
+          message: 'Reminder saved to pond data; calendar could not be updated.',
+        })
+      }
       addNotification({
         type: 'success',
         title: 'Reminder Set',
@@ -375,21 +380,6 @@ export default function PondManagement({
           actorRole: currentUser?.role,
         })
       }
-    } catch {
-      setPondData((prev) => touchPondData({
-        ...prev,
-        reminders: (prev.reminders || []).filter((x) => String(x.id) !== String(newReminder.id)),
-      }))
-      try {
-        await onSyncReminderCalendar?.('remove', { id: newReminder.id })
-      } catch {
-        // Local calendar row already reverted above when pond rollback runs.
-      }
-      addNotification({
-        type: 'error',
-        title: 'Save failed',
-        message: 'Reminder could not be saved to cloud. Try again.',
-      })
     } finally {
       savingReminderRef.current = false
       setSavingReminder(false)

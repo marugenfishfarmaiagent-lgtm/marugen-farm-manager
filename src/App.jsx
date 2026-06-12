@@ -6192,6 +6192,7 @@ export default function App() {
           throw new Error("Could not save pond reminder — cloud data was newer. Refresh and try again.");
         }
 
+        setPondDataWithRef(payload);
         resetSyncHealth();
         touchLastSync();
       } catch (err) {
