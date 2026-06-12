@@ -1,7 +1,8 @@
 import { useMemo, useRef, useState } from 'react'
 import {
-  Droplets, AlertTriangle, Beaker, Bell, BookOpen, Trash2, Check, Edit2, Calculator,
+  Droplets, AlertTriangle, Beaker, Bell, BookOpen, Trash2, Check, Edit2, Calculator, MessageSquare,
 } from 'lucide-react'
+import { shareTreatmentGuideOnWhatsApp } from '../lib/pondWhatsApp'
 import PondCalculator from './PondCalculator'
 import {
   POND_TYPES, MAINTENANCE_TYPES, DEFAULT_TREATMENT_GUIDES, genId, today,
@@ -394,6 +395,15 @@ export default function PondManagement({
     addNotification({ type: 'info', title: 'Guide Removed', message: 'Treatment guide deleted.' })
   }
 
+  const shareGuideOnWhatsApp = (guide) => {
+    try {
+      shareTreatmentGuideOnWhatsApp(guide)
+      addNotification({ type: 'success', title: 'WhatsApp Opened', message: 'Choose a chat or group, then send the guide.' })
+    } catch (err) {
+      addNotification({ type: 'error', title: 'WhatsApp Failed', message: err?.message || 'Could not open WhatsApp.' })
+    }
+  }
+
   const filteredLogs = visiblePond.maintenanceLogs.filter((l) => pondFilter === 'all' || samePondId(l.pondId, pondFilter))
 
   const openNewMaint = () => {
@@ -683,12 +693,13 @@ export default function PondManagement({
                   <p className="text-slate-300 text-sm mt-2 whitespace-pre-wrap">{g.steps}</p>
                   {g.warning && <p className="text-amber-400 text-xs mt-2">⚠ {g.warning}</p>}
                 </div>
-                {(canEdit || canDelete) && (
-                  <div className="flex flex-col gap-1 shrink-0">
-                    {canEdit && <Btn variant="ghost" size="sm" onClick={() => openEditGuide(g)}><Edit2 size={12} /></Btn>}
-                    {canDelete && <Btn variant="danger" size="sm" onClick={() => deleteGuide(g.id)}><Trash2 size={12} /></Btn>}
-                  </div>
-                )}
+                <div className="flex flex-col gap-1 shrink-0">
+                  <Btn variant="success" size="sm" onClick={() => shareGuideOnWhatsApp(g)} title="Share on WhatsApp">
+                    <MessageSquare size={12} />
+                  </Btn>
+                  {canEdit && <Btn variant="ghost" size="sm" onClick={() => openEditGuide(g)}><Edit2 size={12} /></Btn>}
+                  {canDelete && <Btn variant="danger" size="sm" onClick={() => deleteGuide(g.id)}><Trash2 size={12} /></Btn>}
+                </div>
               </div>
             </Card>
           ))}
