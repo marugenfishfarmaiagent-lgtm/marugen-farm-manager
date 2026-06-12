@@ -325,6 +325,20 @@ export function toAppUser(user) {
   }
 }
 
+/** Merge profile fields into the stored session user (permissions, role, etc.). */
+export function patchSessionUser(patch) {
+  const session = getSession()
+  if (!session?.user || !patch) return
+  setSession({
+    ...(session.token ? { token: session.token } : {}),
+    user: {
+      ...session.user,
+      ...patch,
+      active: patch.active !== false,
+    },
+  })
+}
+
 export function isSessionExpiredError(message) {
   return typeof message === 'string' && /session expired|login again|unauthorized/i.test(message)
 }

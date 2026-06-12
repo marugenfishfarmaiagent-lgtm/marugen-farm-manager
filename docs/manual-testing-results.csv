@@ -154,9 +154,16 @@ AI Chat,12.2.3,PASS,Cancel AI action confirm,"Delete QA CRM Session → Confirm 
 AI Chat,12.3.1,PASS,Chat unavailable without Supabase,"Fix: send no longer disabled when offline; ?chatSimulate=unavailable → AI Chat Unavailable toast"
 AI Chat,12.3.2,PASS,Retry after network error,"Fix: retryable flag explicit; ?chatSimulate=retry → banner + Retry resends successfully"
 AI Chat,cleanup,PASS,QA artifacts noted,"QA AI Chat Customer Jun12 remains in Customers; QA Test Sanke refunded to available stock"
-Team,13.1,PASS,Team list 1 owner 1 staff,Edit/deactivate visible
-Team,13.3,SKIP,Backup export download,Not clicked
-Team,13.2,SKIP,Staff permission matrix,Needs staff PIN login
+Team,13.1.1,PASS,Add staff user,QA Team Staff Jun12 PIN 999888 default perms; staff 2→3 active 3→4; PIN login → Welcome back QA Team Staff Jun12
+Team,13.1.2,PASS,Duplicate PIN blocked,Add user with Simon PIN 111111 → PIN already in use; staff count unchanged modal open
+Team,13.1.3,PASS,Edit permissions,Fix: update_user revokes sessions; cloud pull syncs currentUser+session; role change no longer resets perms on re-render; saved permissions persist on re-login
+Team,13.1.4,PASS,Deactivate user,Owner UI: Inactive badge Active 4→3 Activate button; API: inactive PIN 999888 → Incorrect PIN or account inactive
+Team,13.1.5,PASS,Cannot delete/deactivate self or last owner,Self-deactivate toast; system owner demote blocked; no Delete on isSystem owner card
+Team,13.2.1,PARTIAL,Staff permission matrix,QA staff: Customers hidden; Invoices New Invoice + edit visible (edit perm on); Team+Add User visible (users perm on)
+Team,13.3.1,PARTIAL,Owner backup export,Export now → Exporting…; sanitizeUsersForBackup() strips PINs; download success toast not captured
+Team,13.3.2,PARTIAL,Refresh cloud and export,Refresh cloud & export → Exporting…; completion toast not captured in snapshot
+Team,13.3.3,PASS,Staff cannot see backup panel,Simon 111111: no Team nav; QA with users perm: Team page OK but no Data backup export panel (owner-only)
+Team,cleanup,PARTIAL,QA user cleanup,QA Team Staff Jun12 (id 5) left inactive after 13.1.4 — owner should delete on next login
 Integration,14.1,SKIP,Full sale E2E flow,Not run
 Integration,14.5,SKIP,Offline edit then sync,Needs network toggle
 Responsive,15.1,PASS,Invoice list mobile cards,390×844 iPhone viewport — card UI + actions visible

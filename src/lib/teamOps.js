@@ -126,6 +126,23 @@ export function defaultPermissionsForRole(role) {
   return [...(DEFAULT_PERMISSIONS[role === 'owner' ? 'owner' : 'staff'] || DEFAULT_PERMISSIONS.staff)]
 }
 
+export function permissionsEqual(a, b) {
+  const left = sanitizePermissions(a).sort()
+  const right = sanitizePermissions(b).sort()
+  return left.length === right.length && left.every((perm, index) => perm === right[index])
+}
+
+/** True when name, role, active, or permissions differ after normalization. */
+export function userProfileChanged(current, remote) {
+  const left = normalizeUserRecord(current)
+  const right = normalizeUserRecord(remote)
+  if (!left || !right) return false
+  return left.name !== right.name
+    || left.role !== right.role
+    || left.active !== right.active
+    || !permissionsEqual(left.permissions, right.permissions)
+}
+
 export function userInitial(name) {
   const ch = String(name || '').trim()[0]
   return ch ? ch.toUpperCase() : '?'

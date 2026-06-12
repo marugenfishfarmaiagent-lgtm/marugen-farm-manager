@@ -141,12 +141,26 @@ function normId(id: unknown): string {
   return String(id);
 }
 
-async function deleteFarmUsers(db: ReturnType<typeof adminClient>, userIds: (string | number)[]) {
+async function revokeUserSessions(db: ReturnType<typeof adminClient>, userIds: (string | number)[]) {
   if (!userIds.length) return;
   await db.from("auth_sessions").delete().in("user_id", userIds);
+}
+
+async function deleteFarmUsers(db: ReturnType<typeof adminClient>, userIds: (string | number)[]) {
+  if (!userIds.length) return;
+  await revokeUserSessions(db, userIds);
   await db.from("ai_usage_daily").delete().in("user_id", userIds);
   const { error } = await db.from("farm_users").delete().in("id", userIds);
   if (error) throw error;
+}
+
+function farmPermissionsEqual(a: unknown, b: unknown): boolean {
+  const left = sanitizeFarmPermissions(a) || [];
+  const right = sanitizeFarmPermissions(b) || [];
+  if (left.length !== right.length) return false;
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return sortedLeft.every((perm, index) => perm === sortedRight[index]);
 }
 
 async function upsertSync(
@@ -1276,26 +1290,38 @@ Deno.serve(async (req) => {
       if (!cleanPermissions) return J({ error: "At least one valid permission required" }, 400);
       if (!["owner", "staff"].includes(role)) return J({ error: "Invalid role" }, 400);
 
+      const nextActive = active !== false;
+      if (Number(userId) === user.id && !nextActive) {
+        return J({ error: "You cannot deactivate your own account" }, 400);
+      }
+
       const { data: target, error: fetchErr } = await db.from("farm_users")
-        .select("id, role, active, is_system")
+        .select("id, role, active, is_system, permissions")
         .eq("id", userId)
         .maybeSingle();
       if (fetchErr || !target) return J({ error: "User not found" }, 404);
 
       const ownerErr = await assertOwnerGuardrails(db, target, {
         role,
-        active: active !== false,
+        active: nextActive,
         permissions: cleanPermissions,
       });
       if (ownerErr) return J({ error: ownerErr }, 400);
 
+      const pinChanging = Boolean(pin && isValidFarmPin(pin));
+      const profileChanged = String(name).trim() !== String(target.name ?? "").trim()
+        || role !== target.role
+        || nextActive !== (target.active !== false)
+        || !farmPermissionsEqual(target.permissions, cleanPermissions)
+        || pinChanging;
+
       const row: Record<string, unknown> = {
         name: String(name).trim(),
         role,
-        active: active !== false,
+        active: nextActive,
         permissions: cleanPermissions,
       };
-      if (pin && isValidFarmPin(pin)) {
+      if (pinChanging) {
         if (await isPinTaken(db, String(pin), Number(userId))) {
           return J({ error: "PIN already in use" }, 400);
         }
@@ -1308,6 +1334,10 @@ Deno.serve(async (req) => {
         .select("id, name, role, active, permissions, is_system")
         .single();
       if (error) return J({ error: error.message }, 500);
+
+      if (profileChanged) {
+        await revokeUserSessions(db, [userId]);
+      }
 
       return J({ ok: true, user: mapUsers([updated])[0] });
     }

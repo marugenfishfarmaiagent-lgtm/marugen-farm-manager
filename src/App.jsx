@@ -54,8 +54,8 @@ import {
   sanitizeStoredChatMessages, slimChatMessageForStorage, validateChatOutgoingMessage,
 } from "./lib/chatOps";
 import {
-  defaultPermissionsForRole, getUserDeactivateBlockReason, getUserDeleteBlockReason,
-  sameUserId, userInitial, validateUserFields,
+  defaultPermissionsForRole, getUserDeactivateBlockReason, getUserDeleteBlockReason, userProfileChanged,
+  normalizeUserRecord, sameUserId, userInitial, validateUserFields,
 } from "./lib/teamOps";
 import {
   findLocalUserByPin, sanitizePinInput, validateChangePinForm,
@@ -5016,8 +5016,12 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
     }));
   };
 
-  const applyRoleDefaults = (role) => {
-    setForm((f) => ({ ...f, role, permissions: defaultPermissionsForRole(role) }));
+  const handleRoleChange = (e) => {
+    const role = e.target.value;
+    setForm((f) => {
+      if (f.role === role) return f;
+      return { ...f, role, permissions: defaultPermissionsForRole(role) };
+    });
   };
 
   const saveUser = async () => {
@@ -5055,9 +5059,15 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
             permissions: validated.permissions,
             active: validated.active,
           });
-          const refreshed = await db.fetchUsers();
-          if (refreshed) setUsers(refreshed);
-          else if (saved) setUsers((prev) => prev.map((u) => (sameUserId(u.id, saved.id) ? saved : u)));
+          if (saved) {
+            setUsers((prev) => prev.map((u) => (sameUserId(u.id, saved.id) ? { ...u, ...saved } : u)));
+          }
+          try {
+            const refreshed = await db.fetchUsers();
+            if (refreshed?.length) setUsers(refreshed);
+          } catch {
+            /* keep saved row */
+          }
           if (sameUserId(editUser.id, currentUser.id) && onCurrentUserUpdate) {
             onCurrentUserUpdate({
               name: validated.name,
@@ -5066,7 +5076,10 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
               active: validated.active,
             });
           }
-          const msg = validated.pinChanging ? `${validated.name} updated (PIN changed).` : `${validated.name} saved.`;
+          const sessionsRevoked = !sameUserId(editUser.id, currentUser.id);
+          const msg = validated.pinChanging
+            ? `${validated.name} updated (PIN changed).${sessionsRevoked ? " They must log in again." : ""}`
+            : `${validated.name} saved.${sessionsRevoked ? " They must log in again." : ""}`;
           addNotification({ type: "success", title: "User Updated", message: msg });
         } else {
           await db.addUser({
@@ -5285,7 +5298,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="Full Name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required className="sm:col-span-2" />
-            <Select label="Role" value={form.role} onChange={e => applyRoleDefaults(e.target.value)} options={[{ value: "owner", label: "Owner" }, { value: "staff", label: "Staff" }]} />
+            <Select label="Role" value={form.role} onChange={handleRoleChange} options={[{ value: "owner", label: "Owner" }, { value: "staff", label: "Staff" }]} />
             <div>
               <Input
                 label={editUser ? "New PIN (optional)" : "PIN (4 digits)"}
@@ -6165,7 +6178,39 @@ export default function App() {
     });
 
     const merge = mode === "merge";
-    setUsers(cleaned.users || data.users);
+    const cloudUsers = cleaned.users || data.users || [];
+    setUsers(cloudUsers);
+
+    const me = currentUserRef.current;
+    if (me) {
+      const myRow = cloudUsers.find((u) => sameUserId(u.id, me.id));
+      if (myRow) {
+        if (myRow.active === false) {
+          auth.clearSession();
+          setCurrentUser(null);
+        } else if (userProfileChanged(me, myRow)) {
+          const normalized = normalizeUserRecord(myRow);
+          setCurrentUser((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              name: normalized.name,
+              role: normalized.role,
+              permissions: normalized.permissions,
+              active: normalized.active,
+              displayName: normalized.role === "owner" ? `🐟 ${normalized.name}` : `👤 ${normalized.name}`,
+            };
+          });
+          auth.patchSessionUser({
+            name: normalized.name,
+            role: normalized.role,
+            permissions: normalized.permissions,
+            active: normalized.active,
+          });
+        }
+      }
+    }
+
     if (merge) {
       setCustomers((prev) => mergeRecords(prev, cleaned.customers, peekDeletions("customers")));
       setProducts((prev) => mergeProducts(prev, cleaned.products, peekDeletions("products")));
@@ -7533,24 +7578,21 @@ export default function App() {
       if (!prev) return prev;
       const role = updatedFields.role ?? prev.role;
       const name = updatedFields.name ?? prev.name;
+      const permissions = updatedFields.permissions ?? prev.permissions;
+      const active = updatedFields.active !== false;
       const next = {
         ...prev,
         ...updatedFields,
+        permissions,
+        active,
         displayName: role === "owner" ? `🐟 ${name}` : `👤 ${name}`,
       };
-      const session = auth.getSession();
-      if (session?.user) {
-        auth.setSession({
-          ...(session.token ? { token: session.token } : {}),
-          user: {
-            ...session.user,
-            name: next.name,
-            role: next.role,
-            permissions: next.permissions,
-            active: next.active !== false,
-          },
-        });
-      }
+      auth.patchSessionUser({
+        name: next.name,
+        role: next.role,
+        permissions: next.permissions,
+        active: next.active,
+      });
       return next;
     });
   };
