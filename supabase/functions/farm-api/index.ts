@@ -34,6 +34,7 @@ import {
   type SessionUser,
   validateSession,
 } from "../_shared/supabase.ts";
+import { lookupSingaporePostalAddress } from "../_shared/sgPostalLookup.ts";
 import {
   getVapidPublicKey,
   isPushConfigured,
@@ -450,6 +451,21 @@ Deno.serve(async (req) => {
         whatsappGroups: permittedRows(user, "deliveries", whatsappGroups.data || []),
         teamNotifications: teamNotificationsRows.filter((row) => isTeamNotificationForUser(row, user)),
       });
+    }
+
+    if (body.action === "lookup_postal") {
+      const code = String(body.postalCode ?? "").replace(/\D/g, "").slice(0, 6);
+      if (code.length !== 6) {
+        return J({ error: "Singapore postal code must be 6 digits" }, 400);
+      }
+      try {
+        const result = await lookupSingaporePostalAddress(code);
+        if (!result) return J({ ok: false, address: null, postalCode: code });
+        return J({ ok: true, address: result.address, postalCode: result.postalCode });
+      } catch (lookupErr) {
+        console.error("[farm-api] lookup_postal failed:", lookupErr);
+        return J({ ok: false, address: null, postalCode: code });
+      }
     }
 
     if (body.action === "upload_expense_receipt") {

@@ -33,10 +33,18 @@ Invoices,7.2.5,SKIP,Mark paid,Not run this session
 Invoices,7.5.1,PASS,Product stock deduct on create,Mud Booster 10→9 after INV20260612-04 create (prior session)
 Invoices,7.5.2,BUG,Stock restore on cancel,Cancel restored +1 bag but Mud Booster 10→11 (expected 10); possible double-restore
 Invoices,7.6,PASS,Mobile invoice card layout,390×844: cards View/WA/PDF/Mark Paid + bottom nav + FAB
-Customers,8.1.4,PASS,Empty name validation,Invalid Customer toast
-Customers,8.1.1,PASS,Add customer QA Test Customer,Count 1→2 registered
-Customers,8.2,SKIP,Search tier filter postal lookup,Not fully exercised
-Customers,8.3,SKIP,WhatsApp button,Opens external app
+Customers,8.1.1,PASS,Add customer full fields,QA CRM Session +65 91234567 postal 238801 Koi/Arowana notes; count 2→3
+Customers,8.1.2,PASS,SG postal auto-lookup,OneMap API — 520123→Blk 123 Simei St 1; 238801→Blk 2 Orchard Turn (post-fix)
+Customers,8.1.3,PASS,Manual address after lookup,Blk 123 #12-34 Orchard Road kept when API failed
+Customers,8.1.4,PASS,Duplicate name warning,QA Test Customer → Duplicate Name toast; empty name → Invalid Customer (prior)
+Customers,8.1.5,PASS,Edit propagates to invoices,Address edit → INV20260612-06 shows Blk 1 #01-01 QA Propagation Test St
+Customers,8.1.6,PASS,Delete customer,QA CRM Session confirm → removed; count 3→2
+Customers,8.1.view,PASS,View customer modal,WhatsApp/postal/address/tier/spent/fish types/notes + message preview
+Customers,8.1.delete-warn,PASS,Delete warnings linked records,Nyi Nyi delete shows open invoice + delivery + spending warnings
+Customers,8.2.1,PASS,Search and tier filter,Search CRM → 1 result; Silver → Nyi Nyi only; Platinum → empty state
+Customers,8.2.2,PASS,Tier from paid invoices,Nyi Nyi Khine Silver badge S$3956.00 spent (edit modal + card)
+Customers,8.3.1,PASS,WhatsApp from card,Opens api.whatsapp.com with prefilled Marugen greeting message
+Customers,cleanup,PASS,QA customer cleanup,QA CRM Session deleted after test; production 2 customers remain
 Inventory,3.1.1,PASS,Add stock-tracked product,QA Test Feed 500g SKU QA-INV-001 stock 5 minStock 2 S$15; KPI 31→32 products
 Inventory,3.1.2,PASS,Validation empty name,Toast Invalid Product — Enter product name
 Inventory,3.1.3,PASS,Search and category filter,Mud Booster + JPD014 single result; Water Treatment shows MRG only
