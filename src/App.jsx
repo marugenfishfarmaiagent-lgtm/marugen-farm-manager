@@ -29,7 +29,7 @@ import { downloadInvoicePdf } from "./lib/generateInvoicePdf";
 import { calcInvoiceAmounts, sortInvoices } from './lib/invoiceDesign';
 import { computeDashboardMetrics, dashboardInvoiceTotal } from './lib/dashboardMetrics';
 import { compressReceiptImage, expenseImageSrc } from "./lib/compressImage";
-import { persistCustomerKoiList, persistExpenseList } from "./lib/imageUploadOps";
+import { persistCustomerKoiList } from "./lib/imageUploadOps";
 import {
   normalizeCustomerKoiForCache,
   normalizeKoiFishForCache,
@@ -2844,8 +2844,9 @@ function CustomerModule({
 // ─────────────────────────────────────────────
 // EXPENSE RECEIPTS (image records for external accounting)
 // ─────────────────────────────────────────────
-function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) {
+function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, onPersistExpenses }) {
   const canEdit = canEditRecords(currentUser);
+  const savingExpenseRef = useRef(false);
   const [showAdd, setShowAdd] = useState(false);
   const [viewExpenseId, setViewExpenseId] = useState(null);
   const [bookedFilter, setBookedFilter] = useState("all");
@@ -2862,6 +2863,41 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
   const [uploading, setUploading] = useState(false);
   const albumInputRef = useRef(null);
   const cameraInputRef = useRef(null);
+
+  const commitExpenseList = async (buildNext) => {
+    if (savingExpenseRef.current) return null;
+    let nextList = null;
+    let snapshot = null;
+    let unchanged = false;
+    setExpenses((prev) => {
+      snapshot = prev;
+      const built = buildNext(prev);
+      if (built === prev) {
+        unchanged = true;
+        return prev;
+      }
+      nextList = built;
+      return nextList;
+    });
+    if (unchanged || !nextList) return null;
+    if (!onPersistExpenses) return nextList;
+
+    savingExpenseRef.current = true;
+    try {
+      await onPersistExpenses(nextList);
+      return nextList;
+    } catch (err) {
+      setExpenses(snapshot);
+      addNotification({
+        type: "error",
+        title: "Save failed",
+        message: err?.message || "Could not save to cloud. Try again.",
+      });
+      return null;
+    } finally {
+      savingExpenseRef.current = false;
+    }
+  };
 
   const viewExpense = viewExpenseId != null
     ? expenses.find((e) => sameExpenseId(e.id, viewExpenseId))
@@ -2963,12 +2999,14 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
     setBookedConfirm({ id, label, currentlyBooked: !!expense.booked });
   };
 
-  const applyExpenseBookedConfirm = () => {
+  const applyExpenseBookedConfirm = async () => {
     if (!bookedConfirm) return;
     const { id, currentlyBooked } = bookedConfirm;
     const patch = makeBookedPatch(!currentlyBooked, currentUser.name);
-    setExpenses((prev) => prev.map((e) => (sameExpenseId(e.id, id) ? touchUpdatedAt({ ...e, ...patch }) : e)));
     setBookedConfirm(null);
+    await commitExpenseList((prev) => prev.map((e) => (
+      sameExpenseId(e.id, id) ? touchUpdatedAt({ ...e, ...patch }) : e
+    )));
   };
 
   const requestDeleteExpense = (expense) => {
@@ -2979,21 +3017,22 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
     setDeleteConfirm(expense);
   };
 
-  const confirmDeleteExpense = () => {
+  const confirmDeleteExpense = async () => {
     if (!deleteConfirm) return;
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
       return;
     }
     const expense = deleteConfirm;
-    setExpenses((prev) => prev.filter((e) => !sameExpenseId(e.id, expense.id)));
+    const saved = await commitExpenseList((prev) => prev.filter((e) => !sameExpenseId(e.id, expense.id)));
+    if (!saved) return;
     markDeleted("expenses", expense.id);
     setViewExpenseId((prev) => (sameExpenseId(prev, expense.id) ? null : prev));
     addNotification({ type: "info", title: "Receipt Deleted", message: "Expense receipt removed." });
     setDeleteConfirm(null);
   };
 
-  const updateExpenseDate = (id, date) => {
+  const updateExpenseDate = async (id, date) => {
     if (!canEdit) {
       notifyPermissionDenied(addNotification, "edit");
       return;
@@ -3003,8 +3042,12 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
       addNotification({ type: "error", title: "Date Required", message: check.message });
       return;
     }
-    setExpenses((prev) => prev.map((e) => (sameExpenseId(e.id, id) ? touchUpdatedAt({ ...e, date: date.trim() }) : e)));
-    addNotification({ type: "success", title: "Date Updated", message: "Receipt date saved." });
+    const saved = await commitExpenseList((prev) => prev.map((e) => (
+      sameExpenseId(e.id, id) ? touchUpdatedAt({ ...e, date: date.trim() }) : e
+    )));
+    if (saved) {
+      addNotification({ type: "success", title: "Date Updated", message: "Receipt date saved." });
+    }
   };
 
   const saveReceipt = async () => {
@@ -3031,9 +3074,8 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
         const { imageUrl } = await db.uploadExpenseReceipt(e.id, e.imageData, e.imageName);
         e = { ...e, imageUrl: imageUrl || "", imageData: "" };
       }
-      const nextList = [...expenses, e];
-      await persistExpenseList(nextList);
-      setExpenses(nextList);
+      const saved = await commitExpenseList((prev) => [...prev, e]);
+      if (!saved) return;
       addNotification({
         type: "success",
         title: "Receipt Saved",
@@ -3306,10 +3348,13 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
       <Modal
         open={!!viewExpense}
         onClose={() => {
-          if (canEdit && viewExpense && viewEditDate && viewEditDate !== (viewExpense.date || "")) {
-            updateExpenseDate(viewExpense.id, viewEditDate);
-          }
-          setViewExpenseId(null);
+          const close = async () => {
+            if (canEdit && viewExpense && viewEditDate && viewEditDate !== (viewExpense.date || "")) {
+              await updateExpenseDate(viewExpense.id, viewEditDate);
+            }
+            setViewExpenseId(null);
+          };
+          close();
         }}
         title="Expense Receipt"
         size="lg"
@@ -3328,7 +3373,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser }) 
               onChange={(ev) => setViewEditDate(ev.target.value)}
               onBlur={() => {
                 if (canEdit && viewEditDate !== (viewExpense.date || "")) {
-                  updateExpenseDate(viewExpense.id, viewEditDate);
+                  void updateExpenseDate(viewExpense.id, viewEditDate);
                 }
               }}
               readOnly={!canEdit}
@@ -5639,6 +5684,13 @@ export default function App() {
       return next;
     });
   }, []);
+  const setExpensesWithRef = useCallback((updater) => {
+    setExpenses((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      syncStateRef.current = { ...syncStateRef.current, expenses: next };
+      return next;
+    });
+  }, []);
   const [whatsappGroups, setWhatsappGroups] = useState(() => (isSupabaseConfigured ? [] : loadWhatsappGroups()));
   const [notifications, setNotifications] = useState([]);
   const [toasts, setToasts] = useState([]);
@@ -6111,6 +6163,32 @@ export default function App() {
       touchLastSync();
     } catch (err) {
       handleSyncFailure(err);
+    } finally {
+      syncInFlightRef.current -= 1;
+    }
+  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
+
+  const flushExpenseSync = useCallback(async (expensesOverride) => {
+    if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
+    if (!hasPermission(currentUser, "expenses")) return;
+    if (!(await ensureCloudSyncReady())) {
+      throw new Error("Session needs refresh. Log out and log in again.");
+    }
+    const syncKey = "expenses:Expenses";
+    if (syncTimersRef.current[syncKey]) {
+      clearTimeout(syncTimersRef.current[syncKey]);
+      delete syncTimersRef.current[syncKey];
+    }
+    const payload = expensesOverride ?? syncStateRef.current.expenses ?? [];
+    syncStateRef.current = { ...syncStateRef.current, expenses: payload };
+    syncInFlightRef.current += 1;
+    try {
+      await db.syncExpenses(payload);
+      resetSyncHealth();
+      touchLastSync();
+    } catch (err) {
+      handleSyncFailure(err);
+      throw err;
     } finally {
       syncInFlightRef.current -= 1;
     }
@@ -7175,7 +7253,7 @@ export default function App() {
       case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondDataWithRef} addNotification={addNotification} currentUser={currentUser} users={users} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} onPersistPondData={syncPondDataNow} onSyncReminderCalendar={syncReminderCalendar} />);
       case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} openViewId={invoiceViewRequest?.id} onViewOpened={() => setInvoiceViewRequest(null)} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} />);
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} invoices={invoices} setInvoices={setInvoices} deliveries={deliveries} setDeliveries={setDeliveries} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} />);
-      case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpenses} addNotification={addNotification} currentUser={currentUser} />);
+      case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpensesWithRef} addNotification={addNotification} currentUser={currentUser} onPersistExpenses={flushExpenseSync} />);
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} users={users} />);
       case "calendar": return guard("calendar", "Calendar", <CalendarModule events={events} setEvents={setEventsWithRef} onNavigateToPonds={() => goToTab("ponds")} addNotification={addNotification} currentUser={currentUser} users={users} />);
       case "chat": return guard("chat", "AI Chat", <ChatModule aiContext={aiContext} messages={chatMessages} setMessages={setChatMessages} isMobile={isMobile} />);
