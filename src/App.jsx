@@ -49,7 +49,8 @@ import { readChatImageFile, MAX_CHAT_IMAGES } from "./lib/chatImage";
 import { AI_DAILY_FREE_TOKENS, AI_WARN_AT_TOKENS, formatTokens } from "./lib/aiUsage";
 import { AI_TOOL_DEFINITIONS } from "./lib/aiTools";
 import {
-  buildAssistantReplyText, buildChatApiThread, CHAT_HISTORY_MAX,
+  buildAssistantReplyText, buildChatApiThread, CHAT_BUSY_MESSAGE, CHAT_HISTORY_MAX,
+  CHAT_UNAVAILABLE_MESSAGE, chatError, getChatSimulateMode, isChatUnavailable,
   sanitizeStoredChatMessages, slimChatMessageForStorage, validateChatOutgoingMessage,
 } from "./lib/chatOps";
 import {
@@ -5431,6 +5432,7 @@ function ChatModule({ aiContext, messages, setMessages, isMobile = false }) {
   const endRef = useRef(null);
   const warnNotified = useRef(false);
   const limitNotified = useRef(false);
+  const chatSimulateRetryUsed = useRef(false);
 
   useEffect(() => { aiContextRef.current = aiContext; });
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
@@ -5461,16 +5463,19 @@ function ChatModule({ aiContext, messages, setMessages, isMobile = false }) {
 
   const appendAssistantError = (err, thread) => {
     const msg = err?.message || "Connection error. Please log in and try again.";
-    if (err?.retryable !== false) setRetryThread(thread);
-    else setRetryThread(null);
+    setRetryThread(err?.retryable === true ? thread : null);
     setMessages((prev) => [...prev, {
       role: "assistant",
       content: msg,
-      retryable: err?.retryable !== false,
+      retryable: err?.retryable === true,
     }]);
   };
 
   const runChat = async (thread, confirmOverage = false) => {
+    if (getChatSimulateMode() === "retry" && !chatSimulateRetryUsed.current) {
+      chatSimulateRetryUsed.current = true;
+      throw chatError(CHAT_BUSY_MESSAGE, { retryable: true });
+    }
     const systemPrompt = buildBusinessContext(aiContextRef.current);
     const result = await sendChatMessage({
       systemPrompt,
@@ -5532,6 +5537,7 @@ function ChatModule({ aiContext, messages, setMessages, isMobile = false }) {
     setActionConfirmOpen(false);
     setClearConfirmOpen(false);
     setRetryThread(null);
+    chatSimulateRetryUsed.current = false;
     warnNotified.current = false;
     limitNotified.current = false;
   };
@@ -5576,11 +5582,11 @@ function ChatModule({ aiContext, messages, setMessages, isMobile = false }) {
       });
       return;
     }
-    if (!isSupabaseConfigured) {
+    if (isChatUnavailable()) {
       aiContextRef.current.addNotification?.({
         type: "error",
         title: "AI Chat Unavailable",
-        message: "Supabase and gemini-chat must be configured for AI Chat.",
+        message: CHAT_UNAVAILABLE_MESSAGE,
       });
       return;
     }
@@ -5684,9 +5690,9 @@ function ChatModule({ aiContext, messages, setMessages, isMobile = false }) {
             </Btn>
           </div>
         )}
-        {!isSupabaseConfigured && (
+        {isChatUnavailable() && (
           <Card className={`${isMobile ? "mx-3 mt-2" : "mt-3"} p-3 border-amber-500/30 bg-amber-500/10 text-amber-200 text-xs`}>
-            AI Chat requires Supabase. Configure VITE_SUPABASE_URL and deploy the gemini-chat edge function.
+            {CHAT_UNAVAILABLE_MESSAGE}
           </Card>
         )}
         {!isMobile && <AiUsageBar usage={usage} />}
@@ -5790,7 +5796,7 @@ function ChatModule({ aiContext, messages, setMessages, isMobile = false }) {
           {retryThread && !loading && (
             <div className="mb-2 flex items-center gap-2 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30">
               <AlertTriangle size={16} className="text-amber-400 shrink-0" />
-              <span className="text-xs text-amber-100 flex-1">Gemini was busy — your last request is saved. Wait a few seconds, then retry.</span>
+              <span className="text-xs text-amber-100 flex-1">Request failed — your last message is saved. Wait a moment, then tap Retry.</span>
               <Btn size="sm" variant="secondary" onClick={retryLastChat} className="shrink-0 border-amber-500/40 text-amber-100">
                 <RefreshCw size={12} />Retry
               </Btn>
@@ -5864,7 +5870,7 @@ function ChatModule({ aiContext, messages, setMessages, isMobile = false }) {
             />
             <Btn
               onClick={sendMessage}
-              disabled={loading || imageUploading || (!input.trim() && !pendingImages.length) || !isSupabaseConfigured}
+              disabled={loading || imageUploading || (!input.trim() && !pendingImages.length)}
               className={`justify-center shrink-0 touch-manipulation ${isMobile ? "px-3.5 py-2.5 min-h-[44px] min-w-[44px]" : "px-4 py-3 min-w-[48px]"}`}
             >
               <Send size={16} />

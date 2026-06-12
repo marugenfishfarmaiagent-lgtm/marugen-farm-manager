@@ -1,7 +1,27 @@
 import { MAX_CHAT_IMAGES } from './chatImage'
+import { isSupabaseConfigured } from './supabase'
 
 export const CHAT_HISTORY_MAX = 50
 export const MAX_CHAT_MESSAGE_CHARS = 4000
+export const CHAT_UNAVAILABLE_MESSAGE = 'Supabase and gemini-chat must be configured for AI Chat.'
+export const CHAT_NETWORK_MESSAGE = 'Cannot reach the AI server. Check your connection, then tap Retry — your message is saved.'
+export const CHAT_BUSY_MESSAGE = 'Gemini is busy right now (high demand). Wait a few seconds and tap Retry — your message is saved.'
+
+/** QA on production: ?chatSimulate=unavailable | ?chatSimulate=retry */
+export function getChatSimulateMode() {
+  if (typeof window === 'undefined') return null
+  const mode = new URLSearchParams(window.location.search).get('chatSimulate')
+  return mode === 'unavailable' || mode === 'retry' ? mode : null
+}
+
+export function isChatUnavailable() {
+  if (getChatSimulateMode() === 'unavailable') return true
+  return !isSupabaseConfigured
+}
+
+export function chatError(message, { retryable = false } = {}) {
+  return Object.assign(new Error(message), { retryable })
+}
 
 export function validateChatOutgoingMessage({ text, images = [] }) {
   const imageCount = images?.length || 0

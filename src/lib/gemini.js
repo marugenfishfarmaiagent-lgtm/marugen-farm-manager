@@ -1,6 +1,13 @@
 import { clearSession, fetchWithSessionRetry, getAuthHeaders, getSessionToken, hasCloudSession } from './auth'
 import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
-import { CHAT_HISTORY_MAX } from './chatOps'
+import {
+  CHAT_BUSY_MESSAGE,
+  CHAT_HISTORY_MAX,
+  CHAT_NETWORK_MESSAGE,
+  CHAT_UNAVAILABLE_MESSAGE,
+  chatError,
+  isChatUnavailable,
+} from './chatOps'
 
 const RETRYABLE_CHAT = /high demand|overloaded|resource.?exhausted|unavailable|try again|rate limit|too many requests/i
 
@@ -10,13 +17,13 @@ function sleep(ms) {
 
 function friendlyGeminiError(data, status) {
   const raw = data?.error || `Edge function error: ${status}`
-  if (RETRYABLE_CHAT.test(raw)) {
+  if (RETRYABLE_CHAT.test(raw) || data?.retryable === true) {
     return {
-      message: 'Gemini is busy right now (high demand). Wait a few seconds and tap Retry — your message is saved.',
+      message: CHAT_BUSY_MESSAGE,
       retryable: data?.retryable !== false,
     }
   }
-  return { message: raw, retryable: Boolean(data?.retryable) }
+  return { message: raw, retryable: false }
 }
 
 function chatHeaders() {
@@ -24,42 +31,52 @@ function chatHeaders() {
 }
 
 async function callGeminiChat(body, { method = 'POST' } = {}) {
+  if (isChatUnavailable()) {
+    throw chatError(CHAT_UNAVAILABLE_MESSAGE, { retryable: false })
+  }
   if (isSupabaseConfigured && !hasCloudSession()) {
-    throw new Error('Please log in to use AI Chat.')
+    throw chatError('Please log in to use AI Chat.', { retryable: false })
   }
   const token = getSessionToken()
-  if (!isSupabaseConfigured && !token) throw new Error('Please log in to use AI Chat.')
+  if (!isSupabaseConfigured && !token) {
+    throw chatError('Please log in to use AI Chat.', { retryable: false })
+  }
 
   const maxAttempts = method === 'POST' ? 2 : 1
   let lastErr = null
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const response = await fetchWithSessionRetry(`${getFunctionsUrl()}/gemini-chat`, {
-      method,
-      credentials: 'include',
-      headers: chatHeaders(),
-      body: method === 'POST' ? JSON.stringify(body) : undefined,
-    })
+    let response
+    try {
+      response = await fetchWithSessionRetry(`${getFunctionsUrl()}/gemini-chat`, {
+        method,
+        credentials: 'include',
+        headers: chatHeaders(),
+        body: method === 'POST' ? JSON.stringify(body) : undefined,
+      })
+    } catch {
+      throw chatError(CHAT_NETWORK_MESSAGE, { retryable: true })
+    }
 
     let data
     try {
       data = await response.json()
     } catch {
-      throw Object.assign(new Error('Invalid response from AI server.'), { retryable: true })
+      throw chatError('Invalid response from AI server.', { retryable: true })
     }
     if (response.status === 401) {
       clearSession()
-      throw new Error('Session expired. Please log in again.')
+      throw chatError('Session expired. Please log in again.', { retryable: false })
     }
     if (response.ok || data.requiresConfirm) return data
 
     const { message, retryable } = friendlyGeminiError(data, response.status)
-    lastErr = Object.assign(new Error(message), { retryable })
+    lastErr = chatError(message, { retryable })
     if (!retryable || attempt === maxAttempts - 1) throw lastErr
     await sleep(1200 * (attempt + 1))
   }
 
-  throw lastErr || new Error('AI request failed.')
+  throw lastErr || chatError('AI request failed.', { retryable: true })
 }
 
 export async function fetchAiUsage() {
@@ -90,14 +107,14 @@ export async function sendChatMessage({
   executeFunctions,
   confirmOverage = false,
 }) {
-  if (!isSupabaseConfigured) {
-    throw new Error('AI Chat requires Supabase. Configure VITE_SUPABASE_URL and deploy the gemini-chat edge function.')
+  if (isChatUnavailable()) {
+    throw chatError(CHAT_UNAVAILABLE_MESSAGE, { retryable: false })
   }
   if (!Array.isArray(messages) || !messages.length) {
-    throw new Error('No messages to send.')
+    throw chatError('No messages to send.', { retryable: false })
   }
   if (!systemPrompt?.trim()) {
-    throw new Error('AI context is missing. Refresh the page and try again.')
+    throw chatError('AI context is missing. Refresh the page and try again.', { retryable: false })
   }
 
   let thread = [...messages].slice(-CHAT_HISTORY_MAX)
@@ -133,7 +150,7 @@ export async function sendChatMessage({
     }
 
     if (!executeFunctions) {
-      throw new Error('AI requested actions but no executor is configured.')
+      throw chatError('AI requested actions but no executor is configured.', { retryable: false })
     }
 
     const results = executeFunctions(data.functionCalls)
@@ -167,5 +184,5 @@ export async function sendChatMessage({
     ]
   }
 
-  throw new Error('AI action loop limit reached. Please try again.')
+  throw chatError('AI action loop limit reached. Please try again.', { retryable: true })
 }
