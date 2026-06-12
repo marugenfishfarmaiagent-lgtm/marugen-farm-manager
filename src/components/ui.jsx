@@ -159,7 +159,8 @@ export function Textarea({ label, value, onChange, placeholder, rows = 3, classN
   )
 }
 
-export function Btn({ children, onClick, variant = 'primary', size = 'md', className = '', disabled, type = 'button', title }) {
+export function Btn({ children, onClick, variant = 'primary', size = 'md', className = '', disabled, type = 'button', title, ariaLabel }) {
+  const accessibleLabel = ariaLabel || title || undefined
   const variants = {
     primary: 'bg-cyan-500 hover:bg-cyan-400 text-slate-900 font-bold shadow-lg shadow-cyan-500/20',
     secondary: 'bg-slate-700 hover:bg-slate-600 text-white',
@@ -175,7 +176,7 @@ export function Btn({ children, onClick, variant = 'primary', size = 'md', class
     onClick(e)
   }
   return (
-    <button type={type} title={title} onClick={handleClick} disabled={disabled} className={`rounded-lg transition-all flex items-center gap-1.5 touch-manipulation ${variants[variant]} ${sizes[size]} ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`}>
+    <button type={type} title={title} aria-label={accessibleLabel} onClick={handleClick} disabled={disabled} className={`rounded-lg transition-all flex items-center gap-1.5 touch-manipulation ${variants[variant]} ${sizes[size]} ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`}>
       {children}
     </button>
   )

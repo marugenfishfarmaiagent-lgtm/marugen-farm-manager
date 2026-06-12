@@ -6,11 +6,12 @@ export default function PaginationControls({
   totalItems,
   pageSize,
   className = '',
+  reserveFabSpace = false,
 }) {
   if (totalItems <= pageSize) return null
 
   return (
-    <div className={`flex flex-wrap gap-2 items-center justify-end mt-4 ${className}`}>
+    <div className={`flex flex-wrap gap-2 items-center justify-end mt-4 ${reserveFabSpace ? 'pb-20 pr-16' : ''} ${className}`}>
       <button
         type="button"
         onClick={() => setPage((p) => Math.max(0, p - 1))}

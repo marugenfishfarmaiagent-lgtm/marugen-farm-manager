@@ -1532,10 +1532,14 @@ function InvoiceModule({
     if ("customerId" in normalized) {
       normalized.customerId = normalized.customerId == null || normalized.customerId === "" ? null : normalized.customerId;
     }
-    if ("discountValue" in normalized) {
-      normalized.discountValue = Number(normalized.discountValue) || 0;
-    }
-    const apply = (i) => (i.id === id ? touchUpdatedAt(db.sanitizeInvoiceForSync({ ...i, ...normalized })) : i);
+    const apply = (i) => {
+      if (i.id !== id) return i;
+      let merged = touchUpdatedAt(db.sanitizeInvoiceForSync({ ...i, ...normalized }));
+      if ("discountType" in normalized || "discountValue" in normalized) {
+        merged = { ...merged, total: calcInvoiceAmounts(merged).total };
+      }
+      return merged;
+    };
     setInvoices((prev) => sortInvoices(prev.map(apply)));
     setViewInv((prev) => (prev?.id === id ? apply(prev) : prev));
   };
@@ -1998,14 +2002,14 @@ function InvoiceModule({
               <Btn variant="secondary" size="sm" onClick={() => setViewInv(inv)} className="col-span-2 justify-center min-w-0">
                 <Eye size={14} />View
               </Btn>
-              <Btn variant="ghost" size="sm" onClick={() => { setViewInv(inv); sendWhatsApp(inv); }} disabled={pdfLoading} className="justify-center min-w-0" title="WhatsApp">
+              <Btn variant="ghost" size="sm" onClick={() => { setViewInv(inv); sendWhatsApp(inv); }} disabled={pdfLoading} className="justify-center min-w-0" ariaLabel="Send WhatsApp">
                 <MessageSquare size={14} />
               </Btn>
-              <Btn variant="ghost" size="sm" onClick={() => downloadPdf(inv)} disabled={pdfLoading} className="justify-center min-w-0" title="PDF">
+              <Btn variant="ghost" size="sm" onClick={() => downloadPdf(inv)} disabled={pdfLoading} className="justify-center min-w-0" ariaLabel="Download PDF">
                 <Printer size={14} />
               </Btn>
               {canMarkAccounting(currentUser) && (
-                <Btn variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); requestInvoiceBookedChange(inv.id); }} title={inv.booked ? "Accounts mark" : "Mark in accounts"} className="justify-center min-w-0">
+                <Btn variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); requestInvoiceBookedChange(inv.id); }} ariaLabel={inv.booked ? "Change accounts mark" : "Mark in accounts"} className="justify-center min-w-0">
                   <BookCheck size={14} className={inv.booked ? "text-emerald-400" : "text-slate-500"} />
                 </Btn>
               )}
@@ -2029,7 +2033,7 @@ function InvoiceModule({
           </Card>
         );})}
       </div>
-      <PaginationControls {...invoicePage} className="lg:hidden" />
+      <PaginationControls {...invoicePage} className="lg:hidden" reserveFabSpace />
 
       <Card className="overflow-hidden hidden lg:block">
         <div className="overflow-x-auto">
@@ -2069,11 +2073,11 @@ function InvoiceModule({
                   </td>
                   <td className="p-3">
                     <div className="flex gap-1 justify-center">
-                      <Btn variant="ghost" size="sm" onClick={() => setViewInv(inv)} title="View"><Eye size={12} /></Btn>
-                      <Btn variant="ghost" size="sm" onClick={() => { setViewInv(inv); sendWhatsApp(inv); }} title="Send WhatsApp" disabled={pdfLoading}><MessageSquare size={12} /></Btn>
-                      <Btn variant="ghost" size="sm" onClick={() => downloadPdf(inv)} title="Download PDF" disabled={pdfLoading}><Printer size={12} /></Btn>
+                      <Btn variant="ghost" size="sm" onClick={() => setViewInv(inv)} ariaLabel="View invoice"><Eye size={12} /></Btn>
+                      <Btn variant="ghost" size="sm" onClick={() => { setViewInv(inv); sendWhatsApp(inv); }} ariaLabel="Send WhatsApp" disabled={pdfLoading}><MessageSquare size={12} /></Btn>
+                      <Btn variant="ghost" size="sm" onClick={() => downloadPdf(inv)} ariaLabel="Download PDF" disabled={pdfLoading}><Printer size={12} /></Btn>
                       {canMarkAccounting(currentUser) && (
-                        <Btn variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); requestInvoiceBookedChange(inv.id); }} title={inv.booked ? "Change accounts mark" : "Mark in accounts"}>
+                        <Btn variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); requestInvoiceBookedChange(inv.id); }} ariaLabel={inv.booked ? "Change accounts mark" : "Mark in accounts"}>
                           <BookCheck size={12} className={inv.booked ? "text-emerald-400" : "text-slate-500"} />
                         </Btn>
                       )}
@@ -4122,7 +4126,7 @@ function DeliveryModule({
             </Card>
           ))
         }
-        <PaginationControls {...deliveryPage} />
+        <PaginationControls {...deliveryPage} reserveFabSpace />
       </div>}
 
       <Modal

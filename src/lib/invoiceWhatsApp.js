@@ -118,11 +118,9 @@ function clickWhatsAppLink(url) {
 }
 
 function openWhatsAppUrl(url) {
-  if (isMobileDevice()) {
-    window.location.assign(url)
-  } else {
-    clickWhatsAppLink(url)
-  }
+  // Keep the farm app tab open — location.assign navigates away and breaks automation / PWA sessions.
+  const opened = window.open(url, '_blank', 'noopener,noreferrer')
+  if (!opened) clickWhatsAppLink(url)
 }
 
 /** Open WhatsApp chat — optional pre-filled message text. */
@@ -141,9 +139,5 @@ export function openWhatsAppShare(text) {
 export function openWhatsAppGroupLink(link) {
   const url = normalizeWhatsAppGroupLink(link)
   if (!url) throw new Error('Invalid WhatsApp group link.')
-  if (isMobileDevice()) {
-    window.location.assign(url)
-  } else {
-    clickWhatsAppLink(url)
-  }
+  openWhatsAppUrl(url)
 }
