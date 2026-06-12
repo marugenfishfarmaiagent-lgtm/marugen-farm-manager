@@ -19,7 +19,7 @@ import {
   applyInvoiceKoiSales, restoreInvoiceKoiSales, availableKoiForInvoice,
   formatKoiInvoiceLineName, validateInvoiceKoiSales, findLinkedKoiInvoices, buildKoiRefundUpdate,
 } from "./lib/koiInvoice";
-import { sameKoiId } from "./lib/koiOps";
+import { buildKeepAtFarmReversePatch, sameKoiId } from "./lib/koiOps";
 import { PondNameInput } from "./components/ui";
 import BackupExportPanel from "./components/BackupExportPanel";
 import { backupBaseName, downloadFile, expensesToCsv, invoicesToCsv } from "./lib/backupExport";
@@ -6817,6 +6817,7 @@ export default function App() {
         await persistCustomerKoiList(nextList);
       }
       setCustomerKoiList(nextList);
+      await flushCustomerKoiSync(nextList);
       addNotification({
         type: "info",
         title: "Customer Record Created",
@@ -6829,7 +6830,7 @@ export default function App() {
         message: err?.message || "Could not save customer koi photo to cloud.",
       });
     }
-  }, [addNotification, customerKoiList]);
+  }, [addNotification, customerKoiList, flushCustomerKoiSync]);
 
   useEffect(() => {
     handleKoiSoldRef.current = handleKoiSold;
@@ -6855,6 +6856,12 @@ export default function App() {
       nextKoiList = koiFishList.map((k) => (
         sameKoiId(k.id, koi.id) ? buildKoiRefundUpdate(k, reason) : k
       ));
+    } else if (linkedCustomerKoi.length) {
+      nextKoiList = koiFishList.map((k) => (
+        sameKoiId(k.id, koi.id) ? buildKeepAtFarmReversePatch(k, reason) : k
+      ));
+    }
+    if (nextKoiList !== koiFishList) {
       setKoiFishList(nextKoiList);
     }
 
@@ -6882,7 +6889,7 @@ export default function App() {
     try {
       await Promise.all([
         flushCustomerKoiSync(nextCustomerKoi),
-        isSold ? flushKoiFishSync(nextKoiList) : Promise.resolve(),
+        nextKoiList !== koiFishList ? flushKoiFishSync(nextKoiList) : Promise.resolve(),
       ]);
     } catch {
       /* sync errors surfaced via handleSyncFailure in flush helpers */

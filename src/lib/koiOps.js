@@ -65,6 +65,9 @@ export function validateKoiSaleForm({ customerId, disposition, keepPondName, sol
   if (!canSellKoiStatus(koi?.status)) {
     return { ok: false, message: `${koi?.id || 'This fish'} cannot be sold (status: ${koi?.status || 'unknown'}).` }
   }
+  if (hasActiveKeepAtFarmSale(koi)) {
+    return { ok: false, message: `${koi?.id || 'This fish'} has an active keep-at-farm sale. Use Reverse keep first.` }
+  }
   const price = parseKoiPrice(soldPrice, koi?.price ?? 0)
   if (price == null) {
     return { ok: false, message: 'Sold price must be zero or greater.' }
@@ -81,15 +84,40 @@ export function validateKoiSaleForm({ customerId, disposition, keepPondName, sol
 export function buildSoldKoiPatch(koi, { customerId, soldPrice, soldDate, disposition, keepPondName }) {
   const keep = disposition === 'keep'
   const soldTo = normalizeBigintId(customerId) ?? customerId
+  const pond = keep ? (keepPondName?.trim() || koi.pondName || '') : koi.pondName
   return touchUpdatedAt({
     ...koi,
-    status: KOI_STATUS.SOLD,
+    status: keep ? KOI_STATUS.AVAILABLE : KOI_STATUS.SOLD,
+    pondName: pond,
     soldTo,
     soldPrice: Number(soldPrice) || Number(koi.price) || 0,
     soldDate: soldDate || today(),
     sellDisposition: disposition || 'taken',
-    keepPondName: keep ? (keepPondName?.trim() || koi.pondName || '') : null,
+    keepPondName: keep ? pond : null,
   })
+}
+
+/** Clear keep-at-farm sale metadata while fish stays in farm stock. */
+export function buildKeepAtFarmReversePatch(koi, reason = '') {
+  const refundNote = reason.trim()
+    ? `Keep-at-farm reversed ${today()}: ${reason.trim()}`
+    : `Keep-at-farm reversed ${today()}`
+  return touchUpdatedAt({
+    ...koi,
+    status: KOI_STATUS.AVAILABLE,
+    soldTo: null,
+    soldPrice: null,
+    soldDate: null,
+    sellDisposition: null,
+    keepPondName: null,
+    notes: koi.notes ? `${koi.notes}\n${refundNote}` : refundNote,
+  })
+}
+
+export function hasActiveKeepAtFarmSale(koi) {
+  if (!koi?.soldTo) return false
+  if (koi.sellDisposition === 'keep') return true
+  return koi.status === KOI_STATUS.AVAILABLE
 }
 
 export function buildDeceasedKoiPatch(koi, { deathDate, deathCause, deathPhoto, notes }) {

@@ -1,5 +1,5 @@
 import { KOI_STATUS, formatKoiSize, today } from '../data/constants'
-import { buildSoldKoiPatch, canSellKoiStatus, sameKoiId } from './koiOps'
+import { buildSoldKoiPatch, canSellKoiStatus, hasActiveKeepAtFarmSale, sameKoiId } from './koiOps'
 import { touchUpdatedAt } from './syncMeta'
 import { markDeleted } from './syncDeletions'
 
@@ -32,6 +32,9 @@ export function validateInvoiceKoiSales({ items, koiList, customerId, customers 
     if (!koi) return { ok: false, message: `Koi ${it.koiId} is no longer in stock.` }
     if (!canSellKoiStatus(koi.status)) {
       return { ok: false, message: `${koi.id} is not available (${koi.status}).` }
+    }
+    if (hasActiveKeepAtFarmSale(koi)) {
+      return { ok: false, message: `${koi.id} has an active keep-at-farm sale. Reverse keep or cancel the invoice first.` }
     }
     if ((it.koiDisposition || 'taken') === 'keep' && !(it.keepPondName?.trim())) {
       return { ok: false, message: `Select a pond for ${formatKoiInvoiceLineName(koi)} (keep at farm).` }

@@ -166,7 +166,7 @@ export function resolveCustomerKoiConflict(local, remote) {
       updatedAt: local.updatedAt,
     }
   }
-  if (rt - lt < 5000 && ls === rs && customerKoiEditFieldsDiffer(local, remote)) {
+  if (rt - lt < 15000 && customerKoiEditFieldsDiffer(local, remote)) {
     return { ...remote, ...pickCustomerKoiEditFields(local), updatedAt: local.updatedAt }
   }
   return remote
