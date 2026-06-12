@@ -4483,7 +4483,8 @@ function CalendarEventCard({ e, users, canEdit, canDelete, onEdit, onDelete, onN
   );
 }
 
-function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification, currentUser, users = [] }) {
+function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification, currentUser, users = [], onPersistEvents }) {
+  const savingEventRef = useRef(false);
   const emptyEventForm = () => ({ title: "", date: today(), time: "09:00", type: "other", note: "", assignedUserIds: [] });
   const eventToForm = (e) => ({
     title: e.title || "",
@@ -4499,6 +4500,41 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
   const [form, setForm] = useState(emptyEventForm());
   const [showAllPast, setShowAllPast] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+
+  const commitEventList = async (buildNext) => {
+    if (savingEventRef.current) return null;
+    let nextList = null;
+    let snapshot = null;
+    let unchanged = false;
+    setEvents((prev) => {
+      snapshot = prev;
+      const built = buildNext(prev);
+      if (built === prev) {
+        unchanged = true;
+        return prev;
+      }
+      nextList = built;
+      return nextList;
+    });
+    if (unchanged || !nextList) return null;
+    if (!onPersistEvents) return nextList;
+
+    savingEventRef.current = true;
+    try {
+      await onPersistEvents(nextList);
+      return nextList;
+    } catch (err) {
+      setEvents(snapshot);
+      addNotification({
+        type: "error",
+        title: "Save failed",
+        message: err?.message || "Could not save to cloud. Try again.",
+      });
+      return null;
+    } finally {
+      savingEventRef.current = false;
+    }
+  };
 
   if (!hasPermission(currentUser, "calendar")) return <AccessDenied moduleName="Calendar" />;
 
@@ -4534,7 +4570,7 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
     setForm(eventToForm(e));
   };
 
-  const saveEvent = () => {
+  const saveEvent = async () => {
     if (!canEdit) {
       notifyPermissionDenied(addNotification, "edit");
       return;
@@ -4551,9 +4587,10 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
         addNotification({ type: "error", title: "Cannot Save Event", message: built.message });
         return;
       }
-      setEvents((prev) => prev.map((e) => (
+      const saved = await commitEventList((prev) => prev.map((e) => (
         sameEventId(e.id, editEventId) ? built.event : e
       )));
+      if (!saved) return;
       addNotification({ type: "success", title: "Event Updated", message: `"${built.event.title}" saved.` });
       if (newlyAssignedUserIds(existing.assignedUserIds, built.event.assignedUserIds).length) {
         notifyAssignmentChange({
@@ -4576,7 +4613,8 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
         addNotification({ type: "error", title: "Cannot Add Event", message: built.message });
         return;
       }
-      setEvents((prev) => [...prev, built.event]);
+      const saved = await commitEventList((prev) => [...prev, built.event]);
+      if (!saved) return;
       const eventMsg = `${built.event.title} on ${built.event.date}`;
       if (hasAssignedTeam(built.event.assignedUserIds)) {
         addNotification({ type: "success", title: "Event Added", message: eventMsg });
@@ -4604,7 +4642,7 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
     setDeleteConfirm(e);
   };
 
-  const confirmDeleteEvent = () => {
+  const confirmDeleteEvent = async () => {
     if (!deleteConfirm) return;
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
@@ -4612,8 +4650,9 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
     }
     const e = deleteConfirm;
     const label = e.title || "this event";
-    setEvents((prev) => prev.filter((x) => !sameEventId(x.id, e.id)));
     markDeleted("events", e.id);
+    const saved = await commitEventList((prev) => prev.filter((x) => !sameEventId(x.id, e.id)));
+    if (!saved) return;
     if (sameEventId(editEventId, e.id)) closeEventForm();
     addNotification({ type: "info", title: "Event Deleted", message: `"${label}" removed.` });
     setDeleteConfirm(null);
@@ -6418,6 +6457,38 @@ export default function App() {
     }
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
+  const flushEventSync = useCallback(async (eventsOverride) => {
+    if (!isSupabaseConfigured) return;
+    if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
+      throw new Error("Cloud sync is not ready.");
+    }
+    if (!hasPermission(currentUser, "calendar")) {
+      throw new Error("Permission denied (calendar).");
+    }
+    if (!(await ensureCloudSyncReady())) {
+      throw new Error("Session needs refresh. Log out and log in again.");
+    }
+    const syncKey = "calendar:Calendar";
+    if (syncTimersRef.current[syncKey]) {
+      clearTimeout(syncTimersRef.current[syncKey]);
+      delete syncTimersRef.current[syncKey];
+    }
+    const raw = eventsOverride ?? syncStateRef.current.events ?? [];
+    const payload = raw.map((e) => touchUpdatedAt(e));
+    syncStateRef.current = { ...syncStateRef.current, events: payload };
+    syncInFlightRef.current += 1;
+    try {
+      await db.syncEvents(payload, { force: true });
+      resetSyncHealth();
+      touchLastSync();
+    } catch (err) {
+      handleSyncFailure(err);
+      throw err;
+    } finally {
+      syncInFlightRef.current -= 1;
+    }
+  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
+
   const flushExpenseSync = useCallback(async (expensesOverride) => {
     if (!isSupabaseConfigured) return;
     if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
@@ -6560,7 +6631,8 @@ export default function App() {
       waited += 100;
     }
 
-    const payload = eventsOverride ?? syncStateRef.current.events;
+    const raw = eventsOverride ?? syncStateRef.current.events ?? [];
+    const payload = raw.map((e) => touchUpdatedAt(e));
     syncStateRef.current = { ...syncStateRef.current, events: payload };
 
     syncInFlightRef.current += 1;
@@ -6568,7 +6640,7 @@ export default function App() {
       if (!(await ensureCloudSyncReady())) {
         throw new Error("Session needs refresh. Log out and log in again.");
       }
-      await db.syncEvents(payload);
+      await db.syncEvents(payload, { force: true });
       resetSyncHealth();
       touchLastSync();
     } catch (err) {
@@ -7511,7 +7583,7 @@ export default function App() {
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} invoices={invoices} setInvoices={setInvoices} deliveries={deliveries} setDeliveries={setDeliveries} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpensesWithRef} addNotification={addNotification} currentUser={currentUser} onPersistExpenses={flushExpenseSync} />);
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} users={users} />);
-      case "calendar": return guard("calendar", "Calendar", <CalendarModule events={events} setEvents={setEventsWithRef} onNavigateToPonds={() => goToTab("ponds")} addNotification={addNotification} currentUser={currentUser} users={users} />);
+      case "calendar": return guard("calendar", "Calendar", <CalendarModule events={events} setEvents={setEventsWithRef} onNavigateToPonds={() => goToTab("ponds")} addNotification={addNotification} currentUser={currentUser} users={users} onPersistEvents={flushEventSync} />);
       case "chat": return guard("chat", "AI Chat", <ChatModule aiContext={aiContext} messages={chatMessages} setMessages={setChatMessages} isMobile={isMobile} />);
       case "users": return <ErrorBoundary><TeamModule users={users} setUsers={setUsers} currentUser={currentUser} addNotification={addNotification} onCurrentUserUpdate={handleUserUpdate} cloudMode={isSupabaseConfigured && cloudSync} apiEnabled={isSupabaseConfigured} onOpenChangePin={() => setShowChangePin(true)} getBackupData={getBackupData} /></ErrorBoundary>;
       default: return null;
