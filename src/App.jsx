@@ -28,7 +28,7 @@ import InvoicePreviewFrame from "./components/InvoicePreviewFrame";
 import { downloadInvoicePdf } from "./lib/generateInvoicePdf";
 import { calcInvoiceAmounts, sortInvoices } from './lib/invoiceDesign';
 import { computeDashboardMetrics, dashboardInvoiceTotal } from './lib/dashboardMetrics';
-import { compressReceiptImage, expenseImageSrc } from "./lib/compressImage";
+import { compressDeliveryPhoto, compressReceiptImage, deliveryPhotoSrc, expenseImageSrc } from "./lib/compressImage";
 import { persistCustomerKoiList } from "./lib/imageUploadOps";
 import {
   normalizeCustomerKoiForCache,
@@ -3466,6 +3466,7 @@ function DeliveryModule({
   const emptyDeliveryForm = () => ({
     invoiceId: "", customerId: "", customerName: "", postalCode: "", address: "",
     schedule: "", items: "", driver: "", notes: "", status: "scheduled", assignedUserIds: [],
+    photo: "", photoName: "", photoData: "", photoRemoved: false,
   });
   const deliveryToForm = (d) => ({
     invoiceId: d.invoiceId || "",
@@ -3479,6 +3480,10 @@ function DeliveryModule({
     notes: d.notes || "",
     status: d.status || "scheduled",
     assignedUserIds: normalizeAssignedUserIds(d.assignedUserIds),
+    photo: d.photo || "",
+    photoName: d.photoName || "",
+    photoData: d.photoData || "",
+    photoRemoved: false,
   });
   const [showAdd, setShowAdd] = useState(false);
   const [editDeliveryId, setEditDeliveryId] = useState(null);
@@ -3496,7 +3501,11 @@ function DeliveryModule({
   const [groupForm, setGroupForm] = useState({ name: "", link: "" });
   const [postalLookupDelivery, setPostalLookupDelivery] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [viewDeliveryId, setViewDeliveryId] = useState(null);
+  const [photoUploading, setPhotoUploading] = useState(false);
   const deliveryAddressManual = useRef(false);
+  const deliveryAlbumRef = useRef(null);
+  const deliveryCameraRef = useRef(null);
 
   const hasDeliveryAccess = hasPermission(currentUser, "deliveries");
   const canEdit = canEditRecords(currentUser);
@@ -3519,6 +3528,31 @@ function DeliveryModule({
   const whatsappDelivery = whatsappDeliveryId != null
     ? deliveries.find((d) => sameDeliveryId(d.id, whatsappDeliveryId))
     : null;
+  const viewDelivery = viewDeliveryId != null
+    ? deliveries.find((d) => sameDeliveryId(d.id, viewDeliveryId))
+    : null;
+
+  const refreshDeliveryPhoto = useCallback(async (deliveryId) => {
+    if (!isSupabaseConfigured) return;
+    try {
+      const result = await db.refreshDeliveryPhotoUrl(deliveryId);
+      const nextPhoto = result?.photo || result?.url;
+      if (nextPhoto) {
+        setDeliveries((prev) => prev.map((d) => (
+          sameDeliveryId(d.id, deliveryId) ? { ...d, photo: nextPhoto } : d
+        )));
+      }
+    } catch {
+      /* signed URL refresh failed — photoData fallback may still work */
+    }
+  }, [setDeliveries]);
+
+  useEffect(() => {
+    if (!viewDelivery?.id || viewDelivery.photoData || !isSupabaseConfigured) return;
+    if (viewDelivery.photo?.startsWith("http")) {
+      refreshDeliveryPhoto(viewDelivery.id);
+    }
+  }, [viewDeliveryId, viewDelivery?.id, viewDelivery?.photo, viewDelivery?.photoData, refreshDeliveryPhoto]);
 
   const todayStr = today();
   const filtered = deliveries
@@ -3552,6 +3586,11 @@ function DeliveryModule({
     .filter((i) => getInvoiceStatus(i) !== "cancelled")
     .sort((a, b) => `${b.date || ""}${b.id}`.localeCompare(`${a.date || ""}${a.id}`));
 
+  const resetDeliveryPhotoInputs = () => {
+    if (deliveryAlbumRef.current) deliveryAlbumRef.current.value = "";
+    if (deliveryCameraRef.current) deliveryCameraRef.current.value = "";
+  };
+
   const closeDeliveryForm = () => {
     setShowAdd(false);
     setEditDeliveryId(null);
@@ -3559,6 +3598,59 @@ function DeliveryModule({
     setShowLinkedInvoicePreview(true);
     deliveryAddressManual.current = false;
     setPostalLookupDelivery(false);
+    setPhotoUploading(false);
+    resetDeliveryPhotoInputs();
+  };
+
+  const handleDeliveryPhotoPick = async (file) => {
+    if (!canEdit || !file) return;
+    try {
+      setPhotoUploading(true);
+      const { dataUrl, name } = await compressDeliveryPhoto(file);
+      setForm((f) => ({
+        ...f,
+        photoData: dataUrl,
+        photoName: name,
+        photo: "",
+        photoRemoved: false,
+      }));
+    } catch (err) {
+      addNotification({ type: "error", title: "Upload Failed", message: err?.message || "Could not process image." });
+    } finally {
+      setPhotoUploading(false);
+      resetDeliveryPhotoInputs();
+    }
+  };
+
+  const removeDeliveryPhoto = () => {
+    setForm((f) => ({
+      ...f,
+      photo: "",
+      photoName: "",
+      photoData: "",
+      photoRemoved: true,
+    }));
+    resetDeliveryPhotoInputs();
+  };
+
+  const applyDeliveryPhotoFields = (delivery) => {
+    if (form.photoRemoved) {
+      return { ...delivery, photo: "", photoName: "", photoData: "" };
+    }
+    if (form.photoData) {
+      return {
+        ...delivery,
+        photoData: form.photoData,
+        photoName: form.photoName || delivery.photoName || "",
+        photo: "",
+      };
+    }
+    return {
+      ...delivery,
+      photo: form.photo || delivery.photo || "",
+      photoName: form.photoName || delivery.photoName || "",
+      photoData: "",
+    };
   };
 
   const openAddDelivery = () => {
@@ -3587,70 +3679,89 @@ function DeliveryModule({
     setPostalLookupDelivery(false);
   };
 
-  const saveDelivery = () => {
+  const saveDelivery = async () => {
     if (!canEdit) {
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
+    if (photoUploading) return;
+    let built;
+    let existing = null;
     if (isEditing) {
-      const existing = deliveries.find((d) => sameDeliveryId(d.id, editDeliveryId));
+      existing = deliveries.find((d) => sameDeliveryId(d.id, editDeliveryId));
       if (!existing) {
         addNotification({ type: "error", title: "Not Found", message: "Delivery record no longer exists." });
         closeDeliveryForm();
         return;
       }
-      const built = buildUpdatedDeliveryRecord(form, existing, { customers, invoices, deliveries, users });
-      if (!built.ok) {
-        addNotification({ type: "error", title: "Cannot Save Delivery", message: built.message });
-        return;
-      }
-      setDeliveries((prev) => prev.map((d) => (
-        sameDeliveryId(d.id, editDeliveryId) ? built.delivery : d
-      )));
-      addNotification({ type: "success", title: "Delivery Updated", message: `${editDeliveryId} saved.` });
-      if (newlyAssignedUserIds(existing.assignedUserIds, built.delivery.assignedUserIds).length) {
-        notifyAssignmentChange({
-          isNew: false,
-          previousAssignedUserIds: existing.assignedUserIds,
-          nextAssignedUserIds: built.delivery.assignedUserIds,
-          title: "Delivery Assigned",
-          message: `${built.delivery.id} → ${built.delivery.customerName}`,
-          url: "/?tab=deliveries",
-          actor: currentUser?.name,
-          actorRole: currentUser?.role,
-        });
-      }
+      built = buildUpdatedDeliveryRecord(form, existing, { customers, invoices, deliveries, users });
     } else {
-      const built = buildNewDeliveryRecord(form, {
+      built = buildNewDeliveryRecord(form, {
         customers, invoices, createdBy: currentUser?.name || "Staff", users,
       });
-      if (!built.ok) {
-        addNotification({ type: "error", title: "Cannot Schedule Delivery", message: built.message });
-        return;
-      }
-      const d = built.delivery;
-      setDeliveries((prev) => [...prev, d]);
-      const scheduleMsg = d.invoiceId ? `${d.id} linked to ${d.invoiceId} → ${d.customerName}` : `${d.id} → ${d.customerName}`;
-      if (hasAssignedTeam(d.assignedUserIds)) {
-        addNotification({ type: "success", title: "Delivery Scheduled", message: scheduleMsg, team: false });
-        notifyAssignmentChange({
-          isNew: true,
-          nextAssignedUserIds: d.assignedUserIds,
-          title: "Delivery Assigned",
-          message: scheduleMsg,
-          url: "/?tab=deliveries",
-          actor: currentUser?.name,
-          actorRole: currentUser?.role,
-        });
-      } else {
-        addNotification({
-          type: "info",
-          title: "Delivery Scheduled",
-          message: scheduleMsg,
-        });
-      }
     }
-    closeDeliveryForm();
+    if (!built.ok) {
+      addNotification({
+        type: "error",
+        title: isEditing ? "Cannot Save Delivery" : "Cannot Schedule Delivery",
+        message: built.message,
+      });
+      return;
+    }
+    let d = applyDeliveryPhotoFields(built.delivery);
+    try {
+      if (d.photoData?.startsWith?.("data:image")) {
+        setPhotoUploading(true);
+        if (isSupabaseConfigured) {
+          const result = await db.uploadDeliveryPhoto(d.id, d.photoData, d.photoName);
+          d = { ...d, photo: result?.photo || result?.photoPath || "", photoData: "" };
+        }
+      }
+      if (isEditing) {
+        setDeliveries((prev) => prev.map((row) => (
+          sameDeliveryId(row.id, editDeliveryId) ? d : row
+        )));
+        addNotification({ type: "success", title: "Delivery Updated", message: `${editDeliveryId} saved.` });
+        if (newlyAssignedUserIds(existing.assignedUserIds, d.assignedUserIds).length) {
+          notifyAssignmentChange({
+            isNew: false,
+            previousAssignedUserIds: existing.assignedUserIds,
+            nextAssignedUserIds: d.assignedUserIds,
+            title: "Delivery Assigned",
+            message: `${d.id} → ${d.customerName}`,
+            url: "/?tab=deliveries",
+            actor: currentUser?.name,
+            actorRole: currentUser?.role,
+          });
+        }
+      } else {
+        setDeliveries((prev) => [...prev, d]);
+        const scheduleMsg = d.invoiceId ? `${d.id} linked to ${d.invoiceId} → ${d.customerName}` : `${d.id} → ${d.customerName}`;
+        if (hasAssignedTeam(d.assignedUserIds)) {
+          addNotification({ type: "success", title: "Delivery Scheduled", message: scheduleMsg, team: false });
+          notifyAssignmentChange({
+            isNew: true,
+            nextAssignedUserIds: d.assignedUserIds,
+            title: "Delivery Assigned",
+            message: scheduleMsg,
+            url: "/?tab=deliveries",
+            actor: currentUser?.name,
+            actorRole: currentUser?.role,
+          });
+        } else {
+          addNotification({
+            type: "info",
+            title: "Delivery Scheduled",
+            message: scheduleMsg,
+          });
+        }
+      }
+      closeDeliveryForm();
+    } catch (err) {
+      addNotification({ type: "error", title: "Save Failed", message: err?.message || "Could not save delivery photo." });
+    } finally {
+      setPhotoUploading(false);
+    }
   };
 
   const requestDeleteDelivery = (d) => {
@@ -3672,6 +3783,7 @@ function DeliveryModule({
     markDeleted("deliveries", d.id);
     if (sameDeliveryId(editDeliveryId, d.id)) closeDeliveryForm();
     if (sameDeliveryId(whatsappDeliveryId, d.id)) closeWhatsappPicker();
+    if (sameDeliveryId(viewDeliveryId, d.id)) setViewDeliveryId(null);
     addNotification({ type: "info", title: "Delivery Deleted", message: `${d.id} removed.` });
     setDeleteConfirm(null);
   };
@@ -3824,7 +3936,7 @@ function DeliveryModule({
         </Btn>
       </div>
       {canEdit && (
-        <Fab onClick={openAddDelivery} label="Schedule Delivery" hidden={formOpen || !!invoicePreviewId || showManageGroups || !!whatsappDelivery || !!deleteConfirm} />
+        <Fab onClick={openAddDelivery} label="Schedule Delivery" hidden={formOpen || !!invoicePreviewId || showManageGroups || !!whatsappDelivery || !!deleteConfirm || viewDeliveryId != null} />
       )}
 
       <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
@@ -3909,7 +4021,25 @@ function DeliveryModule({
           deliveryPage.paginatedItems.map(d => (
             <Card key={d.id} className="p-4">
               <div className="flex items-start justify-between gap-4">
-                <div className="flex-1">
+                {deliveryPhotoSrc(d) ? (
+                  <button
+                    type="button"
+                    onClick={() => setViewDeliveryId(d.id)}
+                    className="shrink-0 rounded-lg overflow-hidden border border-slate-700 hover:border-cyan-500/40 transition-colors"
+                    title="View delivery photo"
+                  >
+                    <StoredImage
+                      src={deliveryPhotoSrc(d)}
+                      alt={d.photoName || "Delivery photo"}
+                      className="w-16 h-16 object-cover"
+                      entity="delivery"
+                      recordId={d.id}
+                      field="photo"
+                      onRefresh={() => refreshDeliveryPhoto(d.id)}
+                    />
+                  </button>
+                ) : null}
+                <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-3 mb-2 flex-wrap">
                     <span className="font-mono text-cyan-400 text-xs font-bold">{d.id}</span>
                     {d.invoiceId && <span className="font-mono text-purple-400/90 text-xs">{d.invoiceId}</span>}
@@ -3954,6 +4084,11 @@ function DeliveryModule({
                   {d.createdBy && <p className="text-slate-600 text-[10px] mt-1">Scheduled by {d.createdBy}</p>}
                 </div>
                 <div className="flex flex-col gap-2">
+                  {deliveryPhotoSrc(d) && (
+                    <Btn variant="ghost" size="sm" onClick={() => setViewDeliveryId(d.id)} title="View delivery">
+                      <Eye size={14} className="text-cyan-400" />
+                    </Btn>
+                  )}
                   {canEdit && (
                     <Btn variant="ghost" size="sm" onClick={() => openEditDelivery(d)} title="Edit delivery">
                       <Edit2 size={14} className="text-cyan-400" />
@@ -4064,6 +4199,55 @@ function DeliveryModule({
             excludeUserId={currentUser?.id}
           />
           <Textarea label="Items" value={form.items} onChange={e => setForm(f => ({ ...f, items: e.target.value }))} placeholder="e.g. 1x Super Red Arowana, 2x Koi Pellets" className="sm:col-span-2" rows={2} />
+          <div className="sm:col-span-2 space-y-3">
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Delivery Photo (optional)</p>
+            <input
+              ref={deliveryAlbumRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(ev) => handleDeliveryPhotoPick(ev.target.files?.[0])}
+            />
+            <input
+              ref={deliveryCameraRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={(ev) => handleDeliveryPhotoPick(ev.target.files?.[0])}
+            />
+            {photoUploading && (
+              <div className="rounded-lg px-3 py-2 text-xs flex items-center gap-2 bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">
+                <RefreshCw size={14} className="animate-spin shrink-0" />
+                <span>Processing photo…</span>
+              </div>
+            )}
+            {deliveryPhotoSrc({ photo: form.photoRemoved ? "" : form.photo, photoData: form.photoData }) ? (
+              <div className="rounded-xl overflow-hidden border border-slate-600 bg-slate-900 relative">
+                <img
+                  src={deliveryPhotoSrc({ photo: form.photoRemoved ? "" : form.photo, photoData: form.photoData })}
+                  alt="Delivery preview"
+                  className="w-full max-h-[40vh] object-contain"
+                />
+                {canEdit && (
+                  <Btn variant="danger" size="sm" onClick={removeDeliveryPhoto} className="absolute top-2 right-2">
+                    <Trash2 size={12} />Remove
+                  </Btn>
+                )}
+              </div>
+            ) : canEdit ? (
+              <div className="flex flex-wrap gap-2">
+                <Btn variant="secondary" size="sm" onClick={() => deliveryCameraRef.current?.click()} disabled={photoUploading}>
+                  <Camera size={14} />Take Photo
+                </Btn>
+                <Btn variant="secondary" size="sm" onClick={() => deliveryAlbumRef.current?.click()} disabled={photoUploading}>
+                  <Images size={14} />Choose Photo
+                </Btn>
+              </div>
+            ) : (
+              <p className="text-slate-500 text-sm">No photo attached.</p>
+            )}
+          </div>
           <Textarea label="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="sm:col-span-2" rows={2} />
         </div>
         <div className="modal-actions">
@@ -4074,8 +4258,74 @@ function DeliveryModule({
             }} className="mr-auto"><Trash2 size={14} />Delete</Btn>
           )}
           <Btn variant="secondary" onClick={closeDeliveryForm}>Cancel</Btn>
-          <Btn onClick={saveDelivery} disabled={!canEdit}><Truck size={14} />{isEditing ? "Save Changes" : "Schedule"}</Btn>
+          <Btn onClick={saveDelivery} disabled={!canEdit || photoUploading}>
+            <Truck size={14} />{photoUploading ? "Saving…" : (isEditing ? "Save Changes" : "Schedule")}
+          </Btn>
         </div>
+      </Modal>
+
+      <Modal
+        open={!!viewDelivery}
+        onClose={() => setViewDeliveryId(null)}
+        title={viewDelivery ? `Delivery ${viewDelivery.id}` : "Delivery"}
+        size="lg"
+      >
+        {viewDelivery && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge className={statusColor[viewDelivery.status]}>{viewDelivery.status}</Badge>
+              {viewDelivery.invoiceId && <span className="font-mono text-purple-400/90 text-xs">{viewDelivery.invoiceId}</span>}
+            </div>
+            <div>
+              <p className="text-white font-bold text-lg">{viewDelivery.customerName}</p>
+              {formatDeliveryLocation(viewDelivery) ? (
+                <p className="text-slate-400 text-sm flex items-start gap-1 mt-1">
+                  <MapPin size={12} className="mt-0.5 shrink-0" />
+                  <span>{formatDeliveryLocation(viewDelivery)}</span>
+                </p>
+              ) : null}
+              <div className="flex flex-wrap gap-4 mt-2 text-xs text-slate-500">
+                <span><Clock size={10} className="inline mr-1" />{formatDeliverySchedule(viewDelivery.schedule)}</span>
+                {viewDelivery.items && <span>Items: {viewDelivery.items}</span>}
+                {viewDelivery.driver && <span>Driver: {viewDelivery.driver}</span>}
+              </div>
+              {viewDelivery.notes && <p className="text-slate-400 text-sm mt-2 italic">{viewDelivery.notes}</p>}
+              <AssigneeBadges users={users} assignedUserIds={viewDelivery.assignedUserIds} className="mt-2" />
+            </div>
+            {deliveryPhotoSrc(viewDelivery) ? (
+              <div className="rounded-xl overflow-hidden border border-slate-600 bg-[#d4d4d4] p-2">
+                <StoredImage
+                  src={deliveryPhotoSrc(viewDelivery)}
+                  alt={viewDelivery.photoName || "Delivery photo"}
+                  className="w-full max-h-[70vh] object-contain mx-auto"
+                  entity="delivery"
+                  recordId={viewDelivery.id}
+                  field="photo"
+                  onRefresh={() => refreshDeliveryPhoto(viewDelivery.id)}
+                />
+              </div>
+            ) : (
+              <Card className="p-6 text-center text-slate-400 text-sm">No photo on this delivery.</Card>
+            )}
+            <div className="flex flex-wrap gap-2">
+              {canEdit && (
+                <Btn variant="secondary" size="sm" onClick={() => { setViewDeliveryId(null); openEditDelivery(viewDelivery); }}>
+                  <Edit2 size={14} />Edit Delivery
+                </Btn>
+              )}
+              {viewDelivery.status !== "cancelled" && (
+                <Btn variant="success" size="sm" onClick={() => { setViewDeliveryId(null); openWhatsappPicker(viewDelivery); }}>
+                  <MessageSquare size={14} />WhatsApp
+                </Btn>
+              )}
+              {viewDelivery.invoiceId && (
+                <Btn variant="ghost" size="sm" onClick={() => { setViewDeliveryId(null); setInvoicePreviewId(viewDelivery.invoiceId); }}>
+                  <Eye size={14} />View Invoice
+                </Btn>
+              )}
+            </div>
+          </div>
+        )}
       </Modal>
 
       <Modal open={!!invoicePreviewId} onClose={() => setInvoicePreviewId(null)} title={`Invoice ${invoicePreviewId || ""}`} size="full">

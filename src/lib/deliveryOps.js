@@ -71,6 +71,9 @@ export function normalizeDeliveryRecord(delivery) {
     createdBy: delivery.createdBy || '',
     deliveredAt: delivery.deliveredAt || null,
     assignedUserIds: normalizeAssignedUserIds(delivery.assignedUserIds ?? delivery.assigned_user_ids),
+    photo: delivery.photo || '',
+    photoName: delivery.photoName || '',
+    photoData: delivery.photoData || '',
   }
 }
 

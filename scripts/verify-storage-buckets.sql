@@ -3,10 +3,10 @@
 
 SELECT id, name, public, file_size_limit, created_at
 FROM storage.buckets
-WHERE id IN ('expense-receipts', 'koi-photos')
+WHERE id IN ('expense-receipts', 'koi-photos', 'delivery-photos')
 ORDER BY id;
 
--- Expected: 2 rows, public = false for both.
+-- Expected: 3 rows, public = false for each.
 -- If missing, run migrations in order:
 --   20250615000000_expense_storage.sql
 --   20250616000000_expense_storage_private.sql

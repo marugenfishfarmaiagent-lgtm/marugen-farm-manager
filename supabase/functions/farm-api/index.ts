@@ -8,6 +8,13 @@ import {
   uploadExpenseReceiptImage,
 } from "../_shared/expenseStorage.ts";
 import {
+  deleteDeliveryPhotos,
+  deliveryPhotoPath,
+  normalizeDeliveryPhotoForStorage,
+  signDeliveryPhotoUrl,
+  uploadDeliveryPhotoImage,
+} from "../_shared/deliveryStorage.ts";
+import {
   customerKoiDeathPhotoPath,
   customerKoiPhotoPath,
   deleteCustomerKoiImages,
@@ -439,7 +446,15 @@ Deno.serve(async (req) => {
             return { ...base, image_url: signed };
           }))
           : [],
-        deliveries: permittedRows(user, "deliveries", deliveries.data || []),
+        deliveries: hasPermission(user, "deliveries")
+          ? await Promise.all(
+            permittedRows(user, "deliveries", deliveries.data || []).map(async (d: Record<string, unknown>) => {
+              if (!d.photo) return d;
+              const signed = await signDeliveryPhotoUrl(db, String(d.photo), d.id);
+              return { ...d, photo: signed };
+            }),
+          )
+          : [],
         events: permittedRows(user, "calendar", events.data || []),
         stockActivity: permittedRows(user, "inventory", stockActivity.data || []),
         koiFish: canKoiFish
@@ -483,6 +498,21 @@ Deno.serve(async (req) => {
       const path = await uploadExpenseReceiptImage(db, id, imageData);
       const imageUrl = await signExpenseReceiptUrl(db, path, id);
       return J({ imageUrl, imagePath: path, imageName: imageName || "" });
+    }
+
+    if (body.action === "upload_delivery_photo") {
+      if (!hasPermission(user, "deliveries")) {
+        return J({ error: "Permission denied (deliveries)" }, 403);
+      }
+      const { deliveryId, imageData, photoName } = body;
+      const id = String(deliveryId ?? "").trim();
+      if (!id) return J({ error: "deliveryId required" }, 400);
+      if (!imageData || typeof imageData !== "string" || !imageData.startsWith("data:image/")) {
+        return J({ error: "Valid image data required" }, 400);
+      }
+      const path = await uploadDeliveryPhotoImage(db, id, imageData);
+      const photo = await signDeliveryPhotoUrl(db, path, id);
+      return J({ photo, photoPath: path, photoName: photoName || "" });
     }
 
     if (body.action === "upload_koi_image") {
@@ -599,6 +629,16 @@ Deno.serve(async (req) => {
             bucket: KOI_PHOTOS_BUCKET,
             pathFor: customerKoiDeathPhotoPath,
             sign: (d, path, id) => signFarmImageUrl(d, KOI_PHOTOS_BUCKET, path, customerKoiDeathPhotoPath(id)),
+          },
+        },
+        delivery: {
+          photo: {
+            perm: "deliveries",
+            table: "deliveries",
+            column: "photo",
+            bucket: "delivery-photos",
+            pathFor: deliveryPhotoPath,
+            sign: signDeliveryPhotoUrl,
           },
         },
       };
@@ -955,14 +995,30 @@ Deno.serve(async (req) => {
             return J({ error: `Invalid delivery status: ${d.status}` }, 400);
           }
         }
-        await upsertSyncAssignedTeam("deliveries", incoming.map((d: Record<string, unknown>) => withTs({
-          id: d.id, invoice_id: d.invoiceId ?? "",
-          customer_id: nullableBigint(d.customerId),
-          customer_name: d.customerName, area: d.area ?? "",
-          postal_code: d.postalCode ?? "", address: d.address, schedule: d.schedule, status: d.status ?? "scheduled",
-          items: d.items ?? "", driver: d.driver ?? "", notes: d.notes ?? "", created_by: d.createdBy ?? "",
-          assigned_user_ids: normalizeAssignedUserIds(d.assignedUserIds ?? d.assigned_user_ids),
-        }, d)), "id", syncOpts);
+        const deliveryRows = await Promise.all(incoming.map(async (d: Record<string, unknown>) => {
+          const deliveryId = String(d.id ?? "").trim();
+          let photoPath = normalizeDeliveryPhotoForStorage(String(d.photo ?? ""), deliveryId);
+          let photoData = d.photoData ?? null;
+          if (photoData && typeof photoData === "string" && photoData.startsWith("data:image/")) {
+            photoPath = await uploadDeliveryPhotoImage(db, deliveryId, photoData);
+            photoData = null;
+          } else if (photoPath) {
+            photoData = null;
+          }
+          return withTs({
+            id: deliveryId, invoice_id: d.invoiceId ?? "",
+            customer_id: nullableBigint(d.customerId),
+            customer_name: d.customerName, area: d.area ?? "",
+            postal_code: d.postalCode ?? "", address: d.address, schedule: d.schedule, status: d.status ?? "scheduled",
+            items: d.items ?? "", driver: d.driver ?? "", notes: d.notes ?? "", created_by: d.createdBy ?? "",
+            assigned_user_ids: normalizeAssignedUserIds(d.assignedUserIds ?? d.assigned_user_ids),
+            photo: photoPath, photo_name: d.photoName ?? "",
+          }, d);
+        }));
+        await upsertSyncAssignedTeam("deliveries", deliveryRows, "id", {
+          ...syncOpts,
+          beforeDelete: async (ids) => { await deleteDeliveryPhotos(db, ids); },
+        });
       } else if (entity === "events") {
         const incoming = (data || []) as Record<string, unknown>[];
         const EVENT_TYPES = new Set(["maintenance", "feeding", "purchase", "customer", "other"]);

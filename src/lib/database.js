@@ -182,6 +182,9 @@ function mapDelivery(row) {
     notes: row.notes ?? '',
     createdBy: row.created_by ?? row.createdBy ?? '',
     assignedUserIds: normalizeAssignedUserIds(row.assigned_user_ids ?? row.assignedUserIds),
+    photo: row.photo ?? '',
+    photoName: row.photo_name ?? row.photoName ?? '',
+    photoData: row.photo_data ?? row.photoData ?? '',
   }))
 }
 
@@ -460,6 +463,11 @@ export async function uploadExpenseReceipt(expenseId, imageData, imageName = '')
   return apiCall({ action: 'upload_expense_receipt', expenseId, imageData, imageName })
 }
 
+export async function uploadDeliveryPhoto(deliveryId, imageData, photoName = '') {
+  if (!isSupabaseConfigured) throw new Error('Cloud storage is not configured')
+  return apiCall({ action: 'upload_delivery_photo', deliveryId, imageData, photoName })
+}
+
 export async function uploadKoiFishPhoto(recordId, imageData, field = 'photo') {
   if (!isSupabaseConfigured) throw new Error('Cloud storage is not configured')
   return apiCall({ action: 'upload_koi_image', entity: 'koi_fish', id: recordId, field, imageData })
@@ -494,6 +502,10 @@ export async function refreshSignedImage({ entity, id, field }) {
 
 export async function refreshExpenseReceiptUrl(expenseId) {
   return refreshSignedImage({ entity: 'expense', id: expenseId, field: 'image' })
+}
+
+export async function refreshDeliveryPhotoUrl(deliveryId) {
+  return refreshSignedImage({ entity: 'delivery', id: deliveryId, field: 'photo' })
 }
 
 export async function syncDeliveries(deliveries, options) {

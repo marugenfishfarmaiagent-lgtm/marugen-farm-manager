@@ -99,7 +99,9 @@ CREATE TABLE IF NOT EXISTS deliveries (
   items TEXT DEFAULT '',
   driver TEXT DEFAULT '',
   notes TEXT DEFAULT '',
-  created_by TEXT DEFAULT ''
+  created_by TEXT DEFAULT '',
+  photo TEXT DEFAULT '',
+  photo_name TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS events (

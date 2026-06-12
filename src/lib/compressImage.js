@@ -160,6 +160,15 @@ export function expenseImageSrc(expense) {
   return expense?.imageUrl || expense?.imageData || ''
 }
 
+/** Delivery photos — same compression limits as receipts. */
+export async function compressDeliveryPhoto(file, options = {}) {
+  return compressImageFile(file, { defaultName: 'delivery', ...options })
+}
+
+export function deliveryPhotoSrc(delivery) {
+  return delivery?.photo || delivery?.photoData || ''
+}
+
 export function formatCompressedSize(bytes) {
   if (bytes == null) return ''
   if (bytes < 1024) return `${bytes} B`

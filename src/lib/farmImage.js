@@ -110,6 +110,7 @@ export function normalizeImageFieldForSync(value, storagePath) {
 
 export const storagePaths = {
   expenseReceipt: (id) => `receipts/${String(id)}.jpg`,
+  deliveryPhoto: (id) => `deliveries/${String(id)}/photo.jpg`,
   koiFishPhoto: (id) => `koi-fish/${String(id)}/photo.jpg`,
   koiFishDeathPhoto: (id) => `koi-fish/${String(id)}/death.jpg`,
   customerKoiPhoto: (id) => `customer-koi/${String(id)}/photo.jpg`,
