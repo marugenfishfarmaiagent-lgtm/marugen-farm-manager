@@ -122,6 +122,28 @@ const TERMINAL_CUSTOMER_KOI_STATUSES = new Set([
   CUSTOMER_KOI_STATUS.DECEASED,
 ])
 
+const CUSTOMER_KOI_EDIT_FIELDS = [
+  'fishName', 'variety', 'size', 'pondName', 'purchasePrice', 'purchaseDate', 'notes', 'koiId',
+  'customerId', 'customerName', 'collectedDate',
+]
+
+function customerKoiEditFieldsDiffer(a, b) {
+  return CUSTOMER_KOI_EDIT_FIELDS.some((key) => {
+    const av = a?.[key]
+    const bv = b?.[key]
+    if (key === 'purchasePrice' || key === 'size') return Number(av) !== Number(bv)
+    return String(av ?? '') !== String(bv ?? '')
+  })
+}
+
+function pickCustomerKoiEditFields(record) {
+  const picked = {}
+  for (const key of CUSTOMER_KOI_EDIT_FIELDS) {
+    if (record?.[key] !== undefined) picked[key] = record[key]
+  }
+  return picked
+}
+
 /** Prefer taken-away / deceased over in-pond when cloud pull races a fresh status change. */
 export function resolveCustomerKoiConflict(local, remote) {
   const lt = ts(local)
@@ -143,6 +165,9 @@ export function resolveCustomerKoiConflict(local, remote) {
       pondName: local.pondName,
       updatedAt: local.updatedAt,
     }
+  }
+  if (rt - lt < 5000 && ls === rs && customerKoiEditFieldsDiffer(local, remote)) {
+    return { ...remote, ...pickCustomerKoiEditFields(local), updatedAt: local.updatedAt }
   }
   return remote
 }

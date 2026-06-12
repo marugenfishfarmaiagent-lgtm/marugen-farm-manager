@@ -107,3 +107,15 @@ export function buildCustomerKoiDeathPatch(record, { deathDate, deathCause, deat
 export function isValidCustomerKoiStatus(status) {
   return VALID_STATUSES.has(status)
 }
+
+/** Active customer-koi rows linked to a farm koi (for keep-at-farm refund path). */
+export function getLinkedCustomerKoiForRefund(records, koiId) {
+  if (!koiId) return []
+  return (records || []).filter(
+    (r) => sameKoiId(r.koiId, koiId) && r.status !== CUSTOMER_KOI_STATUS.DECEASED,
+  )
+}
+
+export function hasLinkedCustomerKoiForRefund(records, koiId) {
+  return getLinkedCustomerKoiForRefund(records, koiId).length > 0
+}
