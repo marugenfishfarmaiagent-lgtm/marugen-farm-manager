@@ -23,7 +23,7 @@ export function normalizeExpenseRecord(expense) {
   }
   const category = expense.category && EXPENSE_CATEGORIES.includes(expense.category)
     ? expense.category
-    : (expense.category || null)
+    : null
   return {
     ...expense,
     category,

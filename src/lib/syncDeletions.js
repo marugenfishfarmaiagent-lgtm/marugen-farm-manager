@@ -16,6 +16,11 @@ export function markDeleted(entity, id) {
   pending[entity]?.add(String(id))
 }
 
+export function unmarkDeleted(entity, id) {
+  if (id == null || id === '') return
+  pending[entity]?.delete(String(id))
+}
+
 export function peekDeletions(entity) {
   const set = pending[entity]
   return set?.size ? [...set] : []

@@ -70,7 +70,7 @@ import {
 } from "./lib/retention";
 import { isSupabaseConfigured } from "./lib/supabase";
 import * as auth from "./lib/auth";
-import { markDeleted, clearAllDeletions, peekDeletions } from "./lib/syncDeletions";
+import { markDeleted, clearAllDeletions, peekDeletions, unmarkDeleted } from "./lib/syncDeletions";
 import { mergeRecords, mergePondData, mergeInvoices, mergeProducts, mergeKoiFish, mergeCustomerKoi, resolveInvoiceConflict, resolveExpenseConflict, resolveEventConflict } from "./lib/cloudMerge";
 import {
   countIncomingTeamChanges,
@@ -1036,8 +1036,8 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       setDeleteProduct(null);
       return;
     }
-    setProducts((prev) => prev.filter((p) => !sameProductId(p.id, deleteProduct.id)));
     markDeleted("products", deleteProduct.id);
+    setProducts((prev) => prev.filter((p) => !sameProductId(p.id, deleteProduct.id)));
     addNotification({ type: "info", title: "Product Deleted", message: `${deleteProduct.name} removed from inventory` });
     setDeleteProduct(null);
   };
@@ -2875,8 +2875,8 @@ function CustomerModule({
       return;
     }
     const id = deleteCustomer.id;
-    setCustomers((prev) => prev.filter((c) => String(c.id) !== String(id)));
     markDeleted("customers", id);
+    setCustomers((prev) => prev.filter((c) => String(c.id) !== String(id)));
     if (String(viewId) === String(id)) setViewId(null);
     addNotification({ type: "info", title: "Customer Deleted", message: `${deleteCustomer.name} removed from CRM` });
     setDeleteCustomer(null);
@@ -3077,6 +3077,7 @@ function CustomerModule({
 function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, onPersistExpenses }) {
   const canEdit = canEditRecords(currentUser);
   const savingExpenseRef = useRef(false);
+  const lastExpenseSaveErrorRef = useRef("");
   const [showAdd, setShowAdd] = useState(false);
   const [viewExpenseId, setViewExpenseId] = useState(null);
   const [bookedFilter, setBookedFilter] = useState("all");
@@ -3096,7 +3097,10 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
   const cameraInputRef = useRef(null);
 
   const commitExpenseList = async (buildNext) => {
-    if (savingExpenseRef.current) return null;
+    if (savingExpenseRef.current) {
+      lastExpenseSaveErrorRef.current = "Another save is in progress. Wait a moment and try again.";
+      return null;
+    }
     let nextList = null;
     let snapshot = null;
     let unchanged = false;
@@ -3110,19 +3114,24 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
       nextList = built;
       return nextList;
     });
-    if (unchanged || !nextList) return null;
+    if (unchanged || !nextList) {
+      lastExpenseSaveErrorRef.current = "Nothing to save.";
+      return null;
+    }
     if (!onPersistExpenses) return nextList;
 
     savingExpenseRef.current = true;
+    lastExpenseSaveErrorRef.current = "";
     try {
       await onPersistExpenses(nextList);
       return nextList;
     } catch (err) {
       setExpenses(snapshot);
+      lastExpenseSaveErrorRef.current = err?.message || "Could not save to cloud. Try again.";
       addNotification({
         type: "error",
         title: "Save failed",
-        message: err?.message || "Could not save to cloud. Try again.",
+        message: lastExpenseSaveErrorRef.current,
       });
       return null;
     } finally {
@@ -3257,13 +3266,23 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
     }
     const expense = deleteConfirm;
     setDeletingExpense(true);
+    markDeleted("expenses", expense.id);
     try {
       const saved = await commitExpenseList((prev) => prev.filter((e) => !sameExpenseId(e.id, expense.id)));
       if (!saved) {
-        addNotification({ type: "error", title: "Delete Failed", message: "Could not remove receipt. Try again." });
+        unmarkDeleted("expenses", expense.id);
+        const detail = lastExpenseSaveErrorRef.current || "Could not remove receipt. Try again.";
+        const saveFailedAlreadyShown = detail !== "Another save is in progress. Wait a moment and try again."
+          && detail !== "Nothing to save.";
+        if (!saveFailedAlreadyShown) {
+          addNotification({
+            type: "error",
+            title: "Delete Failed",
+            message: detail,
+          });
+        }
         return;
       }
-      markDeleted("expenses", expense.id);
       setViewExpenseId((prev) => (sameExpenseId(prev, expense.id) ? null : prev));
       addNotification({ type: "info", title: "Receipt Deleted", message: "Expense receipt removed." });
       setDeleteConfirm(null);
@@ -4035,8 +4054,8 @@ function DeliveryModule({
       return;
     }
     const d = deleteConfirm;
-    setDeliveries((prev) => prev.filter((x) => !sameDeliveryId(x.id, d.id)));
     markDeleted("deliveries", d.id);
+    setDeliveries((prev) => prev.filter((x) => !sameDeliveryId(x.id, d.id)));
     if (sameDeliveryId(editDeliveryId, d.id)) closeDeliveryForm();
     if (sameDeliveryId(whatsappDeliveryId, d.id)) closeWhatsappPicker();
     if (sameDeliveryId(viewDeliveryId, d.id)) setViewDeliveryId(null);
@@ -4131,8 +4150,8 @@ function DeliveryModule({
       notifyPermissionDenied(addNotification, "delete");
       return;
     }
-    persistWhatsappGroups(whatsappGroups.filter((g) => g.id !== id));
     markDeleted("whatsapp_groups", id);
+    persistWhatsappGroups(whatsappGroups.filter((g) => g.id !== id));
   };
 
   const openWhatsappPicker = (d) => {
@@ -4747,6 +4766,7 @@ function CalendarEventCard({ e, users, canEdit, canDelete, onEdit, onDelete, onN
 
 function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification, currentUser, users = [], onPersistEvents }) {
   const savingEventRef = useRef(false);
+  const lastEventSaveErrorRef = useRef("");
   const emptyEventForm = () => ({ title: "", date: today(), time: "09:00", type: "other", note: "", assignedUserIds: [] });
   const eventToForm = (e) => ({
     title: e.title || "",
@@ -4764,18 +4784,25 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
   const commitEventList = async (buildNext) => {
-    if (savingEventRef.current) return null;
+    if (savingEventRef.current) {
+      lastEventSaveErrorRef.current = "Another save is in progress. Wait a moment and try again.";
+      return null;
+    }
     const snapshot = events;
     const nextList = buildNext(snapshot);
-    if (nextList === snapshot) return null;
+    if (nextList === snapshot) {
+      lastEventSaveErrorRef.current = "Nothing to save.";
+      return null;
+    }
 
     setEvents(nextList);
     if (!onPersistEvents) {
       if (isSupabaseConfigured) {
+        lastEventSaveErrorRef.current = "Cloud save is unavailable. Try again after refresh.";
         addNotification({
           type: "error",
           title: "Save failed",
-          message: "Cloud save is unavailable. Try again after refresh.",
+          message: lastEventSaveErrorRef.current,
         });
         setEvents(snapshot);
         return null;
@@ -4784,15 +4811,17 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
     }
 
     savingEventRef.current = true;
+    lastEventSaveErrorRef.current = "";
     try {
       await onPersistEvents(nextList);
       return nextList;
     } catch (err) {
       setEvents(snapshot);
+      lastEventSaveErrorRef.current = err?.message || "Could not save to cloud. Try again.";
       addNotification({
         type: "error",
         title: "Save failed",
-        message: err?.message || "Could not save to cloud. Try again.",
+        message: lastEventSaveErrorRef.current,
       });
       return null;
     } finally {
@@ -4916,7 +4945,20 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
     const label = e.title || "this event";
     markDeleted("events", e.id);
     const saved = await commitEventList((prev) => prev.filter((x) => !sameEventId(x.id, e.id)));
-    if (!saved) return;
+    if (!saved) {
+      unmarkDeleted("events", e.id);
+      const detail = lastEventSaveErrorRef.current || "Could not remove event. Try again.";
+      const saveFailedAlreadyShown = detail !== "Another save is in progress. Wait a moment and try again."
+        && detail !== "Nothing to save.";
+      if (!saveFailedAlreadyShown) {
+        addNotification({
+          type: "error",
+          title: "Delete Failed",
+          message: detail,
+        });
+      }
+      return;
+    }
     if (sameEventId(editEventId, e.id)) closeEventForm();
     addNotification({ type: "info", title: "Event Deleted", message: `"${label}" removed.` });
     setDeleteConfirm(null);
@@ -6767,12 +6809,17 @@ export default function App() {
   const flushProductSync = useCallback(async (productsOverride) => {
     if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
     if (!hasPermission(currentUser, "inventory")) return;
-    if (!(await ensureCloudSyncReady())) return;
     const productKey = "inventory:Inventory";
     if (syncTimersRef.current[productKey]) {
       clearTimeout(syncTimersRef.current[productKey]);
       delete syncTimersRef.current[productKey];
     }
+    let waited = 0;
+    while (syncInFlightRef.current > 0 && waited < 3000) {
+      await new Promise((r) => setTimeout(r, 100));
+      waited += 100;
+    }
+    if (!(await ensureCloudSyncReady())) return;
     const payload = productsOverride ?? syncStateRef.current.products ?? [];
     syncInFlightRef.current += 1;
     try {
@@ -6789,12 +6836,17 @@ export default function App() {
   const flushCustomerKoiSync = useCallback(async (recordsOverride) => {
     if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
     if (!hasPermission(currentUser, "customerkoi")) return;
-    if (!(await ensureCloudSyncReady())) return;
     const syncKey = "customerkoi:Customer koi";
     if (syncTimersRef.current[syncKey]) {
       clearTimeout(syncTimersRef.current[syncKey]);
       delete syncTimersRef.current[syncKey];
     }
+    let waited = 0;
+    while (syncInFlightRef.current > 0 && waited < 3000) {
+      await new Promise((r) => setTimeout(r, 100));
+      waited += 100;
+    }
+    if (!(await ensureCloudSyncReady())) return;
     const payload = recordsOverride ?? syncStateRef.current.customerKoiList ?? [];
     syncInFlightRef.current += 1;
     try {
@@ -6855,13 +6907,18 @@ export default function App() {
     if (!hasPermission(currentUser, "expenses")) {
       throw new Error("Permission denied (expenses).");
     }
-    if (!(await ensureCloudSyncReady())) {
-      throw new Error("Session needs refresh. Log out and log in again.");
-    }
     const syncKey = "expenses:Expenses";
     if (syncTimersRef.current[syncKey]) {
       clearTimeout(syncTimersRef.current[syncKey]);
       delete syncTimersRef.current[syncKey];
+    }
+    let waited = 0;
+    while (syncInFlightRef.current > 0 && waited < 3000) {
+      await new Promise((r) => setTimeout(r, 100));
+      waited += 100;
+    }
+    if (!(await ensureCloudSyncReady())) {
+      throw new Error("Session needs refresh. Log out and log in again.");
     }
     const raw = expensesOverride ?? syncStateRef.current.expenses ?? [];
     const payload = raw.map((e) => touchUpdatedAt(e));
@@ -6882,12 +6939,17 @@ export default function App() {
   const flushKoiFishSync = useCallback(async (koiOverride) => {
     if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
     if (!hasPermission(currentUser, "koifish")) return;
-    if (!(await ensureCloudSyncReady())) return;
     const syncKey = "koifish:Koi fish";
     if (syncTimersRef.current[syncKey]) {
       clearTimeout(syncTimersRef.current[syncKey]);
       delete syncTimersRef.current[syncKey];
     }
+    let waited = 0;
+    while (syncInFlightRef.current > 0 && waited < 3000) {
+      await new Promise((r) => setTimeout(r, 100));
+      waited += 100;
+    }
+    if (!(await ensureCloudSyncReady())) return;
     const payload = koiOverride ?? syncStateRef.current.koiFishList ?? [];
     syncInFlightRef.current += 1;
     try {

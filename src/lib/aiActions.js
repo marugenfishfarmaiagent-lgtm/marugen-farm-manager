@@ -1042,8 +1042,8 @@ export function executeAiAction(name, args, ctx) {
         if (!canDelete(currentUser)) return { success: false, error: 'No delete permission' }
         const customer = findCustomer(ctx, a.name)
         if (!customer) return { success: false, error: `Customer not found: ${a.name}` }
-        ctx.setCustomers((prev) => prev.filter((c) => !sameCustomerId(c.id, customer.id)))
         markDeleted('customers', customer.id)
+        ctx.setCustomers((prev) => prev.filter((c) => !sameCustomerId(c.id, customer.id)))
         addNotification?.({ type: 'info', title: 'Customer Deleted (AI)', message: customer.name })
         onNavigate?.('customers')
         return { success: true, message: `Deleted customer ${customer.name}` }
@@ -1054,8 +1054,8 @@ export function executeAiAction(name, args, ctx) {
         if (!canDelete(currentUser)) return { success: false, error: 'No delete permission' }
         const product = findProduct(ctx, a.productName)
         if (!product) return { success: false, error: `Product not found: ${a.productName}` }
-        ctx.setProducts((prev) => prev.filter((p) => p.id !== product.id))
         markDeleted('products', product.id)
+        ctx.setProducts((prev) => prev.filter((p) => p.id !== product.id))
         addNotification?.({ type: 'info', title: 'Product Deleted (AI)', message: product.name })
         onNavigate?.('inventory')
         return { success: true, message: `Removed ${product.name} from inventory` }
@@ -1168,8 +1168,8 @@ export function executeAiAction(name, args, ctx) {
         if (!canDelete(currentUser)) return { success: false, error: 'No delete permission' }
         const del = findDelivery(ctx, a)
         if (!del) return { success: false, error: 'Delivery not found' }
-        ctx.setDeliveries((prev) => prev.filter((d) => !sameDeliveryId(d.id, del.id)))
         markDeleted('deliveries', del.id)
+        ctx.setDeliveries((prev) => prev.filter((d) => !sameDeliveryId(d.id, del.id)))
         addNotification?.({ type: 'info', title: 'Delivery Deleted (AI)', message: del.id })
         onNavigate?.('deliveries')
         return { success: true, message: `Deleted delivery ${del.id} (${del.customerName})` }
@@ -1201,8 +1201,8 @@ export function executeAiAction(name, args, ctx) {
         if (!canDelete(currentUser)) return { success: false, error: 'No delete permission' }
         const ev = findCalendarEvent(ctx, a)
         if (!ev) return { success: false, error: 'Event not found' }
-        ctx.setEvents((prev) => prev.filter((e) => !sameEventId(e.id, ev.id)))
         markDeleted('events', ev.id)
+        ctx.setEvents((prev) => prev.filter((e) => !sameEventId(e.id, ev.id)))
         addNotification?.({ type: 'info', title: 'Event Deleted (AI)', message: ev.title })
         onNavigate?.('calendar')
         return { success: true, message: `Deleted event "${ev.title}" on ${ev.date}` }
