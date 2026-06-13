@@ -464,6 +464,13 @@ export default function KoiFish({
       setSellKoi(null)
     } catch (err) {
       setKoiList(snapshotKoi)
+      if (sellForm.disposition === 'keep' && isSupabaseConfigured) {
+        try {
+          await onKoiRefund?.(soldPatch, { reason: 'Cloud sync failed' })
+        } catch {
+          /* best-effort rollback of keep-at-farm customer koi */
+        }
+      }
       addNotification({
         type: 'error',
         title: 'Sale Not Completed',

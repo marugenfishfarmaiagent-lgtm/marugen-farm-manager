@@ -1015,7 +1015,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     setShowAdd(true);
   };
 
-  const saveEditProduct = () => {
+  const saveEditProduct = async () => {
     if (!canEdit) {
       notifyPermissionDenied(addNotification, "edit");
       return;
@@ -1033,16 +1033,35 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       : { ...editProduct, ...normalized };
     const updated = touchUpdatedAt(base);
     const prevName = current?.name;
-    const nextProducts = products.map((p) => (sameProductId(p.id, updated.id) ? updated : p));
-    setProducts(nextProducts);
+    const productsSnapshot = products;
+    const stockSnapshot = stockLog;
+    const nextProducts = productsSnapshot.map((p) => (sameProductId(p.id, updated.id) ? updated : p));
+    let nextStockLog = stockSnapshot;
     if (prevName && prevName !== updated.name) {
-      setStockLog((prev) => prev.map((l) => (
+      nextStockLog = stockSnapshot.map((l) => (
         sameProductId(l.productId, updated.id) ? { ...l, productName: updated.name } : l
-      )));
+      ));
+    }
+    setProducts(nextProducts);
+    if (prevName && prevName !== updated.name) setStockLog(nextStockLog);
+    try {
+      if (onInventorySaved) {
+        await onInventorySaved(nextProducts, nextStockLog);
+      } else {
+        await onProductsSaved?.(nextProducts);
+      }
+    } catch (err) {
+      setProducts(productsSnapshot);
+      setStockLog(stockSnapshot);
+      addNotification({
+        type: "error",
+        title: "Save Failed",
+        message: err?.message || "Could not save product to cloud.",
+      });
+      return;
     }
     addNotification({ type: "success", title: "Product Updated", message: `${updated.name} saved` });
     setEditProduct(null);
-    onProductsSaved?.(nextProducts);
   };
 
   const confirmDeleteProduct = async () => {
@@ -7109,8 +7128,13 @@ export default function App() {
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
   const flushInventorySync = useCallback(async (productsOverride, stockLogOverride) => {
-    if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
-    if (!hasPermission(currentUser, "inventory")) return;
+    if (!isSupabaseConfigured) return;
+    if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
+      throw new Error("Cloud sync is not ready.");
+    }
+    if (!hasPermission(currentUser, "inventory")) {
+      throw new Error("Permission denied (inventory).");
+    }
     const productKey = "inventory:Inventory";
     const stockKey = "inventory:Stock activity";
     if (syncTimersRef.current[productKey]) {
@@ -7126,7 +7150,9 @@ export default function App() {
       await new Promise((r) => setTimeout(r, 100));
       waited += 100;
     }
-    if (!(await ensureCloudSyncReady())) return;
+    if (!(await ensureCloudSyncReady())) {
+      throw new Error("Session needs refresh. Log out and log in again.");
+    }
     const nextProducts = productsOverride ?? syncStateRef.current.products ?? [];
     const nextStockLog = stockLogOverride ?? syncStateRef.current.stockLog ?? [];
     syncInFlightRef.current += 1;
@@ -7553,18 +7579,45 @@ export default function App() {
     setInvoices(applyInvoicePins(nextInvoices));
 
     if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) {
-      setCustomers((prev) => applyCustomerPaidDelta(prev, inv.customerId, paidTotal));
-      return;
+      unpinInvoice(invId);
+      const revertedInvoices = sortInvoices(
+        syncStateRef.current.invoices.map((i) => (
+          String(i.id) === invId ? touchUpdatedAt(db.sanitizeInvoiceForSync(inv)) : i
+        )),
+      );
+      syncStateRef.current = { ...syncStateRef.current, invoices: revertedInvoices };
+      setInvoices(applyInvoicePins(revertedInvoices));
+      throw new Error("Cloud sync is not ready.");
+    }
+    if (!hasPermission(currentUser, "invoices")) {
+      unpinInvoice(invId);
+      const revertedInvoices = sortInvoices(
+        syncStateRef.current.invoices.map((i) => (
+          String(i.id) === invId ? touchUpdatedAt(db.sanitizeInvoiceForSync(inv)) : i
+        )),
+      );
+      syncStateRef.current = { ...syncStateRef.current, invoices: revertedInvoices };
+      setInvoices(applyInvoicePins(revertedInvoices));
+      throw new Error("Permission denied (invoices).");
+    }
+    if (!(await ensureCloudSyncReady())) {
+      unpinInvoice(invId);
+      const revertedInvoices = sortInvoices(
+        syncStateRef.current.invoices.map((i) => (
+          String(i.id) === invId ? touchUpdatedAt(db.sanitizeInvoiceForSync(inv)) : i
+        )),
+      );
+      syncStateRef.current = { ...syncStateRef.current, invoices: revertedInvoices };
+      setInvoices(applyInvoicePins(revertedInvoices));
+      throw new Error("Session needs refresh. Log out and log in again.");
     }
 
     syncInFlightRef.current += 1;
     try {
-      if (isSupabaseConfigured && auth.hasCloudSession()) {
-        await db.upsertInvoiceCloud(touchUpdatedAt(db.sanitizeInvoiceForSync({
-          ...inv,
-          total: paidTotal,
-        })));
-      }
+      await db.upsertInvoiceCloud(touchUpdatedAt(db.sanitizeInvoiceForSync({
+        ...inv,
+        total: paidTotal,
+      })));
       const { invoice: confirmed, customer: confirmedCustomer } = await db.markInvoicePaidCloud(invId);
       const confirmedRow = touchUpdatedAt(db.sanitizeInvoiceForSync(confirmed));
       const localRow = syncStateRef.current.invoices.find((i) => String(i.id) === invId);
@@ -7591,7 +7644,7 @@ export default function App() {
     } finally {
       syncInFlightRef.current -= 1;
     }
-  }, [currentUser, handleSyncFailure, touchLastSync, resetSyncHealth]);
+  }, [currentUser, handleSyncFailure, touchLastSync, ensureCloudSyncReady, resetSyncHealth]);
 
   const cancelInvoiceCloud = useCallback(async (inv) => {
     const invId = String(inv.id);
@@ -8565,7 +8618,7 @@ export default function App() {
     customers, invoices, expenses, products, deliveries, events, stockLog, currentUser, addNotification,
     isSupabaseConfigured,
     koiFishList, customerKoiList, pondData,
-    setCustomers, setInvoices, setExpenses, setProducts, setDeliveries, setEvents, setStockLog,
+    setCustomers, setInvoices, setExpenses: setExpensesWithRef, setProducts, setDeliveries, setEvents, setStockLog,
     setKoiFishList, setCustomerKoiList, setPondData: setPondDataWithRef,
     onNavigate: goToTab,
     onKoiSold: handleKoiSold,

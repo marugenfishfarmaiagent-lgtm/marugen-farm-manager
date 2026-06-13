@@ -768,8 +768,12 @@ export async function executeAiAction(name, args, ctx) {
               )
               try {
                 await ctx.onSyncInventoryToCloud?.(restoredStock.nextProducts, restoredStock.nextStockLog)
-              } catch {
-                /* debounced sync may retry inventory restore */
+              } catch (syncErr) {
+                addNotification?.({
+                  type: 'warning',
+                  title: 'Stock Sync Incomplete',
+                  message: syncErr?.message || 'Local stock was restored but cloud sync may need a retry.',
+                })
               }
             }
             if (koiSalePreview.hasKoiLines) {
@@ -780,13 +784,21 @@ export async function executeAiAction(name, args, ctx) {
               )
               try {
                 await ctx.onSyncKoiFishToCloud?.(restored.nextKoiList)
-              } catch {
-                /* debounced sync may retry koi restore */
+              } catch (syncErr) {
+                addNotification?.({
+                  type: 'warning',
+                  title: 'Koi Sync Incomplete',
+                  message: syncErr?.message || 'Local koi was restored but cloud sync may need a retry.',
+                })
               }
               try {
                 await ctx.onSyncCustomerKoiToCloud?.(restored.nextCustomerKoiList)
-              } catch {
-                /* debounced sync may retry customer koi restore */
+              } catch (syncErr) {
+                addNotification?.({
+                  type: 'warning',
+                  title: 'Customer Koi Sync Incomplete',
+                  message: syncErr?.message || 'Local customer koi was restored but cloud sync may need a retry.',
+                })
               }
             }
             return { success: false, error: err?.message || 'Could not save invoice to cloud.' }
@@ -1310,6 +1322,13 @@ export async function executeAiAction(name, args, ctx) {
         try {
           await ctx.onSyncKoiFish?.(nextKoiList)
         } catch (err) {
+          if (disposition === 'keep') {
+            try {
+              await ctx.onKoiRefund?.(soldPatch, { reason: 'Cloud sync failed' })
+            } catch {
+              /* best-effort rollback of keep-at-farm customer koi */
+            }
+          }
           return { success: false, error: err?.message || 'Could not sync koi sale to cloud.' }
         }
         ctx.setKoiFishList(nextKoiList)
