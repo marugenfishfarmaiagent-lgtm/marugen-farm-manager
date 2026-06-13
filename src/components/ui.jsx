@@ -123,17 +123,17 @@ export function PondNameInput({ label = 'Pond name', value, onChange, className 
   )
 }
 
-export function Input({ label, value, onChange, type = 'text', placeholder, className = '', required, min, max, step, readOnly, inputMode }) {
+export function Input({ label, value, onChange, type = 'text', placeholder, className = '', required, min, max, step, readOnly, inputMode, onBlur }) {
   const isDateTimeField = type === 'date' || type === 'time' || type === 'datetime-local'
   return (
     <div className={`min-w-0 max-w-full overflow-hidden ${className}`}>
       {label && <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wide">{label}{required && <span className="text-red-400 ml-1">*</span>}</label>}
       {isDateTimeField ? (
         <div className="w-full max-w-full min-w-0 overflow-hidden">
-          <input type={type} value={value} onChange={onChange} placeholder={placeholder} min={min} max={max} step={step} readOnly={readOnly} inputMode={inputMode} className={`datetime-field ${fieldClass} ${readOnly ? 'opacity-80 cursor-default' : ''}`} />
+          <input type={type} value={value} onChange={onChange} onBlur={onBlur} placeholder={placeholder} min={min} max={max} step={step} readOnly={readOnly} inputMode={inputMode} className={`datetime-field ${fieldClass} ${readOnly ? 'opacity-80 cursor-default' : ''}`} />
         </div>
       ) : (
-        <input type={type} value={value} onChange={onChange} placeholder={placeholder} min={min} max={max} step={step} readOnly={readOnly} inputMode={inputMode} className={`${fieldClass} ${readOnly ? 'opacity-80 cursor-default' : ''}`} />
+        <input type={type} value={value} onChange={onChange} onBlur={onBlur} placeholder={placeholder} min={min} max={max} step={step} readOnly={readOnly} inputMode={inputMode} className={`${fieldClass} ${readOnly ? 'opacity-80 cursor-default' : ''}`} />
       )}
     </div>
   )
