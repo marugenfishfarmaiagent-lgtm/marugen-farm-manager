@@ -2485,7 +2485,10 @@ function InvoiceModule({
           const viewAmounts = calcInvoiceAmounts(
             canEditFees ? { ...activeViewInv, shipping: draftShipping } : activeViewInv,
           );
-          const docInv = invoiceForDisplay(activeViewInv);
+          const previewInv = canEditFees
+            ? { ...activeViewInv, shipping: draftShipping, total: viewAmounts.total }
+            : activeViewInv;
+          const docInv = invoiceForDisplay(previewInv);
           const isMarkingView = String(markingPaidId) === String(activeViewInv.id);
           const isCancellingView = String(cancellingId) === String(activeViewInv.id);
           return (
@@ -2506,7 +2509,7 @@ function InvoiceModule({
                 <Btn variant="success" onClick={() => sendWhatsApp(activeViewInv)} className="flex-1 sm:flex-none justify-center">
                   <MessageSquare size={14} />Open WhatsApp
                 </Btn>
-                <Btn onClick={() => downloadPdf(activeViewInv)} disabled={pdfLoading} className="flex-1 sm:flex-none justify-center">
+                <Btn onClick={() => downloadPdf(previewInv)} disabled={pdfLoading} className="flex-1 sm:flex-none justify-center">
                   <Printer size={14} />{pdfLoading ? "Generating..." : "Download PDF"}
                 </Btn>
                 {canMarkPaid(activeViewInv) && (
@@ -2615,7 +2618,7 @@ function InvoiceModule({
               </Card>
             )}
             <div className="no-print rounded-xl border border-slate-600 bg-[#d4d4d4] p-2 sm:p-6 min-w-0 max-w-full overflow-x-hidden overflow-y-auto max-h-[min(65vh,920px)] relative z-0 isolate">
-              <InvoicePreviewFrame resetKey={`${activeViewInv?.id || ''}-${activeViewInv?.status || ''}-${activeViewInv?.updatedAt || ''}`}>
+              <InvoicePreviewFrame resetKey={`${activeViewInv?.id || ''}-${activeViewInv?.status || ''}-${activeViewInv?.updatedAt || ''}-${draftShipping}`}>
                 <InvoiceDocument invoice={docInv} preview className="shadow-2xl" />
               </InvoicePreviewFrame>
             </div>
