@@ -51,7 +51,7 @@ export default function ToastStack({ toasts, onDismiss }) {
         </div>
       )}
       {regular.length > 0 && (
-    <div className="fixed bottom-[calc(4.5rem+env(safe-area-inset-bottom))] lg:bottom-6 right-3 sm:right-6 z-[60] flex flex-col gap-2 max-w-[min(100vw-1.5rem,360px)] pointer-events-none">
+        <div className="fixed bottom-[calc(4.5rem+env(safe-area-inset-bottom))] lg:bottom-6 right-3 sm:right-6 z-40 flex flex-col gap-2 max-w-[min(100vw-1.5rem,360px)] pointer-events-none">
       {regular.map((t) => (
         <div
           key={t.id}

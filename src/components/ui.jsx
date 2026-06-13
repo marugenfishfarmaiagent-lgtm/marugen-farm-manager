@@ -51,8 +51,8 @@ export function Modal({
   const panelHeightClass = isCompact
     ? 'h-auto max-h-[92dvh]'
     : 'max-h-[92dvh] sm:max-h-[90vh]'
-  const zClass = priority ? 'z-[60]' : 'z-50'
-  const guardZClass = priority ? 'z-[70]' : 'z-[55]'
+  const zClass = priority ? 'z-[90]' : 'z-[80]'
+  const guardZClass = priority ? 'z-[95]' : 'z-[85]'
 
   const handleBackdropMouseDown = (e) => {
     backdropDownRef.current = e.target === e.currentTarget
@@ -88,7 +88,7 @@ export function Modal({
             </div>
             <div className={`overflow-y-auto overscroll-contain p-4 sm:p-5 ${footer ? 'flex-none' : 'flex-1 min-h-0'}`}>{children}</div>
             {footer && (
-              <div className="sticky bottom-0 z-10 shrink-0 border-t border-slate-700 bg-slate-800/95 backdrop-blur-sm p-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))]">
+              <div className="relative z-20 sticky bottom-0 shrink-0 border-t border-slate-700 bg-slate-800/95 backdrop-blur-sm p-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))]">
                 {footer}
               </div>
             )}
@@ -193,8 +193,12 @@ export function Btn({ children, onClick, variant = 'primary', size = 'md', class
     e.stopPropagation()
     onClick(e)
   }
+  const handlePointerDown = (e) => {
+    if (disabled) return
+    e.stopPropagation()
+  }
   return (
-    <button type={type} title={title} aria-label={accessibleLabel} onClick={handleClick} disabled={disabled} className={`rounded-lg transition-all flex items-center gap-1.5 touch-manipulation ${variants[variant]} ${sizes[size]} ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`}>
+    <button type={type} title={title} aria-label={accessibleLabel} onClick={handleClick} onPointerDown={handlePointerDown} disabled={disabled} className={`rounded-lg transition-all flex items-center gap-1.5 touch-manipulation ${variants[variant]} ${sizes[size]} ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`}>
       {children}
     </button>
   )
