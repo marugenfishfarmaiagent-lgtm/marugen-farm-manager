@@ -354,7 +354,7 @@ function Modal({ open, onClose, title, children, size = "md", priority = false, 
   );
 }
 
-function Input({ label, value, onChange, onBlur, type = "text", placeholder, className = "", required, min, step, readOnly, inputMode }) {
+function Input({ label, value, onChange, onBlur, type = "text", placeholder, className = "", required, min, max, step, readOnly, inputMode }) {
   const isDateTimeField = type === "date" || type === "time" || type === "datetime-local";
   const fieldClass = "w-full max-w-full min-w-0 box-border bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-3 sm:py-2.5 text-white text-base sm:text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 transition-all";
   return (
@@ -362,11 +362,11 @@ function Input({ label, value, onChange, onBlur, type = "text", placeholder, cla
       {label && <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wide">{label}{required && <span className="text-red-400 ml-1">*</span>}</label>}
       {isDateTimeField ? (
         <div className="w-full max-w-full min-w-0 overflow-hidden">
-          <input type={type} value={value} onChange={onChange} onBlur={onBlur} placeholder={placeholder} min={min} step={step} readOnly={readOnly} inputMode={inputMode}
+          <input type={type} value={value} onChange={onChange} onBlur={onBlur} placeholder={placeholder} min={min} max={max} step={step} readOnly={readOnly} inputMode={inputMode}
             className={`datetime-field ${fieldClass} ${readOnly ? "opacity-80 cursor-default" : ""}`} />
         </div>
       ) : (
-        <input type={type} value={value} onChange={onChange} onBlur={onBlur} placeholder={placeholder} min={min} step={step} readOnly={readOnly} inputMode={inputMode}
+        <input type={type} value={value} onChange={onChange} onBlur={onBlur} placeholder={placeholder} min={min} max={max} step={step} readOnly={readOnly} inputMode={inputMode}
           className={`${fieldClass} ${readOnly ? "opacity-80 cursor-default" : ""}`} />
       )}
     </div>
@@ -1502,7 +1502,7 @@ function InvoiceModule({
     setShippingDraft(saved > 0 ? String(saved) : "");
   }, []);
 
-  const openViewInvoice = useCallback((inv) => {
+  const openViewInvoiceFromNav = useCallback((inv) => {
     resetShippingDraft(inv);
     setViewInv(inv);
   }, [resetShippingDraft]);
@@ -1522,14 +1522,14 @@ function InvoiceModule({
     const inv = invoices.find((i) => String(i.id) === String(openViewId));
     queueMicrotask(() => {
       if (inv) {
-        openViewInvoice(inv);
+        openViewInvoiceFromNav(inv);
         setHighlightInvId(inv.id);
         setShowNew(false);
         setFormError("");
       }
       onViewOpened?.();
     });
-  }, [openViewId, invoices, onViewOpened, openViewInvoice]);
+  }, [openViewId, invoices, onViewOpened, openViewInvoiceFromNav]);
 
   const filtered = useMemo(() => sortInvoices(invoices.filter((i) => {
     if (!showOlderInvoices && !isAppVisibleInvoice(i)) return false;
@@ -1562,17 +1562,7 @@ function InvoiceModule({
 
   const closeViewInvoice = () => {
     if (cancelConfirm || blockViewDismiss) return;
-    if (
-      activeViewInv
-      && canEditRecords(currentUser)
-      && ["pending", "overdue"].includes(getInvoiceStatus(activeViewInv))
-    ) {
-      const draftShipping = shippingDraft === "" ? 0 : (+shippingDraft || 0);
-      const prevShipping = Number(activeViewInv.shipping) || 0;
-      if (draftShipping !== prevShipping) {
-        commitInvoiceShipping(activeViewInv, shippingDraft, { silent: true });
-      }
-    }
+    persistShippingDraftIfDirty(activeViewInv);
     setViewInv(null);
     setShowWhatsappInput(false);
     setShippingDraft("");
@@ -1694,6 +1684,44 @@ function InvoiceModule({
     if (!["pending", "overdue"].includes(getInvoiceStatus(inv))) return inv;
     return commitInvoiceShipping(activeViewInv, shippingDraft, { silent: true });
   };
+
+  const persistShippingDraftIfDirty = (inv, draftRaw = shippingDraft) => {
+    if (!inv || !canEditRecords(currentUser)) return inv;
+    if (!["pending", "overdue"].includes(getInvoiceStatus(inv))) return inv;
+    const draftShipping = draftRaw === "" ? 0 : (+draftRaw || 0);
+    const prevShipping = Number(inv.shipping) || 0;
+    if (draftShipping === prevShipping) return inv;
+    return commitInvoiceShipping(inv, draftRaw, { silent: true });
+  };
+
+  const openViewInvoice = (inv) => {
+    if (activeViewInv && String(activeViewInv.id) !== String(inv?.id)) {
+      persistShippingDraftIfDirty(activeViewInv);
+      resetShippingDraft(inv);
+    } else if (!activeViewInv) {
+      resetShippingDraft(inv);
+    }
+    setViewInv(inv);
+  };
+
+  const shippingDraftRef = useRef(shippingDraft);
+  const viewInvRef = useRef(viewInv);
+  const invoicesRef = useRef(invoices);
+  const persistShippingDraftRef = useRef(persistShippingDraftIfDirty);
+
+  useEffect(() => {
+    shippingDraftRef.current = shippingDraft;
+    viewInvRef.current = viewInv;
+    invoicesRef.current = invoices;
+    persistShippingDraftRef.current = persistShippingDraftIfDirty;
+  });
+
+  useEffect(() => () => {
+    const id = viewInvRef.current?.id;
+    if (!id) return;
+    const inv = invoicesRef.current.find((i) => String(i.id) === String(id));
+    if (inv) persistShippingDraftRef.current(inv, shippingDraftRef.current);
+  }, []);
 
   const stripBlankItems = (items) => items.filter(
     (it) => it.koiId || it.productId || (it.manual && it.name?.trim()),
