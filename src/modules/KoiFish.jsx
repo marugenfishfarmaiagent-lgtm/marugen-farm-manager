@@ -253,6 +253,9 @@ export default function KoiFish({
       const nextList = [...koiList, koi]
       await persistKoiFishList(nextList)
       setKoiList(nextList)
+      if (isSupabaseConfigured) {
+        await onSyncKoiFish?.(nextList)
+      }
       addNotification({ type: 'success', title: 'Koi Added', message: `${koi.variety} added to ${koi.pondName}` })
       setShowAdd(false)
       setForm(emptyKoiForm())
@@ -306,6 +309,9 @@ export default function KoiFish({
       const nextList = koiList.map((k) => (sameKoiId(k.id, editKoi.id) ? updated : k))
       await persistKoiFishList(nextList)
       setKoiList(nextList)
+      if (isSupabaseConfigured) {
+        await onSyncKoiFish?.(nextList)
+      }
       addNotification({ type: 'success', title: 'Updated', message: `${editKoi.id} saved` })
       setEditKoi(null)
     } catch (err) {
@@ -475,6 +481,9 @@ export default function KoiFish({
       const nextList = koiList.map((k) => (sameKoiId(k.id, deathKoi.id) ? patch : k))
       await persistKoiFishList(nextList)
       setKoiList(nextList)
+      if (isSupabaseConfigured) {
+        await onSyncKoiFish?.(nextList)
+      }
       addNotification({ type: 'warning', title: 'Death Recorded', message: `${deathKoi.name || deathKoi.variety} recorded as deceased` })
       setDeathKoi(null)
       setDeathForm({ deathDate: today(), deathCause: KOI_DEATH_CAUSES[0], deathPhoto: null, notes: '' })

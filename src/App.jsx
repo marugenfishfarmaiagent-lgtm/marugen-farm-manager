@@ -9,7 +9,7 @@ import { loadProducts, saveProducts, loadStockLog, saveStockLog } from "./lib/fa
 import {
   clearLocalOnlyStorage, emptyPondData, resolveCloudKoiPayload, resolveCloudWhatsappGroups,
 } from "./lib/cloudData";
-import { deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem, validateStockForItems } from "./lib/inventoryStock";
+import { deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem, validateStockForItems, previewDeductStockForInvoice, previewRestoreStockForInvoice } from "./lib/inventoryStock";
 import {
   adjustProductStockInList, buildStockLogEntry, getLowStockProducts, isProductOnActiveInvoice,
   normalizeProductRecord, parseStockQty, sameProductId, validateProductFields,
@@ -1458,11 +1458,11 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
 // INVOICE MODULE
 // ─────────────────────────────────────────────
 function InvoiceModule({
-  invoices, setInvoices, setProducts, setStockLog, customers, products,
+  invoices, setInvoices, setProducts, setStockLog, stockLog = [], customers, products,
   koiFishList, setKoiFishList, onKoiSold, setCustomerKoiList, customerKoiList = [],
   addNotification, currentUser, openDraft, onDraftApplied, openViewId, onViewOpened,
   onMarkInvoicePaid, onCancelInvoiceCloud, onCreateInvoiceCloud, onInventorySideEffect,
-  onSyncKoiFishToCloud,
+  onSyncKoiFishToCloud, onSyncInventoryToCloud,
 }) {
   const emptyItem = useCallback(() => ({ name: "", qty: 1, price: "", productId: "", manual: true }), []);
   const buildFormFromDraft = useCallback((draft) => ({
@@ -1876,6 +1876,8 @@ function InvoiceModule({
     }
     const invId = genInvoiceId(invoices, issueDate);
     const invoiceItems = activeItems.map(serializeInvoiceItem);
+    const stockSideEffectMeta = { invoiceId: invId, by: currentUser?.name || "Staff" };
+    const stockPreview = previewDeductStockForInvoice(products, stockLog, invoiceItems, stockSideEffectMeta);
     const koiValidate = validateInvoiceKoiSales({
       items: activeItems, koiList: koiFishList, customerId: form.customerId, customers,
     });
@@ -1890,10 +1892,7 @@ function InvoiceModule({
       addNotification({ type: "error", title: "Insufficient Stock", message: stockValidate.message });
       return;
     }
-    const stockCheck = deductStockForInvoice(setProducts, setStockLog, products, invoiceItems, {
-      invoiceId: invId,
-      by: currentUser?.name || "Staff",
-    });
+    const stockCheck = deductStockForInvoice(setProducts, setStockLog, products, invoiceItems, stockSideEffectMeta);
     if (!stockCheck.ok) {
       setFormError(stockCheck.message);
       addNotification({ type: "error", title: "Insufficient Stock", message: stockCheck.message });
@@ -1971,6 +1970,8 @@ function InvoiceModule({
     try {
       await onCreateInvoiceCloud?.(inv, {
         koiFishList: koiSalePreview.hasKoiLines ? koiSalePreview.nextKoiList : undefined,
+        nextProducts: stockPreview.hasStockLines ? stockPreview.nextProducts : undefined,
+        nextStockLog: stockPreview.hasStockLines ? stockPreview.nextStockLog : undefined,
       });
       setShowNew(false);
       setFormError("");
@@ -1990,6 +1991,14 @@ function InvoiceModule({
         by: currentUser?.name || "Staff",
       });
       restoreInvoiceKoiSales(invoiceItems, setKoiFishList, setCustomerKoiList);
+      if (stockPreview.hasStockLines) {
+        const restoredStock = previewRestoreStockForInvoice(products, stockLog, invoiceItems, stockSideEffectMeta);
+        try {
+          await onSyncInventoryToCloud?.(restoredStock.nextProducts, restoredStock.nextStockLog);
+        } catch {
+          /* debounced sync may retry inventory restore */
+        }
+      }
       if (koiSalePreview.hasKoiLines) {
         const restored = previewRestoreInvoiceKoiSales(
           invoiceItems,
@@ -5873,7 +5882,7 @@ function ChatModule({ aiContext, messages, setMessages, isMobile = false }) {
       systemPrompt,
       messages: thread,
       tools: AI_TOOL_DEFINITIONS,
-      executeFunctions: (calls) => executeAiActions(calls, aiContextRef.current),
+      executeFunctions: async (calls) => executeAiActions(calls, aiContextRef.current),
       confirmOverage,
     });
 
@@ -6030,7 +6039,7 @@ function ChatModule({ aiContext, messages, setMessages, isMobile = false }) {
     setPendingActionResume(null);
     setPendingActionExecuted([]);
     try {
-      const finalResults = resolvePendingAiActions(partialResults, aiContextRef.current);
+      const finalResults = await resolvePendingAiActions(partialResults, aiContextRef.current);
       const newThread = [
         ...thread,
         { role: "assistant", functionCalls },
@@ -6892,6 +6901,41 @@ export default function App() {
     }
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
+  const flushInventorySync = useCallback(async (productsOverride, stockLogOverride) => {
+    if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
+    if (!hasPermission(currentUser, "inventory")) return;
+    const productKey = "inventory:Inventory";
+    const stockKey = "inventory:Stock activity";
+    if (syncTimersRef.current[productKey]) {
+      clearTimeout(syncTimersRef.current[productKey]);
+      delete syncTimersRef.current[productKey];
+    }
+    if (syncTimersRef.current[stockKey]) {
+      clearTimeout(syncTimersRef.current[stockKey]);
+      delete syncTimersRef.current[stockKey];
+    }
+    let waited = 0;
+    while (syncInFlightRef.current > 0 && waited < 3000) {
+      await new Promise((r) => setTimeout(r, 100));
+      waited += 100;
+    }
+    if (!(await ensureCloudSyncReady())) return;
+    const nextProducts = productsOverride ?? syncStateRef.current.products ?? [];
+    const nextStockLog = stockLogOverride ?? syncStateRef.current.stockLog ?? [];
+    syncInFlightRef.current += 1;
+    try {
+      await db.syncProducts(nextProducts);
+      await db.syncStockActivity(nextStockLog);
+      resetSyncHealth();
+      touchLastSync();
+    } catch (err) {
+      handleSyncFailure(err);
+      throw err;
+    } finally {
+      syncInFlightRef.current -= 1;
+    }
+  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
+
   const flushCustomerKoiSync = useCallback(async (recordsOverride) => {
     if (!isSupabaseConfigured) return;
     if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
@@ -7267,12 +7311,17 @@ export default function App() {
       customerKoiList,
     );
     const hasKoiCancelLines = (inv.items || []).some((it) => it.koiId && !it.koiAlreadySold);
+    const stockSideEffectMeta = { invoiceId: invId, by: currentUser?.name || "Staff" };
+    const stockRestorePreview = previewRestoreStockForInvoice(
+      products,
+      stockLog,
+      inv.items || [],
+      stockSideEffectMeta,
+    );
+    const hasStockLines = stockRestorePreview.hasStockLines;
 
     const applyCancelSideEffects = () => {
-      restoreStockForInvoice(setProducts, setStockLog, products, inv.items || [], {
-        invoiceId: invId,
-        by: currentUser?.name || "Staff",
-      });
+      restoreStockForInvoice(setProducts, setStockLog, products, inv.items || [], stockSideEffectMeta);
       removedCustomerKoiIds = restoreInvoiceKoiSales(
         inv.items || [],
         setKoiFishList,
@@ -7290,10 +7339,7 @@ export default function App() {
     const revertCancelSideEffects = async () => {
       removedCustomerKoiIds.forEach((id) => unmarkDeleted("customer_koi", id));
       removedCustomerKoiIds = [];
-      deductStockForInvoice(setProducts, setStockLog, products, inv.items || [], {
-        invoiceId: invId,
-        by: currentUser?.name || "Staff",
-      });
+      deductStockForInvoice(setProducts, setStockLog, products, inv.items || [], stockSideEffectMeta);
       await applyInvoiceKoiSales({
         items: inv.items || [],
         koiList: koiFishList,
@@ -7327,16 +7373,26 @@ export default function App() {
 
     syncInFlightRef.current += 1;
     try {
-      if (hasKoiCancelLines) {
+      if (hasStockLines || hasKoiCancelLines) {
         syncStateRef.current = {
           ...syncStateRef.current,
-          koiFishList: koiRestorePreview.nextKoiList,
-          customerKoiList: koiRestorePreview.nextCustomerKoiList,
+          ...(hasStockLines
+            ? { products: stockRestorePreview.nextProducts, stockLog: stockRestorePreview.nextStockLog }
+            : {}),
+          ...(hasKoiCancelLines
+            ? {
+              koiFishList: koiRestorePreview.nextKoiList,
+              customerKoiList: koiRestorePreview.nextCustomerKoiList,
+            }
+            : {}),
         };
-        if (hasPermission(currentUser, "koifish")) {
+        if (hasStockLines && hasPermission(currentUser, "inventory")) {
+          await flushInventorySync(stockRestorePreview.nextProducts, stockRestorePreview.nextStockLog);
+        }
+        if (hasKoiCancelLines && hasPermission(currentUser, "koifish")) {
           await flushKoiFishSync(koiRestorePreview.nextKoiList);
         }
-        if (hasPermission(currentUser, "customerkoi")) {
+        if (hasKoiCancelLines && hasPermission(currentUser, "customerkoi")) {
           await flushCustomerKoiSync(koiRestorePreview.nextCustomerKoiList);
         }
       }
@@ -7361,8 +7417,8 @@ export default function App() {
       syncInFlightRef.current -= 1;
     }
   }, [
-    currentUser, products, customers, koiFishList, customerKoiList, handleSyncFailure, touchLastSync, ensureCloudSyncReady,
-    flushKoiFishSync, flushCustomerKoiSync,
+    currentUser, products, stockLog, customers, koiFishList, customerKoiList, handleSyncFailure, touchLastSync, ensureCloudSyncReady,
+    flushKoiFishSync, flushCustomerKoiSync, flushInventorySync,
     setProducts, setStockLog, setKoiFishList, setCustomerKoiList, setDeliveries, addNotification, resetSyncHealth,
   ]);
 
@@ -7370,6 +7426,7 @@ export default function App() {
     const invId = String(inv.id);
     const optimistic = touchUpdatedAt(db.sanitizeInvoiceForSync(inv));
     const koiPayload = options.koiFishList;
+    const { nextProducts, nextStockLog } = options;
 
     const timerKey = "invoices:Invoices";
     if (syncTimersRef.current[timerKey]) {
@@ -7397,6 +7454,14 @@ export default function App() {
 
     syncInFlightRef.current += 1;
     try {
+      if (nextProducts && hasPermission(currentUser, "inventory")) {
+        syncStateRef.current = {
+          ...syncStateRef.current,
+          products: nextProducts,
+          stockLog: nextStockLog ?? syncStateRef.current.stockLog ?? [],
+        };
+        await flushInventorySync(nextProducts, nextStockLog);
+      }
       if (koiPayload && hasPermission(currentUser, "koifish")) {
         syncStateRef.current = { ...syncStateRef.current, koiFishList: koiPayload };
         await flushKoiFishSync(koiPayload);
@@ -7420,7 +7485,7 @@ export default function App() {
     } finally {
       syncInFlightRef.current -= 1;
     }
-  }, [currentUser, handleSyncFailure, touchLastSync, ensureCloudSyncReady, resetSyncHealth, flushKoiFishSync]);
+  }, [currentUser, handleSyncFailure, touchLastSync, ensureCloudSyncReady, resetSyncHealth, flushKoiFishSync, flushInventorySync]);
 
   const requestInventorySideEffect = useCallback(() => {
     inventorySyncPendingRef.current = true;
@@ -8125,6 +8190,7 @@ export default function App() {
     onKoiRefund: handleKoiRefund,
     onCreateInvoiceFromSale: handleCreateInvoiceFromKoiSale,
     onPersistEvents: flushEventSync,
+    onSyncKoiFish: flushKoiFishSync,
     onMarkInvoicePaid: markInvoicePaidCloud,
   };
 
@@ -8143,7 +8209,7 @@ export default function App() {
       case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} customerKoiList={customerKoiList} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} onSyncKoiFish={flushKoiFishSync} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} onRecordsSaved={flushCustomerKoiSync} />);
       case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondDataWithRef} addNotification={addNotification} currentUser={currentUser} users={users} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} onPersistPondData={syncPondDataNow} onSyncReminderCalendar={syncReminderCalendar} />);
-      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} openViewId={invoiceViewRequest?.id} onViewOpened={() => setInvoiceViewRequest(null)} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} onSyncKoiFishToCloud={flushKoiFishSync} />);
+      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} stockLog={stockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} openViewId={invoiceViewRequest?.id} onViewOpened={() => setInvoiceViewRequest(null)} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} onSyncKoiFishToCloud={flushKoiFishSync} onSyncInventoryToCloud={flushInventorySync} />);
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} invoices={invoices} setInvoices={setInvoices} deliveries={deliveries} setDeliveries={setDeliveries} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpensesWithRef} addNotification={addNotification} currentUser={currentUser} onPersistExpenses={flushExpenseSync} />);
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} users={users} />);

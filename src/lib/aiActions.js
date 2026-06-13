@@ -510,7 +510,7 @@ ${can('calendar') ? `Upcoming events: ${events.filter((e) => (e.date || '') >= n
 NEVER claim success without calling a tool first.`
 }
 
-export function executeAiAction(name, args, ctx) {
+export async function executeAiAction(name, args, ctx) {
   const { currentUser, addNotification, onNavigate } = ctx
   const a = normalizeArgs(name, args || {}, ctx)
 
@@ -1088,8 +1088,20 @@ export function executeAiAction(name, args, ctx) {
           disposition,
           keepPondName,
         })
-        ctx.setKoiFishList((prev) => prev.map((k) => (sameKoiId(k.id, koi.id) ? soldPatch : k)))
-        ctx.onKoiSold?.(koi, customer, soldPrice, soldDate, { disposition, keepPondName })
+        const nextKoiList = ctx.koiFishList.map((k) => (sameKoiId(k.id, koi.id) ? soldPatch : k))
+        if (disposition === 'keep') {
+          try {
+            await ctx.onKoiSold?.(koi, customer, soldPrice, soldDate, { disposition, keepPondName })
+          } catch (err) {
+            return { success: false, error: err?.message || 'Could not save Customer Koi record for this sale.' }
+          }
+        }
+        ctx.setKoiFishList(nextKoiList)
+        try {
+          await ctx.onSyncKoiFish?.(nextKoiList)
+        } catch (err) {
+          return { success: false, error: err?.message || 'Could not sync koi sale to cloud.' }
+        }
         const dispositionNote = disposition === 'keep' ? `kept at ${keepPondName}` : 'taken away'
         addNotification?.({
           type: 'success',
@@ -1128,7 +1140,11 @@ export function executeAiAction(name, args, ctx) {
         if (!canRefund(currentUser)) return { success: false, error: 'No refund permission' }
         const koi = findSoldKoi(ctx, a)
         if (!koi) return { success: false, error: 'Sold koi not found' }
-        ctx.onKoiRefund?.(koi, { reason: a.reason || 'AI refund' })
+        try {
+          await ctx.onKoiRefund?.(koi, { reason: a.reason || 'AI refund' })
+        } catch (err) {
+          return { success: false, error: err?.message || 'Could not sync refund to cloud.' }
+        }
         onNavigate?.('koifish')
         return { success: true, message: `Refunded ${koi.id} (${koi.name || koi.variety}) — back in stock` }
       }
@@ -1218,17 +1234,19 @@ export function executeAiAction(name, args, ctx) {
   }
 }
 
-export function executeAiActions(calls, ctx, options = {}) {
+export async function executeAiActions(calls, ctx, options = {}) {
   const { skipRiskCheck = false } = options
-  return (calls || []).map((call) => {
+  const results = []
+  for (const call of calls || []) {
     if (!call?.name || !AI_TOOL_NAMES.has(call.name)) {
-      return {
+      results.push({
         name: call?.name || 'unknown',
         response: { success: false, error: `Unknown action: ${call?.name || 'unknown'}` },
-      }
+      })
+      continue
     }
     if (!skipRiskCheck && isRiskyAiAction(call.name)) {
-      return {
+      results.push({
         name: call.name,
         response: {
           success: false,
@@ -1237,20 +1255,22 @@ export function executeAiActions(calls, ctx, options = {}) {
           summary: describeRiskyAction(call.name, call.args, ctx),
           action: { name: call.name, args: call.args || {} },
         },
-      }
+      })
+      continue
     }
-    const result = executeAiAction(call.name, call.args || {}, ctx)
-    return { name: call.name, response: result }
-  })
+    const result = await executeAiAction(call.name, call.args || {}, ctx)
+    results.push({ name: call.name, response: result })
+  }
+  return results
 }
 
 /** Run deferred risky actions after the user confirms in AI Chat. */
-export function resolvePendingAiActions(partialResults, ctx) {
+export async function resolvePendingAiActions(partialResults, ctx) {
   const riskyCalls = partialResults
     .filter((r) => r.response?.requiresConfirm)
     .map((r) => ({ name: r.name, args: r.response.action?.args || {} }))
   if (!riskyCalls.length) return partialResults
-  const executed = executeAiActions(riskyCalls, ctx, { skipRiskCheck: true })
+  const executed = await executeAiActions(riskyCalls, ctx, { skipRiskCheck: true })
   let execIdx = 0
   return partialResults.map((r) => {
     if (!r.response?.requiresConfirm) return r

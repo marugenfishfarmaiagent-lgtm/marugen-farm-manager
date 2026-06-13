@@ -102,6 +102,43 @@ function buildLogEntries(items, products, { invoiceId, by, restore }) {
     .filter(Boolean)
 }
 
+function applyStockAdjust(products, items, deltaSign) {
+  const qtyByProduct = aggregateQtyByProduct(items)
+  return products.map((p) => {
+    if (!isStockTracked(p)) return p
+    const qty = qtyByProduct.get(String(p.id))
+    if (!qty) return p
+    const stock = Number(p.stock) || 0
+    return touchUpdatedAt({ ...p, stock: Math.max(0, stock + deltaSign * qty) })
+  })
+}
+
+export function previewDeductStockForInvoice(products, stockLog, items, { invoiceId, by }) {
+  const linked = (items || []).filter((it) => it.productId != null && it.productId !== '')
+  if (!linked.length) {
+    return { ok: true, hasStockLines: false, nextProducts: products, nextStockLog: stockLog }
+  }
+  const check = validateStockForItems(products, linked)
+  if (!check.ok) {
+    return { ok: false, message: check.message, hasStockLines: true, nextProducts: products, nextStockLog: stockLog }
+  }
+  const nextProducts = applyStockAdjust(products, linked, -1)
+  const entries = buildLogEntries(linked, products, { invoiceId, by, restore: false })
+  const nextStockLog = entries.length ? [...entries, ...stockLog] : stockLog
+  return { ok: true, hasStockLines: true, nextProducts, nextStockLog }
+}
+
+export function previewRestoreStockForInvoice(products, stockLog, items, { invoiceId, by }) {
+  const linked = (items || []).filter((it) => it.productId != null && it.productId !== '')
+  if (!linked.length) {
+    return { ok: true, hasStockLines: false, nextProducts: products, nextStockLog: stockLog }
+  }
+  const nextProducts = applyStockAdjust(products, linked, 1)
+  const entries = buildLogEntries(linked, products, { invoiceId, by, restore: true })
+  const nextStockLog = entries.length ? [...entries, ...stockLog] : stockLog
+  return { ok: true, hasStockLines: true, nextProducts, nextStockLog }
+}
+
 /** Deduct inventory when an invoice with linked products is created. */
 export function deductStockForInvoice(setProducts, setStockLog, products, items, { invoiceId, by }) {
   const linked = (items || []).filter((it) => it.productId != null && it.productId !== '')
