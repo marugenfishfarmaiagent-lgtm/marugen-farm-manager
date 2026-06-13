@@ -1570,6 +1570,17 @@ function InvoiceModule({
     customers,
   );
 
+  const invoiceForPdfExport = (inv) => {
+    if (!inv) return inv;
+    const editingSameInvoice = activeViewInv && String(activeViewInv.id) === String(inv.id);
+    const canEditFees = editingSameInvoice
+      && ["pending", "overdue"].includes(getInvoiceStatus(inv))
+      && canEditRecords(currentUser);
+    if (!canEditFees) return invoiceForDisplay(inv);
+    const draftShipping = shippingDraft === "" ? 0 : (+shippingDraft || 0);
+    return invoiceForDisplay({ ...inv, shipping: draftShipping });
+  };
+
   const requestInvoiceBookedChange = (id) => {
     if (!canMarkAccounting(currentUser)) {
       addNotification({ type: "error", title: "Permission Denied", message: "Accounting marks permission is required." });
@@ -1984,7 +1995,7 @@ function InvoiceModule({
   const downloadPdf = async (inv) => {
     setPdfLoading(true);
     try {
-      const filename = await downloadInvoicePdf(invoiceForDisplay(inv));
+      const filename = await downloadInvoicePdf(invoiceForPdfExport(inv));
       addNotification({ type: "success", title: "PDF Downloaded", message: `${filename} saved to your device.` });
     } catch (err) {
       addNotification({ type: "error", title: "PDF Failed", message: err?.message || "Could not generate PDF." });
@@ -2505,10 +2516,7 @@ function InvoiceModule({
           const viewAmounts = calcInvoiceAmounts(
             canEditFees ? { ...activeViewInv, shipping: draftShipping } : activeViewInv,
           );
-          const previewInv = canEditFees
-            ? { ...activeViewInv, shipping: draftShipping, total: viewAmounts.total }
-            : activeViewInv;
-          const docInv = invoiceForDisplay(previewInv);
+          const docInv = invoiceForPdfExport(activeViewInv);
           const isMarkingView = String(markingPaidId) === String(activeViewInv.id);
           const isCancellingView = String(cancellingId) === String(activeViewInv.id);
           return (
@@ -2529,7 +2537,7 @@ function InvoiceModule({
                 <Btn variant="success" onClick={() => sendWhatsApp(activeViewInv)} className="flex-1 sm:flex-none justify-center">
                   <MessageSquare size={14} />Open WhatsApp
                 </Btn>
-                <Btn onClick={() => downloadPdf(previewInv)} disabled={pdfLoading} className="flex-1 sm:flex-none justify-center">
+                <Btn onClick={() => downloadPdf(activeViewInv)} disabled={pdfLoading} className="flex-1 sm:flex-none justify-center">
                   <Printer size={14} />{pdfLoading ? "Generating..." : "Download PDF"}
                 </Btn>
                 {canMarkPaid(activeViewInv) && (
