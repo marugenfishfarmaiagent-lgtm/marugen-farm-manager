@@ -321,16 +321,26 @@ export default function KoiFish({
     }
   }
 
-  const setKoiStatus = (koi, status) => {
+  const setKoiStatus = async (koi, status) => {
     if (!canEdit) {
       addNotification?.({ type: 'error', title: 'Permission Denied', message: 'You need the "Edit records" permission. Contact the farm owner.' })
       return
     }
-    setKoiList((prev) => prev.map((k) => (sameKoiId(k.id, koi.id) ? touchUpdatedAt({ ...k, status }) : k)))
+    const nextList = koiList.map((k) => (sameKoiId(k.id, koi.id) ? touchUpdatedAt({ ...k, status }) : k))
+    setKoiList(nextList)
     if (status === KOI_STATUS.SICK) {
       addNotification({ type: 'warning', title: 'Marked Sick', message: `${koi.name || koi.variety} moved to sick list — use Ship to quarantine if needed.` })
     } else if (status === KOI_STATUS.AVAILABLE) {
       addNotification({ type: 'success', title: 'Recovered', message: `${koi.name || koi.variety} marked available again.` })
+    }
+    if (isSupabaseConfigured) {
+      try {
+        await persistKoiFishList(nextList)
+        await onSyncKoiFish?.(nextList)
+      } catch (err) {
+        setKoiList(koiList)
+        addNotification?.({ type: 'error', title: 'Sync Failed', message: err?.message || 'Could not save koi status to cloud.' })
+      }
     }
   }
 
@@ -339,7 +349,7 @@ export default function KoiFish({
     setShipToPond(pondNames.find((p) => p !== koi.pondName) || '')
   }
 
-  const confirmShip = () => {
+  const confirmShip = async () => {
     if (!shipKoi) return
     if (!canEdit) {
       addNotification?.({ type: 'error', title: 'Permission Denied', message: 'You need the "Edit records" permission. Contact the farm owner.' })
@@ -355,10 +365,20 @@ export default function KoiFish({
       return
     }
     const from = shipKoi.pondName
-    setKoiList((prev) => prev.map((k) => (sameKoiId(k.id, shipKoi.id) ? touchUpdatedAt({ ...k, pondName: to }) : k)))
+    const nextList = koiList.map((k) => (sameKoiId(k.id, shipKoi.id) ? touchUpdatedAt({ ...k, pondName: to }) : k))
+    setKoiList(nextList)
     addNotification({ type: 'success', title: 'Pond Transfer', message: `${shipKoi.name || shipKoi.variety} moved ${from} → ${to}` })
     setShipKoi(null)
     setShipToPond('')
+    if (isSupabaseConfigured) {
+      try {
+        await persistKoiFishList(nextList)
+        await onSyncKoiFish?.(nextList)
+      } catch (err) {
+        setKoiList(koiList)
+        addNotification?.({ type: 'error', title: 'Sync Failed', message: err?.message || 'Could not save pond transfer to cloud.' })
+      }
+    }
   }
 
   const confirmSell = async () => {

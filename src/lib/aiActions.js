@@ -3,7 +3,7 @@ import {
   getInvoiceStatus, today, KOI_STATUS, formatKoiSize, PRODUCT_CATEGORIES,
 } from '../data/constants'
 import { calcInvoiceAmounts } from './invoiceDesign'
-import { markDeleted } from './syncDeletions'
+import { markDeleted, unmarkDeleted } from './syncDeletions'
 import { touchUpdatedAt } from './syncMeta'
 import { formatCustomerAddress, resolveInvoiceCustomer } from './invoiceWhatsApp'
 import { deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem } from './inventoryStock'
@@ -999,14 +999,25 @@ export async function executeAiAction(name, args, ctx) {
         if (!canDelete(currentUser)) return { success: false, error: 'No delete permission — ask the owner to grant Delete records' }
         const inv = findCancellableInvoice(ctx, a)
         if (!inv) return { success: false, error: 'No cancellable invoice found (must be pending or overdue)' }
-        restoreStockForInvoice(ctx.setProducts, ctx.setStockLog, ctx.products, inv.items || [], {
-          invoiceId: inv.id,
-          by: currentUser?.name || 'Staff',
-        })
-        restoreInvoiceKoiSales(inv.items || [], ctx.setKoiFishList, ctx.setCustomerKoiList)
-        ctx.setInvoices((prev) => prev.map((i) => (
-          i.id === inv.id ? touchUpdatedAt(sanitizeInvoiceForSync({ ...i, status: 'cancelled' })) : i
-        )))
+        if (ctx.onCancelInvoiceCloud) {
+          try {
+            await ctx.onCancelInvoiceCloud(inv)
+          } catch (err) {
+            return { success: false, error: err?.message || 'Could not cancel invoice on cloud.' }
+          }
+        } else {
+          restoreStockForInvoice(ctx.setProducts, ctx.setStockLog, ctx.products, inv.items || [], {
+            invoiceId: inv.id,
+            by: currentUser?.name || 'Staff',
+          })
+          restoreInvoiceKoiSales(inv.items || [], ctx.setKoiFishList, ctx.setCustomerKoiList, {
+            koiList: ctx.koiFishList,
+            customerKoiList: ctx.customerKoiList,
+          })
+          ctx.setInvoices((prev) => prev.map((i) => (
+            i.id === inv.id ? touchUpdatedAt(sanitizeInvoiceForSync({ ...i, status: 'cancelled' })) : i
+          )))
+        }
         addNotification?.({ type: 'info', title: 'Invoice Cancelled (AI)', message: `${inv.id} cancelled. Stock restored.` })
         onNavigate?.('invoices')
         return { success: true, message: `Cancelled ${inv.id} for ${inv.customerName}` }
@@ -1185,7 +1196,15 @@ export async function executeAiAction(name, args, ctx) {
         const del = findDelivery(ctx, a)
         if (!del) return { success: false, error: 'Delivery not found' }
         markDeleted('deliveries', del.id)
-        ctx.setDeliveries((prev) => prev.filter((d) => !sameDeliveryId(d.id, del.id)))
+        const nextDeliveries = ctx.deliveries.filter((d) => !sameDeliveryId(d.id, del.id))
+        ctx.setDeliveries(nextDeliveries)
+        try {
+          await ctx.onPersistDeliveries?.(nextDeliveries)
+        } catch (err) {
+          unmarkDeleted('deliveries', del.id)
+          ctx.setDeliveries(ctx.deliveries)
+          return { success: false, error: err?.message || 'Could not delete delivery on cloud.' }
+        }
         addNotification?.({ type: 'info', title: 'Delivery Deleted (AI)', message: del.id })
         onNavigate?.('deliveries')
         return { success: true, message: `Deleted delivery ${del.id} (${del.customerName})` }

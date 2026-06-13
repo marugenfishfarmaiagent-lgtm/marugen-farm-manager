@@ -1462,7 +1462,7 @@ function InvoiceModule({
   koiFishList, setKoiFishList, onKoiSold, setCustomerKoiList, customerKoiList = [],
   addNotification, currentUser, openDraft, onDraftApplied, openViewId, onViewOpened,
   onMarkInvoicePaid, onCancelInvoiceCloud, onCreateInvoiceCloud, onInventorySideEffect,
-  onSyncKoiFishToCloud, onSyncInventoryToCloud,
+  onSyncKoiFishToCloud, onSyncInventoryToCloud, onSyncCustomerKoiToCloud,
 }) {
   const emptyItem = useCallback(() => ({ name: "", qty: 1, price: "", productId: "", manual: true }), []);
   const buildFormFromDraft = useCallback((draft) => ({
@@ -2009,6 +2009,11 @@ function InvoiceModule({
           await onSyncKoiFishToCloud?.(restored.nextKoiList);
         } catch {
           /* debounced sync may retry koi restore */
+        }
+        try {
+          await onSyncCustomerKoiToCloud?.(restored.nextCustomerKoiList);
+        } catch {
+          /* debounced sync may retry customer koi restore */
         }
       }
       onInventorySideEffect?.();
@@ -6936,6 +6941,41 @@ export default function App() {
     }
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
+  const flushDeliveriesSync = useCallback(async (deliveriesOverride) => {
+    if (!isSupabaseConfigured) return;
+    if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
+      throw new Error("Cloud sync is not ready.");
+    }
+    if (!hasPermission(currentUser, "deliveries")) {
+      throw new Error("Permission denied (deliveries).");
+    }
+    const syncKey = "deliveries:Deliveries";
+    if (syncTimersRef.current[syncKey]) {
+      clearTimeout(syncTimersRef.current[syncKey]);
+      delete syncTimersRef.current[syncKey];
+    }
+    let waited = 0;
+    while (syncInFlightRef.current > 0 && waited < 3000) {
+      await new Promise((r) => setTimeout(r, 100));
+      waited += 100;
+    }
+    if (!(await ensureCloudSyncReady())) {
+      throw new Error("Session needs refresh. Log out and log in again.");
+    }
+    const payload = deliveriesOverride ?? syncStateRef.current.deliveries ?? [];
+    syncInFlightRef.current += 1;
+    try {
+      await db.syncDeliveries(payload);
+      resetSyncHealth();
+      touchLastSync();
+    } catch (err) {
+      handleSyncFailure(err);
+      throw err;
+    } finally {
+      syncInFlightRef.current -= 1;
+    }
+  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
+
   const flushCustomerKoiSync = useCallback(async (recordsOverride) => {
     if (!isSupabaseConfigured) return;
     if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
@@ -7357,6 +7397,35 @@ export default function App() {
       inventorySyncPendingRef.current = true;
     };
 
+    const flushCancelFailureRevert = async () => {
+      try {
+        if (hasStockLines && hasPermission(currentUser, "inventory")) {
+          const stockDeduct = previewDeductStockForInvoice(
+            stockRestorePreview.nextProducts,
+            stockRestorePreview.nextStockLog,
+            inv.items || [],
+            stockSideEffectMeta,
+          );
+          await flushInventorySync(stockDeduct.nextProducts, stockDeduct.nextStockLog);
+        }
+        if (hasKoiCancelLines && hasPermission(currentUser, "koifish")) {
+          const koiReapply = previewApplyInvoiceKoiSales({
+            items: inv.items || [],
+            koiList: koiRestorePreview.nextKoiList,
+            customerId: inv.customerId,
+            customers,
+            soldDate: inv.date || today(),
+          });
+          if (koiReapply.hasKoiLines) {
+            await flushKoiFishSync(koiReapply.nextKoiList);
+          }
+        }
+        /* keep-at-farm customer koi re-sync runs inside handleKoiSold during revert */
+      } catch (syncErr) {
+        handleSyncFailure(syncErr);
+      }
+    };
+
     applyCancelSideEffects();
 
     if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) {
@@ -7411,6 +7480,7 @@ export default function App() {
     } catch (err) {
       unpinInvoice(invId);
       await revertCancelSideEffects();
+      await flushCancelFailureRevert();
       handleSyncFailure(err);
       throw err;
     } finally {
@@ -8190,7 +8260,11 @@ export default function App() {
     onKoiRefund: handleKoiRefund,
     onCreateInvoiceFromSale: handleCreateInvoiceFromKoiSale,
     onPersistEvents: flushEventSync,
+    onPersistDeliveries: flushDeliveriesSync,
     onSyncKoiFish: flushKoiFishSync,
+    onSyncInventoryToCloud: flushInventorySync,
+    onSyncCustomerKoiToCloud: flushCustomerKoiSync,
+    onCancelInvoiceCloud: cancelInvoiceCloud,
     onMarkInvoicePaid: markInvoicePaidCloud,
   };
 
@@ -8209,7 +8283,7 @@ export default function App() {
       case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} customerKoiList={customerKoiList} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} onSyncKoiFish={flushKoiFishSync} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} onRecordsSaved={flushCustomerKoiSync} />);
       case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondDataWithRef} addNotification={addNotification} currentUser={currentUser} users={users} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} onPersistPondData={syncPondDataNow} onSyncReminderCalendar={syncReminderCalendar} />);
-      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} stockLog={stockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} openViewId={invoiceViewRequest?.id} onViewOpened={() => setInvoiceViewRequest(null)} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} onSyncKoiFishToCloud={flushKoiFishSync} onSyncInventoryToCloud={flushInventorySync} />);
+      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} stockLog={stockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} openViewId={invoiceViewRequest?.id} onViewOpened={() => setInvoiceViewRequest(null)} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} onSyncKoiFishToCloud={flushKoiFishSync} onSyncInventoryToCloud={flushInventorySync} onSyncCustomerKoiToCloud={flushCustomerKoiSync} />);
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} invoices={invoices} setInvoices={setInvoices} deliveries={deliveries} setDeliveries={setDeliveries} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpensesWithRef} addNotification={addNotification} currentUser={currentUser} onPersistExpenses={flushExpenseSync} />);
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} users={users} />);
