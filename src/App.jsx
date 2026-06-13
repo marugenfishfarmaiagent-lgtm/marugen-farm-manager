@@ -917,6 +917,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   const [addCatalogOnly, setAddCatalogOnly] = useState(false);
   const [editProduct, setEditProduct] = useState(null);
   const [deleteProduct, setDeleteProduct] = useState(null);
+  const [deletingProduct, setDeletingProduct] = useState(false);
   const [showUse, setShowUse] = useState(null);
   const [showSell, setShowSell] = useState(null);
   const [showRestock, setShowRestock] = useState(null);
@@ -1021,8 +1022,8 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     onProductsSaved?.(nextProducts);
   };
 
-  const confirmDeleteProduct = () => {
-    if (!deleteProduct) return;
+  const confirmDeleteProduct = async () => {
+    if (!deleteProduct || deletingProduct) return;
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
       return;
@@ -1036,10 +1037,28 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       setDeleteProduct(null);
       return;
     }
-    markDeleted("products", deleteProduct.id);
-    setProducts((prev) => prev.filter((p) => !sameProductId(p.id, deleteProduct.id)));
-    addNotification({ type: "info", title: "Product Deleted", message: `${deleteProduct.name} removed from inventory` });
-    setDeleteProduct(null);
+    const snapshot = products;
+    const id = deleteProduct.id;
+    const name = deleteProduct.name;
+    setDeletingProduct(true);
+    markDeleted("products", id);
+    const nextProducts = snapshot.filter((p) => !sameProductId(p.id, id));
+    setProducts(nextProducts);
+    try {
+      await onProductsSaved?.(nextProducts);
+      addNotification({ type: "info", title: "Product Deleted", message: `${name} removed from inventory` });
+      setDeleteProduct(null);
+    } catch (err) {
+      unmarkDeleted("products", id);
+      setProducts(snapshot);
+      addNotification({
+        type: "error",
+        title: "Delete Failed",
+        message: err?.message || "Could not remove product. Try again.",
+      });
+    } finally {
+      setDeletingProduct(false);
+    }
   };
 
   const confirmUseStock = (product) => {
@@ -1384,8 +1403,10 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
         title="Delete Product"
         size="sm"
         footer={deleteProduct && (
-          <ConfirmModalFooter onCancel={() => setDeleteProduct(null)}>
-            <Btn variant="danger" onClick={confirmDeleteProduct} className="w-full sm:w-auto justify-center"><Trash2 size={14} />Delete</Btn>
+          <ConfirmModalFooter onCancel={() => { if (!deletingProduct) setDeleteProduct(null); }} cancelDisabled={deletingProduct}>
+            <Btn variant="danger" onClick={confirmDeleteProduct} disabled={deletingProduct} className="w-full sm:w-auto justify-center">
+              {deletingProduct ? <><Loader2 size={14} className="animate-spin" />Deleting...</> : <><Trash2 size={14} />Delete</>}
+            </Btn>
           </ConfirmModalFooter>
         )}
       >
@@ -2788,7 +2809,7 @@ function InvoiceModule({
 // ─────────────────────────────────────────────
 function CustomerModule({
   customers, setCustomers, invoices = [], setInvoices, deliveries = [], setDeliveries,
-  customerKoiList = [], setCustomerKoiList, addNotification, currentUser,
+  customerKoiList = [], setCustomerKoiList, addNotification, currentUser, onCustomersSaved,
 }) {
   const canEdit = canEditRecords(currentUser);
   const canDelete = canDeleteRecords(currentUser);
@@ -2800,6 +2821,7 @@ function CustomerModule({
   const [viewId, setViewId] = useState(null);
   const [editCustomer, setEditCustomer] = useState(null);
   const [deleteCustomer, setDeleteCustomer] = useState(null);
+  const [deletingCustomer, setDeletingCustomer] = useState(false);
   const [search, setSearch] = useState("");
   const [tierFilter, setTierFilter] = useState("All");
   const [form, setForm] = useState(emptyForm());
@@ -2921,18 +2943,35 @@ function CustomerModule({
     setViewId(updated.id);
   };
 
-  const confirmDeleteCustomer = () => {
-    if (!deleteCustomer) return;
+  const confirmDeleteCustomer = async () => {
+    if (!deleteCustomer || deletingCustomer) return;
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
       return;
     }
+    const snapshot = customers;
     const id = deleteCustomer.id;
+    const name = deleteCustomer.name;
+    setDeletingCustomer(true);
     markDeleted("customers", id);
-    setCustomers((prev) => prev.filter((c) => String(c.id) !== String(id)));
+    const nextCustomers = snapshot.filter((c) => String(c.id) !== String(id));
+    setCustomers(nextCustomers);
     if (String(viewId) === String(id)) setViewId(null);
-    addNotification({ type: "info", title: "Customer Deleted", message: `${deleteCustomer.name} removed from CRM` });
-    setDeleteCustomer(null);
+    try {
+      await onCustomersSaved?.(nextCustomers);
+      addNotification({ type: "info", title: "Customer Deleted", message: `${name} removed from CRM` });
+      setDeleteCustomer(null);
+    } catch (err) {
+      unmarkDeleted("customers", id);
+      setCustomers(snapshot);
+      addNotification({
+        type: "error",
+        title: "Delete Failed",
+        message: err?.message || "Could not remove customer. Try again.",
+      });
+    } finally {
+      setDeletingCustomer(false);
+    }
   };
 
   const generateWhatsApp = (c) => {
@@ -3102,8 +3141,10 @@ function CustomerModule({
         title="Delete Customer"
         size="sm"
         footer={deleteCustomer && (
-          <ConfirmModalFooter onCancel={() => setDeleteCustomer(null)}>
-            <Btn variant="danger" onClick={confirmDeleteCustomer} className="w-full sm:w-auto justify-center"><Trash2 size={14} />Delete</Btn>
+          <ConfirmModalFooter onCancel={() => { if (!deletingCustomer) setDeleteCustomer(null); }} cancelDisabled={deletingCustomer}>
+            <Btn variant="danger" onClick={confirmDeleteCustomer} disabled={deletingCustomer} className="w-full sm:w-auto justify-center">
+              {deletingCustomer ? <><Loader2 size={14} className="animate-spin" />Deleting...</> : <><Trash2 size={14} />Delete</>}
+            </Btn>
           </ConfirmModalFooter>
         )}
       >
@@ -3789,7 +3830,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
 // ─────────────────────────────────────────────
 function DeliveryModule({
   deliveries, setDeliveries, customers, invoices, whatsappGroups, setWhatsappGroups,
-  addNotification, currentUser, cloudMode, users = [],
+  addNotification, currentUser, cloudMode, users = [], onPersistDeliveries, onPersistWhatsappGroups,
 }) {
   const emptyDeliveryForm = () => ({
     invoiceId: "", customerId: "", customerName: "", postalCode: "", address: "",
@@ -3829,6 +3870,7 @@ function DeliveryModule({
   const [groupForm, setGroupForm] = useState({ name: "", link: "" });
   const [postalLookupDelivery, setPostalLookupDelivery] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [deletingDelivery, setDeletingDelivery] = useState(false);
   const [viewDeliveryId, setViewDeliveryId] = useState(null);
   const [photoUploading, setPhotoUploading] = useState(false);
   const deliveryAddressManual = useRef(false);
@@ -4100,20 +4142,36 @@ function DeliveryModule({
     setDeleteConfirm(d);
   };
 
-  const confirmDeleteDelivery = () => {
-    if (!deleteConfirm) return;
+  const confirmDeleteDelivery = async () => {
+    if (!deleteConfirm || deletingDelivery) return;
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
       return;
     }
     const d = deleteConfirm;
+    const snapshot = deliveries;
+    setDeletingDelivery(true);
     markDeleted("deliveries", d.id);
-    setDeliveries((prev) => prev.filter((x) => !sameDeliveryId(x.id, d.id)));
+    const nextDeliveries = snapshot.filter((x) => !sameDeliveryId(x.id, d.id));
+    setDeliveries(nextDeliveries);
     if (sameDeliveryId(editDeliveryId, d.id)) closeDeliveryForm();
     if (sameDeliveryId(whatsappDeliveryId, d.id)) closeWhatsappPicker();
     if (sameDeliveryId(viewDeliveryId, d.id)) setViewDeliveryId(null);
-    addNotification({ type: "info", title: "Delivery Deleted", message: `${d.id} removed.` });
-    setDeleteConfirm(null);
+    try {
+      await onPersistDeliveries?.(nextDeliveries);
+      addNotification({ type: "info", title: "Delivery Deleted", message: `${d.id} removed.` });
+      setDeleteConfirm(null);
+    } catch (err) {
+      unmarkDeleted("deliveries", d.id);
+      setDeliveries(snapshot);
+      addNotification({
+        type: "error",
+        title: "Delete Failed",
+        message: err?.message || "Could not remove delivery. Try again.",
+      });
+    } finally {
+      setDeletingDelivery(false);
+    }
   };
 
   const selectDeliveryInvoice = (invoiceId) => {
@@ -4198,13 +4256,27 @@ function DeliveryModule({
     addNotification({ type: "success", title: "Group Saved", message: `${name} added to WhatsApp groups.` });
   };
 
-  const deleteWhatsappGroup = (id) => {
+  const deleteWhatsappGroup = async (id) => {
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
       return;
     }
+    const snapshot = whatsappGroups;
     markDeleted("whatsapp_groups", id);
-    persistWhatsappGroups(whatsappGroups.filter((g) => g.id !== id));
+    const nextGroups = snapshot.filter((g) => g.id !== id);
+    persistWhatsappGroups(nextGroups);
+    if (!cloudMode || !onPersistWhatsappGroups) return;
+    try {
+      await onPersistWhatsappGroups(nextGroups);
+    } catch (err) {
+      unmarkDeleted("whatsapp_groups", id);
+      persistWhatsappGroups(snapshot);
+      addNotification({
+        type: "error",
+        title: "Delete Failed",
+        message: err?.message || "Could not remove WhatsApp group. Try again.",
+      });
+    }
   };
 
   const openWhatsappPicker = (d) => {
@@ -4743,8 +4815,10 @@ function DeliveryModule({
         title="Delete Delivery"
         size="sm"
         footer={deleteConfirm && (
-          <ConfirmModalFooter onCancel={() => setDeleteConfirm(null)}>
-            <Btn variant="danger" onClick={confirmDeleteDelivery} className="w-full sm:w-auto justify-center"><Trash2 size={14} />Delete</Btn>
+          <ConfirmModalFooter onCancel={() => { if (!deletingDelivery) setDeleteConfirm(null); }} cancelDisabled={deletingDelivery}>
+            <Btn variant="danger" onClick={confirmDeleteDelivery} disabled={deletingDelivery} className="w-full sm:w-auto justify-center">
+              {deletingDelivery ? <><Loader2 size={14} className="animate-spin" />Deleting...</> : <><Trash2 size={14} />Delete</>}
+            </Btn>
           </ConfirmModalFooter>
         )}
       >
@@ -6880,8 +6954,13 @@ export default function App() {
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
   const flushProductSync = useCallback(async (productsOverride) => {
-    if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
-    if (!hasPermission(currentUser, "inventory")) return;
+    if (!isSupabaseConfigured) return;
+    if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
+      throw new Error("Cloud sync is not ready.");
+    }
+    if (!hasPermission(currentUser, "inventory")) {
+      throw new Error("Permission denied (inventory).");
+    }
     const productKey = "inventory:Inventory";
     if (syncTimersRef.current[productKey]) {
       clearTimeout(syncTimersRef.current[productKey]);
@@ -6892,7 +6971,9 @@ export default function App() {
       await new Promise((r) => setTimeout(r, 100));
       waited += 100;
     }
-    if (!(await ensureCloudSyncReady())) return;
+    if (!(await ensureCloudSyncReady())) {
+      throw new Error("Session needs refresh. Log out and log in again.");
+    }
     const payload = productsOverride ?? syncStateRef.current.products ?? [];
     syncInFlightRef.current += 1;
     try {
@@ -6901,6 +6982,7 @@ export default function App() {
       touchLastSync();
     } catch (err) {
       handleSyncFailure(err);
+      throw err;
     } finally {
       syncInFlightRef.current -= 1;
     }
@@ -6966,6 +7048,76 @@ export default function App() {
     syncInFlightRef.current += 1;
     try {
       await db.syncDeliveries(payload);
+      resetSyncHealth();
+      touchLastSync();
+    } catch (err) {
+      handleSyncFailure(err);
+      throw err;
+    } finally {
+      syncInFlightRef.current -= 1;
+    }
+  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
+
+  const flushCustomersSync = useCallback(async (customersOverride) => {
+    if (!isSupabaseConfigured) return;
+    if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
+      throw new Error("Cloud sync is not ready.");
+    }
+    if (!hasPermission(currentUser, "customers")) {
+      throw new Error("Permission denied (customers).");
+    }
+    const syncKey = "customers:Customers";
+    if (syncTimersRef.current[syncKey]) {
+      clearTimeout(syncTimersRef.current[syncKey]);
+      delete syncTimersRef.current[syncKey];
+    }
+    let waited = 0;
+    while (syncInFlightRef.current > 0 && waited < 3000) {
+      await new Promise((r) => setTimeout(r, 100));
+      waited += 100;
+    }
+    if (!(await ensureCloudSyncReady())) {
+      throw new Error("Session needs refresh. Log out and log in again.");
+    }
+    const payload = customersOverride ?? syncStateRef.current.customers ?? [];
+    syncInFlightRef.current += 1;
+    try {
+      await db.syncCustomers(payload);
+      resetSyncHealth();
+      touchLastSync();
+    } catch (err) {
+      handleSyncFailure(err);
+      throw err;
+    } finally {
+      syncInFlightRef.current -= 1;
+    }
+  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
+
+  const flushWhatsappGroupsSync = useCallback(async (groupsOverride) => {
+    if (!isSupabaseConfigured) return;
+    if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
+      throw new Error("Cloud sync is not ready.");
+    }
+    if (!hasPermission(currentUser, "deliveries")) {
+      throw new Error("Permission denied (deliveries).");
+    }
+    const syncKey = "deliveries:WhatsApp groups";
+    if (syncTimersRef.current[syncKey]) {
+      clearTimeout(syncTimersRef.current[syncKey]);
+      delete syncTimersRef.current[syncKey];
+    }
+    let waited = 0;
+    while (syncInFlightRef.current > 0 && waited < 3000) {
+      await new Promise((r) => setTimeout(r, 100));
+      waited += 100;
+    }
+    if (!(await ensureCloudSyncReady())) {
+      throw new Error("Session needs refresh. Log out and log in again.");
+    }
+    const payload = groupsOverride ?? syncStateRef.current.whatsappGroups ?? [];
+    syncInFlightRef.current += 1;
+    try {
+      await db.syncWhatsappGroups(payload);
       resetSyncHealth();
       touchLastSync();
     } catch (err) {
@@ -7475,6 +7627,21 @@ export default function App() {
       syncStateRef.current = { ...syncStateRef.current, invoices: finalInvoices };
       releaseInvoicePinAfterConfirm(invId, confirmedRow);
       setInvoices(applyInvoicePins(finalInvoices));
+      const nextDeliveries = (syncStateRef.current.deliveries ?? []).map((d) => {
+        if (String(d.invoiceId || "") !== invId) return d;
+        if (!["scheduled", "transit"].includes(d.status)) return d;
+        return touchUpdatedAt({ ...d, status: "cancelled" });
+      });
+      if (nextDeliveries.some((d, i) => d !== (syncStateRef.current.deliveries ?? [])[i])) {
+        syncStateRef.current = { ...syncStateRef.current, deliveries: nextDeliveries };
+        if (hasPermission(currentUser, "deliveries")) {
+          try {
+            await flushDeliveriesSync(nextDeliveries);
+          } catch (delErr) {
+            handleSyncFailure(delErr);
+          }
+        }
+      }
       resetSyncHealth();
       touchLastSync();
     } catch (err) {
@@ -7488,7 +7655,7 @@ export default function App() {
     }
   }, [
     currentUser, products, stockLog, customers, koiFishList, customerKoiList, handleSyncFailure, touchLastSync, ensureCloudSyncReady,
-    flushKoiFishSync, flushCustomerKoiSync, flushInventorySync,
+    flushKoiFishSync, flushCustomerKoiSync, flushInventorySync, flushDeliveriesSync,
     setProducts, setStockLog, setKoiFishList, setCustomerKoiList, setDeliveries, addNotification, resetSyncHealth,
   ]);
 
@@ -8261,9 +8428,13 @@ export default function App() {
     onCreateInvoiceFromSale: handleCreateInvoiceFromKoiSale,
     onPersistEvents: flushEventSync,
     onPersistDeliveries: flushDeliveriesSync,
+    onPersistExpenses: flushExpenseSync,
+    onProductsSaved: flushProductSync,
+    onPersistCustomers: flushCustomersSync,
     onSyncKoiFish: flushKoiFishSync,
     onSyncInventoryToCloud: flushInventorySync,
     onSyncCustomerKoiToCloud: flushCustomerKoiSync,
+    onCreateInvoiceCloud: createInvoiceCloud,
     onCancelInvoiceCloud: cancelInvoiceCloud,
     onMarkInvoicePaid: markInvoicePaidCloud,
   };
@@ -8284,9 +8455,9 @@ export default function App() {
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} onRecordsSaved={flushCustomerKoiSync} />);
       case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondDataWithRef} addNotification={addNotification} currentUser={currentUser} users={users} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} onPersistPondData={syncPondDataNow} onSyncReminderCalendar={syncReminderCalendar} />);
       case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} stockLog={stockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} openViewId={invoiceViewRequest?.id} onViewOpened={() => setInvoiceViewRequest(null)} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} onSyncKoiFishToCloud={flushKoiFishSync} onSyncInventoryToCloud={flushInventorySync} onSyncCustomerKoiToCloud={flushCustomerKoiSync} />);
-      case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} invoices={invoices} setInvoices={setInvoices} deliveries={deliveries} setDeliveries={setDeliveries} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} />);
+      case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} invoices={invoices} setInvoices={setInvoices} deliveries={deliveries} setDeliveries={setDeliveries} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} onCustomersSaved={flushCustomersSync} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpensesWithRef} addNotification={addNotification} currentUser={currentUser} onPersistExpenses={flushExpenseSync} />);
-      case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} users={users} />);
+      case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} users={users} onPersistDeliveries={flushDeliveriesSync} onPersistWhatsappGroups={flushWhatsappGroupsSync} />);
       case "calendar": return guard("calendar", "Calendar", <CalendarModule events={events} setEvents={setEventsWithRef} onNavigateToPonds={() => goToTab("ponds")} addNotification={addNotification} currentUser={currentUser} users={users} onPersistEvents={flushEventSync} />);
       case "chat": return guard("chat", "AI Chat", <ChatModule aiContext={aiContext} messages={chatMessages} setMessages={setChatMessages} isMobile={isMobile} />);
       case "users": return <ErrorBoundary><TeamModule users={users} setUsers={setUsers} currentUser={currentUser} addNotification={addNotification} onCurrentUserUpdate={handleUserUpdate} cloudMode={isSupabaseConfigured && cloudSync} apiEnabled={isSupabaseConfigured} onOpenChangePin={() => setShowChangePin(true)} getBackupData={getBackupData} /></ErrorBoundary>;

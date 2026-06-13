@@ -6,9 +6,12 @@ import { calcInvoiceAmounts } from './invoiceDesign'
 import { markDeleted, unmarkDeleted } from './syncDeletions'
 import { touchUpdatedAt } from './syncMeta'
 import { formatCustomerAddress, resolveInvoiceCustomer } from './invoiceWhatsApp'
-import { deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem } from './inventoryStock'
+import { deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem, previewDeductStockForInvoice, previewRestoreStockForInvoice, validateStockForItems } from './inventoryStock'
 import { adjustProductStockInList, buildStockLogEntry } from './inventoryOps'
-import { formatKoiInvoiceLineName, restoreInvoiceKoiSales } from './koiInvoice'
+import {
+  formatKoiInvoiceLineName, restoreInvoiceKoiSales, previewApplyInvoiceKoiSales,
+  previewRestoreInvoiceKoiSales, applyInvoiceKoiSales, validateInvoiceKoiSales,
+} from './koiInvoice'
 import { buildSoldKoiPatch, sameKoiId, validateKoiSaleForm } from './koiOps'
 import { actionConfirmKey, describeRiskyAction, isRiskyAiAction } from './aiRisk'
 import {
@@ -671,11 +674,59 @@ export async function executeAiAction(name, args, ctx) {
         )
         const invId = genInvoiceId(ctx.invoices, issueDate)
         const invoiceItems = items.map(serializeInvoiceItem)
-        const stockCheck = deductStockForInvoice(ctx.setProducts, ctx.setStockLog, ctx.products, invoiceItems, {
-          invoiceId: invId,
-          by: currentUser?.name || 'Staff',
+        const stockSideEffectMeta = { invoiceId: invId, by: currentUser?.name || 'Staff' }
+        const stockPreview = previewDeductStockForInvoice(
+          ctx.products,
+          ctx.stockLog,
+          invoiceItems,
+          stockSideEffectMeta,
+        )
+        const koiValidate = validateInvoiceKoiSales({
+          items,
+          koiList: ctx.koiFishList,
+          customerId: customer?.id,
+          customers: ctx.customers,
         })
+        if (!koiValidate.ok) return { success: false, error: koiValidate.message }
+        const stockValidate = validateStockForItems(ctx.products, invoiceItems)
+        if (!stockValidate.ok) return { success: false, error: stockValidate.message }
+
+        const stockCheck = deductStockForInvoice(
+          ctx.setProducts,
+          ctx.setStockLog,
+          ctx.products,
+          invoiceItems,
+          stockSideEffectMeta,
+        )
         if (!stockCheck.ok) return { success: false, error: stockCheck.message }
+
+        const koiSalePreview = previewApplyInvoiceKoiSales({
+          items,
+          koiList: ctx.koiFishList,
+          customerId: customer?.id,
+          customers: ctx.customers,
+          soldDate: issueDate,
+        })
+        let koiApply
+        try {
+          koiApply = await applyInvoiceKoiSales({
+            items,
+            koiList: ctx.koiFishList,
+            setKoiList: ctx.setKoiFishList,
+            customerId: customer?.id,
+            customers: ctx.customers,
+            soldDate: issueDate,
+            onKoiSold: ctx.onKoiSold,
+            addNotification,
+          })
+        } catch (err) {
+          restoreStockForInvoice(ctx.setProducts, ctx.setStockLog, ctx.products, invoiceItems, stockSideEffectMeta)
+          return { success: false, error: err?.message || 'Could not save Customer Koi record for this sale.' }
+        }
+        if (!koiApply.ok) {
+          restoreStockForInvoice(ctx.setProducts, ctx.setStockLog, ctx.products, invoiceItems, stockSideEffectMeta)
+          return { success: false, error: koiApply.message }
+        }
 
         const inv = touchUpdatedAt(sanitizeInvoiceForSync({
           id: invId,
@@ -695,7 +746,57 @@ export async function executeAiAction(name, args, ctx) {
           notes: a.notes || '',
           createdBy: currentUser.name,
         }))
-        ctx.setInvoices((prev) => [inv, ...prev])
+
+        if (ctx.onCreateInvoiceCloud) {
+          ctx.setInvoices((prev) => [inv, ...prev])
+          try {
+            await ctx.onCreateInvoiceCloud(inv, {
+              koiFishList: koiSalePreview.hasKoiLines ? koiSalePreview.nextKoiList : undefined,
+              nextProducts: stockPreview.hasStockLines ? stockPreview.nextProducts : undefined,
+              nextStockLog: stockPreview.hasStockLines ? stockPreview.nextStockLog : undefined,
+            })
+          } catch (err) {
+            restoreStockForInvoice(ctx.setProducts, ctx.setStockLog, ctx.products, invoiceItems, stockSideEffectMeta)
+            restoreInvoiceKoiSales(invoiceItems, ctx.setKoiFishList, ctx.setCustomerKoiList, {
+              koiList: ctx.koiFishList,
+              customerKoiList: ctx.customerKoiList,
+            })
+            ctx.setInvoices((prev) => prev.filter((i) => String(i.id) !== String(invId)))
+            if (stockPreview.hasStockLines) {
+              const restoredStock = previewRestoreStockForInvoice(
+                ctx.products,
+                ctx.stockLog,
+                invoiceItems,
+                stockSideEffectMeta,
+              )
+              try {
+                await ctx.onSyncInventoryToCloud?.(restoredStock.nextProducts, restoredStock.nextStockLog)
+              } catch {
+                /* debounced sync may retry inventory restore */
+              }
+            }
+            if (koiSalePreview.hasKoiLines) {
+              const restored = previewRestoreInvoiceKoiSales(
+                invoiceItems,
+                koiSalePreview.nextKoiList,
+                ctx.customerKoiList,
+              )
+              try {
+                await ctx.onSyncKoiFishToCloud?.(restored.nextKoiList)
+              } catch {
+                /* debounced sync may retry koi restore */
+              }
+              try {
+                await ctx.onSyncCustomerKoiToCloud?.(restored.nextCustomerKoiList)
+              } catch {
+                /* debounced sync may retry customer koi restore */
+              }
+            }
+            return { success: false, error: err?.message || 'Could not save invoice to cloud.' }
+          }
+        } else {
+          ctx.setInvoices((prev) => [inv, ...prev])
+        }
         addNotification?.({ type: 'success', title: 'Invoice Created (AI)', message: `${inv.id} for ${displayName} — ${formatSGD(total)}` })
         onNavigate?.('invoices')
         return { success: true, message: `Created ${inv.id} for ${displayName}, total ${formatSGD(total)}` }
@@ -718,16 +819,14 @@ export async function executeAiAction(name, args, ctx) {
         )))
 
         if (ctx.onMarkInvoicePaid) {
-          ctx.onMarkInvoicePaid(inv, paidTotal).catch((err) => {
+          try {
+            await ctx.onMarkInvoicePaid(inv, paidTotal)
+          } catch (err) {
             ctx.setInvoices((prev) => prev.map((i) => (
               String(i.id) === String(inv.id) ? inv : i
             )))
-            addNotification?.({
-              type: 'error',
-              title: 'Mark Paid Failed',
-              message: err?.message || `${inv.id} could not be saved to cloud.`,
-            })
-          })
+            return { success: false, error: err?.message || `${inv.id} could not be saved to cloud.` }
+          }
         } else if (inv.customerId != null && inv.customerId !== '') {
           ctx.setCustomers((prev) => prev.map((c) => {
             if (String(c.id) !== String(inv.customerId)) return c
@@ -1053,8 +1152,17 @@ export async function executeAiAction(name, args, ctx) {
         if (!canDelete(currentUser)) return { success: false, error: 'No delete permission' }
         const customer = findCustomer(ctx, a.name)
         if (!customer) return { success: false, error: `Customer not found: ${a.name}` }
+        const snapshot = ctx.customers
         markDeleted('customers', customer.id)
-        ctx.setCustomers((prev) => prev.filter((c) => !sameCustomerId(c.id, customer.id)))
+        const nextCustomers = snapshot.filter((c) => !sameCustomerId(c.id, customer.id))
+        ctx.setCustomers(nextCustomers)
+        try {
+          await ctx.onPersistCustomers?.(nextCustomers)
+        } catch (err) {
+          unmarkDeleted('customers', customer.id)
+          ctx.setCustomers(snapshot)
+          return { success: false, error: err?.message || 'Could not delete customer on cloud.' }
+        }
         addNotification?.({ type: 'info', title: 'Customer Deleted (AI)', message: customer.name })
         onNavigate?.('customers')
         return { success: true, message: `Deleted customer ${customer.name}` }
@@ -1065,8 +1173,17 @@ export async function executeAiAction(name, args, ctx) {
         if (!canDelete(currentUser)) return { success: false, error: 'No delete permission' }
         const product = findProduct(ctx, a.productName)
         if (!product) return { success: false, error: `Product not found: ${a.productName}` }
+        const snapshot = ctx.products
         markDeleted('products', product.id)
-        ctx.setProducts((prev) => prev.filter((p) => p.id !== product.id))
+        const nextProducts = snapshot.filter((p) => p.id !== product.id)
+        ctx.setProducts(nextProducts)
+        try {
+          await ctx.onProductsSaved?.(nextProducts)
+        } catch (err) {
+          unmarkDeleted('products', product.id)
+          ctx.setProducts(snapshot)
+          return { success: false, error: err?.message || 'Could not delete product on cloud.' }
+        }
         addNotification?.({ type: 'info', title: 'Product Deleted (AI)', message: product.name })
         onNavigate?.('inventory')
         return { success: true, message: `Removed ${product.name} from inventory` }
@@ -1107,12 +1224,12 @@ export async function executeAiAction(name, args, ctx) {
             return { success: false, error: err?.message || 'Could not save Customer Koi record for this sale.' }
           }
         }
-        ctx.setKoiFishList(nextKoiList)
         try {
           await ctx.onSyncKoiFish?.(nextKoiList)
         } catch (err) {
           return { success: false, error: err?.message || 'Could not sync koi sale to cloud.' }
         }
+        ctx.setKoiFishList(nextKoiList)
         const dispositionNote = disposition === 'keep' ? `kept at ${keepPondName}` : 'taken away'
         addNotification?.({
           type: 'success',
@@ -1195,14 +1312,15 @@ export async function executeAiAction(name, args, ctx) {
         if (!canDelete(currentUser)) return { success: false, error: 'No delete permission' }
         const del = findDelivery(ctx, a)
         if (!del) return { success: false, error: 'Delivery not found' }
+        const snapshot = ctx.deliveries
         markDeleted('deliveries', del.id)
-        const nextDeliveries = ctx.deliveries.filter((d) => !sameDeliveryId(d.id, del.id))
+        const nextDeliveries = snapshot.filter((d) => !sameDeliveryId(d.id, del.id))
         ctx.setDeliveries(nextDeliveries)
         try {
           await ctx.onPersistDeliveries?.(nextDeliveries)
         } catch (err) {
           unmarkDeleted('deliveries', del.id)
-          ctx.setDeliveries(ctx.deliveries)
+          ctx.setDeliveries(snapshot)
           return { success: false, error: err?.message || 'Could not delete delivery on cloud.' }
         }
         addNotification?.({ type: 'info', title: 'Delivery Deleted (AI)', message: del.id })
@@ -1236,10 +1354,17 @@ export async function executeAiAction(name, args, ctx) {
         if (!canDelete(currentUser)) return { success: false, error: 'No delete permission' }
         const ev = findCalendarEvent(ctx, a)
         if (!ev) return { success: false, error: 'Event not found' }
+        const snapshot = ctx.events
         markDeleted('events', ev.id)
-        const nextEvents = ctx.events.filter((e) => !sameEventId(e.id, ev.id))
+        const nextEvents = snapshot.filter((e) => !sameEventId(e.id, ev.id))
         ctx.setEvents(nextEvents)
-        void ctx.onPersistEvents?.(nextEvents)?.catch?.(() => {})
+        try {
+          await ctx.onPersistEvents?.(nextEvents)
+        } catch (err) {
+          unmarkDeleted('events', ev.id)
+          ctx.setEvents(snapshot)
+          return { success: false, error: err?.message || 'Could not delete event on cloud.' }
+        }
         addNotification?.({ type: 'info', title: 'Event Deleted (AI)', message: ev.title })
         onNavigate?.('calendar')
         return { success: true, message: `Deleted event "${ev.title}" on ${ev.date}` }

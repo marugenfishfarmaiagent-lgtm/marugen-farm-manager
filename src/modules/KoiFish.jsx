@@ -416,6 +416,7 @@ export default function KoiFish({
       keepPondName,
     })
     const nextList = koiList.map((k) => (sameKoiId(k.id, currentKoi.id) ? soldPatch : k))
+    const snapshotKoi = koiList
     try {
       setSaving(true)
       if (sellForm.disposition === 'keep') {
@@ -423,6 +424,10 @@ export default function KoiFish({
           disposition: sellForm.disposition,
           keepPondName,
         })
+      }
+      if (isSupabaseConfigured) {
+        await persistKoiFishList(nextList)
+        await onSyncKoiFish?.(nextList)
       }
       setKoiList(nextList)
       setStatusFilter('sold')
@@ -457,11 +462,8 @@ export default function KoiFish({
         })
       }
       setSellKoi(null)
-      if (isSupabaseConfigured) {
-        await persistKoiFishList(nextList)
-        await onSyncKoiFish?.(nextList)
-      }
     } catch (err) {
+      setKoiList(snapshotKoi)
       addNotification({
         type: 'error',
         title: 'Sale Not Completed',
