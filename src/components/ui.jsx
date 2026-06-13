@@ -12,7 +12,7 @@ export function Card({ children, className = '' }) {
   return <div className={`bg-slate-800/60 border border-slate-700/50 rounded-xl ${className}`}>{children}</div>
 }
 
-const MODAL_CLICK_GUARD_MS = 200
+const MODAL_CLICK_GUARD_MS = 100
 
 export function ConfirmModalFooter({ onCancel, cancelLabel = 'Cancel', cancelDisabled = false, children }) {
   return (
@@ -54,11 +54,12 @@ export function Modal({
   const zClass = priority ? 'z-[90]' : 'z-[80]'
   const guardZClass = priority ? 'z-[95]' : 'z-[85]'
 
-  const handleBackdropMouseDown = (e) => {
+  const handleBackdropPointerDown = (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return
     backdropDownRef.current = e.target === e.currentTarget
   }
 
-  const handleBackdropClick = (e) => {
+  const handleBackdropPointerUp = (e) => {
     if (!backdropClose || !onClose) return
     if (e.target === e.currentTarget && backdropDownRef.current) onClose()
     backdropDownRef.current = false
@@ -67,22 +68,23 @@ export function Modal({
   return (
     <>
       {guardActive && !open && (
-        <div className={`fixed inset-0 ${guardZClass}`} aria-hidden />
+        <div className={`fixed inset-0 ${guardZClass} pointer-events-none`} aria-hidden />
       )}
       {open && (
         <div
-          className={`fixed inset-0 ${zClass} flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm`}
-          onMouseDown={handleBackdropMouseDown}
-          onClick={handleBackdropClick}
+          className={`fixed inset-0 ${zClass} flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm touch-manipulation`}
+          onPointerDown={handleBackdropPointerDown}
+          onPointerUp={handleBackdropPointerUp}
         >
           <div
             className={`bg-slate-800 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full ${sizes[size]} ${panelHeightClass} flex flex-col shadow-2xl safe-top overflow-hidden`}
-            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-700 shrink-0">
               <h3 className="text-base sm:text-lg font-bold text-white pr-2">{title}</h3>
-              {onClose && (
+              {onClose && backdropClose && (
                 <button type="button" onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white p-2 -mr-1 rounded-lg hover:bg-slate-700 transition-colors touch-manipulation min-h-[44px] min-w-[44px] flex items-center justify-center"><X size={18} /></button>
               )}
             </div>

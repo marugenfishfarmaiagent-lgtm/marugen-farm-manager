@@ -173,8 +173,8 @@ function AccountsMarkConfirmModal({ open, recordLabel, currentlyBooked, onCancel
 
 function InvoiceCancelConfirmModal({ open, invoiceId, customerName, onCancel, onConfirm, loading = false }) {
   const handleKeep = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
     if (!loading) onCancel();
   };
   return (
@@ -269,7 +269,7 @@ function Card({ children, className = "" }) {
   return <div className={`bg-slate-800/60 border border-slate-700/50 rounded-xl ${className}`}>{children}</div>;
 }
 
-const MODAL_CLICK_GUARD_MS = 200;
+const MODAL_CLICK_GUARD_MS = 100;
 
 function ConfirmModalFooter({ onCancel, cancelLabel = "Cancel", cancelDisabled = false, children }) {
   return (
@@ -309,11 +309,12 @@ function Modal({ open, onClose, title, children, size = "md", priority = false, 
   const zClass = priority ? "z-[90]" : "z-[80]";
   const guardZClass = priority ? "z-[95]" : "z-[85]";
 
-  const handleBackdropMouseDown = (e) => {
+  const handleBackdropPointerDown = (e) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
     backdropDownRef.current = e.target === e.currentTarget;
   };
 
-  const handleBackdropClick = (e) => {
+  const handleBackdropPointerUp = (e) => {
     if (!backdropClose || !onClose) return;
     if (e.target === e.currentTarget && backdropDownRef.current) onClose();
     backdropDownRef.current = false;
@@ -322,22 +323,23 @@ function Modal({ open, onClose, title, children, size = "md", priority = false, 
   return (
     <>
       {guardActive && !open && (
-        <div className={`fixed inset-0 ${guardZClass}`} aria-hidden />
+        <div className={`fixed inset-0 ${guardZClass} pointer-events-none`} aria-hidden />
       )}
       {open && (
         <div
-          className={`fixed inset-0 ${zClass} flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm`}
-          onMouseDown={handleBackdropMouseDown}
-          onClick={handleBackdropClick}
+          className={`fixed inset-0 ${zClass} flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm touch-manipulation`}
+          onPointerDown={handleBackdropPointerDown}
+          onPointerUp={handleBackdropPointerUp}
         >
           <div
             className={`bg-slate-800 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full ${sizes[size]} ${panelHeightClass} flex flex-col shadow-2xl overflow-hidden`}
-            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="sticky top-0 z-10 flex items-center justify-between gap-3 p-4 sm:p-5 border-b border-slate-700 shrink-0 bg-slate-800 pt-[max(1rem,env(safe-area-inset-top,0px))]">
               <h3 className="text-base sm:text-lg font-bold text-white pr-2 min-w-0 truncate">{title}</h3>
-              {onClose && (
+              {onClose && backdropClose && (
                 <button type="button" onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white p-2 -mr-1 rounded-lg hover:bg-slate-700 transition-colors touch-manipulation shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center"><X size={20} /></button>
               )}
             </div>
@@ -3427,7 +3429,11 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
           {expensePage.paginatedItems.map((e) => {
             const src = expenseImageSrc(e);
             return (
-              <Card key={e.id} className="overflow-hidden hover:border-slate-600 transition-colors cursor-pointer" onClick={() => { setViewEditDate(e.date || ""); setViewExpenseId(e.id); }}>
+              <Card key={e.id} className="overflow-hidden hover:border-slate-600 transition-colors cursor-pointer" onClick={(ev) => {
+                if (ev.target.closest("button, a, input, select, textarea, label")) return;
+                setViewEditDate(e.date || "");
+                setViewExpenseId(e.id);
+              }}>
                 <div className="aspect-[3/4] bg-slate-900 relative">
                   {src ? (
                     <StoredImage
@@ -3666,7 +3672,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
 
       <Modal
         open={!!deleteConfirm}
-        onClose={() => { if (!deletingExpense) setDeleteConfirm(null); }}
+        onClose={deletingExpense ? undefined : () => setDeleteConfirm(null)}
         title="Delete Receipt"
         size="sm"
         priority
