@@ -227,6 +227,7 @@ export default function KoiFish({
     if (saving) return
     const sizeCm = normalizeKoiSizeField(form.size)
     const id = genId('KOI')
+    const snapshotKoi = koiList
     try {
       setSaving(true)
       const koiBase = touchUpdatedAt({
@@ -252,14 +253,19 @@ export default function KoiFish({
       const koi = touchUpdatedAt({ ...koiBase, photo })
       const nextList = [...koiList, koi]
       await persistKoiFishList(nextList)
-      setKoiList(nextList)
       if (isSupabaseConfigured) {
         await onSyncKoiFish?.(nextList)
       }
+      setKoiList(nextList)
       addNotification({ type: 'success', title: 'Koi Added', message: `${koi.variety} added to ${koi.pondName}` })
       setShowAdd(false)
       setForm(emptyKoiForm())
     } catch (err) {
+      try {
+        await persistKoiFishList(snapshotKoi)
+      } catch {
+        /* best-effort local rollback */
+      }
       notifyImageError(err?.message || 'Could not save koi with photo.')
     } finally {
       setSaving(false)
@@ -287,6 +293,7 @@ export default function KoiFish({
     }
     if (saving) return
     const sizeCm = normalizeKoiSizeField(editKoi.size)
+    const snapshotKoi = koiList
     try {
       setSaving(true)
       const photo = await uploadInlinePhotoIfNeeded(
@@ -308,13 +315,18 @@ export default function KoiFish({
       })
       const nextList = koiList.map((k) => (sameKoiId(k.id, editKoi.id) ? updated : k))
       await persistKoiFishList(nextList)
-      setKoiList(nextList)
       if (isSupabaseConfigured) {
         await onSyncKoiFish?.(nextList)
       }
+      setKoiList(nextList)
       addNotification({ type: 'success', title: 'Updated', message: `${editKoi.id} saved` })
       setEditKoi(null)
     } catch (err) {
+      try {
+        await persistKoiFishList(snapshotKoi)
+      } catch {
+        /* best-effort local rollback */
+      }
       notifyImageError(err?.message || 'Could not save koi photo.')
     } finally {
       setSaving(false)
@@ -500,6 +512,7 @@ export default function KoiFish({
       return
     }
     if (saving) return
+    const snapshotKoi = koiList
     try {
       setSaving(true)
       const deathPhoto = await uploadInlinePhotoIfNeeded(
@@ -509,14 +522,19 @@ export default function KoiFish({
       const patch = buildDeceasedKoiPatch(deathKoi, { ...deathForm, deathPhoto })
       const nextList = koiList.map((k) => (sameKoiId(k.id, deathKoi.id) ? patch : k))
       await persistKoiFishList(nextList)
-      setKoiList(nextList)
       if (isSupabaseConfigured) {
         await onSyncKoiFish?.(nextList)
       }
+      setKoiList(nextList)
       addNotification({ type: 'warning', title: 'Death Recorded', message: `${deathKoi.name || deathKoi.variety} recorded as deceased` })
       setDeathKoi(null)
       setDeathForm({ deathDate: today(), deathCause: KOI_DEATH_CAUSES[0], deathPhoto: null, notes: '' })
     } catch (err) {
+      try {
+        await persistKoiFishList(snapshotKoi)
+      } catch {
+        /* best-effort local rollback */
+      }
       notifyImageError(err?.message || 'Could not save death photo.')
     } finally {
       setSaving(false)

@@ -7751,17 +7751,35 @@ export default function App() {
       }
     };
 
+    const revertCancelOptimistic = () => {
+      unpinInvoice(invId);
+      const revertedInvoices = sortInvoices(
+        syncStateRef.current.invoices.map((i) => (
+          String(i.id) === invId ? touchUpdatedAt(db.sanitizeInvoiceForSync(inv)) : i
+        )),
+      );
+      syncStateRef.current = { ...syncStateRef.current, invoices: revertedInvoices };
+      setInvoices(applyInvoicePins(revertedInvoices));
+    };
+
     applyCancelSideEffects();
 
-    if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) {
+    if (!isSupabaseConfigured) {
       return;
+    }
+    if (!auth.hasCloudSession() || !currentUser) {
+      await revertCancelSideEffects();
+      revertCancelOptimistic();
+      throw new Error("Cloud sync is not ready.");
     }
     if (!hasPermission(currentUser, "invoices") || !hasPermission(currentUser, "delete")) {
       await revertCancelSideEffects();
+      revertCancelOptimistic();
       throw new Error("Permission denied.");
     }
     if (!(await ensureCloudSyncReady())) {
       await revertCancelSideEffects();
+      revertCancelOptimistic();
       throw new Error("Session needs refresh. Log out and log in again.");
     }
 
@@ -7818,7 +7836,7 @@ export default function App() {
       resetSyncHealth();
       touchLastSync();
     } catch (err) {
-      unpinInvoice(invId);
+      revertCancelOptimistic();
       await revertCancelSideEffects();
       await flushCancelFailureRevert();
       handleSyncFailure(err);
