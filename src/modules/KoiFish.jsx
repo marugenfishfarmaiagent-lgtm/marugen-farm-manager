@@ -6,7 +6,7 @@ import {
   KOI_VARIETIES, KOI_STATUS, KOI_DEATH_CAUSES, FARM_POND_NAMES, mergePondNames,
   formatSGD, formatKoiSize, genId, today, getInvoiceStatus,
 } from '../data/constants'
-import { Badge, Btn, Card, Input, Modal, PondNameInput, Select, Textarea } from '../components/ui'
+import { Badge, Btn, Card, ConfirmModalFooter, Input, Modal, PondNameInput, Select, Textarea } from '../components/ui'
 import Fab from '../components/Fab'
 import StoredImage from '../components/StoredImage'
 import EmptyState from '../components/ui/EmptyState'
@@ -673,7 +673,17 @@ export default function KoiFish({
         )}
       </Modal>
 
-      <Modal open={!!shipKoi} onClose={() => { setShipKoi(null); setShipToPond('') }} title="Ship to Pond" size="sm">
+      <Modal
+        open={!!shipKoi}
+        onClose={() => { setShipKoi(null); setShipToPond('') }}
+        title="Ship to Pond"
+        size="sm"
+        footer={shipKoi && (
+          <ConfirmModalFooter onCancel={() => { setShipKoi(null); setShipToPond('') }}>
+            <Btn onClick={confirmShip} className="w-full sm:w-auto justify-center"><Truck size={14} />Move Fish</Btn>
+          </ConfirmModalFooter>
+        )}
+      >
         {shipKoi && (
           <>
             <div className="flex gap-3 mb-4">
@@ -695,10 +705,6 @@ export default function KoiFish({
               required
             />
             <p className="text-slate-500 text-xs mt-2">Transfer fish between ponds — e.g. D1 → A1 or to quarantine.</p>
-            <div className="modal-actions mt-4 flex justify-end gap-2">
-              <Btn variant="secondary" onClick={() => { setShipKoi(null); setShipToPond('') }}>Cancel</Btn>
-              <Btn onClick={confirmShip}><Truck size={14} />Move Fish</Btn>
-            </div>
           </>
         )}
       </Modal>

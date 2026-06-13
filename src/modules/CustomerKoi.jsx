@@ -9,7 +9,7 @@ import {
   normalizeCustomerKoiSizeField, sameRecordId, validateCustomerKoiFields, validateKoiLinkForCustomer,
 } from '../lib/customerKoiOps'
 import { sameKoiId } from '../lib/koiOps'
-import { Badge, Btn, Card, Input, Modal, PondNameInput, Select, Textarea } from '../components/ui'
+import { Badge, Btn, Card, ConfirmModalFooter, Input, Modal, PondNameInput, Select, Textarea } from '../components/ui'
 import Fab from '../components/Fab'
 import { readKoiImageFile } from '../lib/koiImage'
 import { openWhatsAppChat } from '../lib/invoiceWhatsApp'
@@ -750,17 +750,23 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
         )}
       </Modal>
 
-      <Modal open={!!collectRec} onClose={() => setCollectRec(null)} title="Mark as Taken Away" size="sm">
+      <Modal
+        open={!!collectRec}
+        onClose={() => setCollectRec(null)}
+        title="Mark as Taken Away"
+        size="sm"
+        footer={collectRec && (
+          <ConfirmModalFooter onCancel={() => setCollectRec(null)}>
+            <Btn variant="success" onClick={confirmCollect} disabled={saving} className="w-full sm:w-auto justify-center"><PackageCheck size={14} />{saving ? 'Saving…' : 'Confirm'}</Btn>
+          </ConfirmModalFooter>
+        )}
+      >
         {collectRec && (
           <div className="space-y-3">
             <p className="text-slate-300 text-sm">
               Customer took <strong className="text-white">{displayFishName(collectRec)}</strong> away from the farm / pond.
             </p>
             <Input label="Taken away date" type="date" value={collectDate} onChange={(e) => setCollectDate(e.target.value)} required />
-            <div className="flex justify-end gap-2">
-              <Btn variant="secondary" onClick={() => setCollectRec(null)}>Cancel</Btn>
-              <Btn variant="success" onClick={confirmCollect} disabled={saving}><PackageCheck size={14} />{saving ? 'Saving…' : 'Confirm'}</Btn>
-            </div>
           </div>
         )}
       </Modal>

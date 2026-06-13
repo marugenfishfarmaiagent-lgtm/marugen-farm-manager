@@ -14,6 +14,15 @@ export function Card({ children, className = '' }) {
 
 const MODAL_CLICK_GUARD_MS = 200
 
+export function ConfirmModalFooter({ onCancel, cancelLabel = 'Cancel', cancelDisabled = false, children }) {
+  return (
+    <div className="modal-actions !mt-0 w-full">
+      <Btn variant="secondary" onClick={onCancel} disabled={cancelDisabled} className="w-full sm:w-auto justify-center">{cancelLabel}</Btn>
+      {children}
+    </div>
+  )
+}
+
 export function Modal({
   open, onClose, title, children, size = 'md', priority = false, backdropClose = true, footer = null,
 }) {
