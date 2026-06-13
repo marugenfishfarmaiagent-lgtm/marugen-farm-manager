@@ -71,6 +71,7 @@ import {
 import { isSupabaseConfigured } from "./lib/supabase";
 import * as auth from "./lib/auth";
 import { markDeleted, clearAllDeletions, peekDeletions, unmarkDeleted } from "./lib/syncDeletions";
+import { writeCloudFirst, writeInventoryCloudFirst } from "./lib/cloudWrite";
 import { mergeRecords, mergePondData, mergeInvoices, mergeProducts, mergeKoiFish, mergeCustomerKoi, resolveInvoiceConflict, resolveExpenseConflict, resolveEventConflict } from "./lib/cloudMerge";
 import {
   countIncomingTeamChanges,
@@ -950,14 +951,22 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   const productPage = usePagination(filtered, LIST_PAGE_SIZE, `${tab}-${search}-${catFilter}`);
   const stockLogPage = usePagination(visibleStockLog, LIST_PAGE_SIZE, String(showOlderStockLog));
 
-  const persistInventory = async (nextProducts, nextStockLog, snapshotProducts, snapshotStockLog) => {
-    if (!onInventorySaved) return true;
+  const persistInventory = async (nextProducts, nextStockLog) => {
+    if (!onInventorySaved) {
+      setProducts(nextProducts);
+      setStockLog(nextStockLog);
+      return true;
+    }
     try {
-      await onInventorySaved(nextProducts, nextStockLog);
+      await writeInventoryCloudFirst({
+        nextProducts,
+        nextStockLog,
+        setProducts,
+        setStockLog,
+        flush: onInventorySaved,
+      });
       return true;
     } catch (err) {
-      setProducts(snapshotProducts);
-      setStockLog(snapshotStockLog);
       addNotification({
         type: "error",
         title: "Save Failed",
@@ -994,9 +1003,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
         ...stockSnapshot,
       ];
     }
-    if (!(await persistInventory(nextProducts, nextStockLog, productsSnapshot, stockSnapshot))) return;
-    setProducts(nextProducts);
-    if (!catalogOnly && p.stock > 0) setStockLog(nextStockLog);
+    if (!(await persistInventory(nextProducts, nextStockLog))) return;
     addNotification({
       type: "success",
       title: catalogOnly ? "Price List Item Added" : "Product Added",
@@ -1044,12 +1051,21 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     }
     try {
       if (onInventorySaved) {
-        await onInventorySaved(nextProducts, nextStockLog);
+        await writeInventoryCloudFirst({
+          nextProducts,
+          nextStockLog,
+          setProducts,
+          setStockLog,
+          flush: onInventorySaved,
+        });
       } else {
-        await onProductsSaved?.(nextProducts);
+        await writeCloudFirst({
+          next: nextProducts,
+          setState: setProducts,
+          flush: (n) => onProductsSaved?.(n),
+        });
+        if (prevName && prevName !== updated.name) setStockLog(nextStockLog);
       }
-      setProducts(nextProducts);
-      if (prevName && prevName !== updated.name) setStockLog(nextStockLog);
     } catch (err) {
       addNotification({
         type: "error",
@@ -1082,14 +1098,16 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     const name = deleteProduct.name;
     const nextProducts = snapshot.filter((p) => !sameProductId(p.id, id));
     setDeletingProduct(true);
-    markDeleted("products", id);
     try {
-      await onProductsSaved?.(nextProducts);
-      setProducts(nextProducts);
+      await writeCloudFirst({
+        next: nextProducts,
+        setState: setProducts,
+        flush: (n) => onProductsSaved?.(n),
+        deleteMeta: { entity: "products", id },
+      });
       addNotification({ type: "info", title: "Product Deleted", message: `${name} removed from inventory` });
       setDeleteProduct(null);
     } catch (err) {
-      unmarkDeleted("products", id);
       addNotification({
         type: "error",
         title: "Delete Failed",
@@ -1126,9 +1144,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       buildStockLogEntry(product, "use", { qty, note: useNote, by: currentUser?.name || "Staff" }),
       ...stockSnapshot,
     ];
-    if (!(await persistInventory(nextProducts, nextStockLog, productsSnapshot, stockSnapshot))) return;
-    setProducts(nextProducts);
-    setStockLog(nextStockLog);
+    if (!(await persistInventory(nextProducts, nextStockLog))) return;
     const remaining = available - qty;
     if (product.minStock > 0 && remaining <= product.minStock) {
       addNotification({
@@ -1178,9 +1194,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       }),
       ...stockSnapshot,
     ];
-    if (!(await persistInventory(nextProducts, nextStockLog, productsSnapshot, stockSnapshot))) return;
-    setProducts(nextProducts);
-    setStockLog(nextStockLog);
+    if (!(await persistInventory(nextProducts, nextStockLog))) return;
     addNotification({
       type: "success",
       title: "Sale Recorded",
@@ -1212,9 +1226,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       }),
       ...stockSnapshot,
     ];
-    if (!(await persistInventory(nextProducts, nextStockLog, productsSnapshot, stockSnapshot))) return;
-    setProducts(nextProducts);
-    setStockLog(nextStockLog);
+    if (!(await persistInventory(nextProducts, nextStockLog))) return;
     addNotification({
       type: "info",
       title: "Restocked",
@@ -2966,7 +2978,12 @@ function CustomerModule({
     const snapshot = customers;
     const nextCustomers = [...snapshot, built.customer];
     try {
-      await onCustomersSaved?.(nextCustomers);
+      await writeCloudFirst({
+        snapshot,
+        next: nextCustomers,
+        setState: setCustomers,
+        flush: (n) => onCustomersSaved?.(n),
+      });
     } catch (err) {
       addNotification({
         type: "error",
@@ -2975,7 +2992,6 @@ function CustomerModule({
       });
       return;
     }
-    setCustomers(nextCustomers);
     addNotification({ type: "success", title: "Customer Added", message: `${built.customer.name} added to CRM` });
     setShowAdd(false);
     setForm(emptyForm());
@@ -3014,7 +3030,12 @@ function CustomerModule({
       customerKoiList,
     });
     try {
-      await onCustomersSaved?.(nextCustomers);
+      await writeCloudFirst({
+        snapshot,
+        next: nextCustomers,
+        setState: setCustomers,
+        flush: (n) => onCustomersSaved?.(n),
+      });
     } catch (err) {
       addNotification({
         type: "error",
@@ -3023,7 +3044,6 @@ function CustomerModule({
       });
       return;
     }
-    setCustomers(nextCustomers);
     if (related.invoices && setInvoices) setInvoices(related.invoices);
     if (related.deliveries && setDeliveries) setDeliveries(related.deliveries);
     if (related.customerKoiList && setCustomerKoiList) setCustomerKoiList(related.customerKoiList);
@@ -3043,16 +3063,19 @@ function CustomerModule({
     const id = deleteCustomer.id;
     const name = deleteCustomer.name;
     setDeletingCustomer(true);
-    markDeleted("customers", id);
     const nextCustomers = snapshot.filter((c) => String(c.id) !== String(id));
     try {
-      await onCustomersSaved?.(nextCustomers);
-      setCustomers(nextCustomers);
+      await writeCloudFirst({
+        snapshot,
+        next: nextCustomers,
+        setState: setCustomers,
+        flush: (n) => onCustomersSaved?.(n),
+        deleteMeta: { entity: "customers", id },
+      });
       if (String(viewId) === String(id)) setViewId(null);
       addNotification({ type: "info", title: "Customer Deleted", message: `${name} removed from CRM` });
       setDeleteCustomer(null);
     } catch (err) {
-      unmarkDeleted("customers", id);
       addNotification({
         type: "error",
         title: "Delete Failed",
@@ -4245,18 +4268,23 @@ function DeliveryModule({
     const d = deleteConfirm;
     const snapshot = deliveries;
     setDeletingDelivery(true);
-    markDeleted("deliveries", d.id);
     const nextDeliveries = snapshot.filter((x) => !sameDeliveryId(x.id, d.id));
     try {
-      await onPersistDeliveries?.(nextDeliveries);
-      setDeliveries(nextDeliveries);
-      if (sameDeliveryId(editDeliveryId, d.id)) closeDeliveryForm();
-      if (sameDeliveryId(whatsappDeliveryId, d.id)) closeWhatsappPicker();
-      if (sameDeliveryId(viewDeliveryId, d.id)) setViewDeliveryId(null);
+      await writeCloudFirst({
+        snapshot,
+        next: nextDeliveries,
+        setState: (n) => {
+          setDeliveries(n);
+          if (sameDeliveryId(editDeliveryId, d.id)) closeDeliveryForm();
+          if (sameDeliveryId(whatsappDeliveryId, d.id)) closeWhatsappPicker();
+          if (sameDeliveryId(viewDeliveryId, d.id)) setViewDeliveryId(null);
+        },
+        flush: onPersistDeliveries ? (n) => onPersistDeliveries(n) : undefined,
+        deleteMeta: onPersistDeliveries ? { entity: "deliveries", id: d.id } : undefined,
+      });
       addNotification({ type: "info", title: "Delivery Deleted", message: `${d.id} removed.` });
       setDeleteConfirm(null);
     } catch (err) {
-      unmarkDeleted("deliveries", d.id);
       addNotification({
         type: "error",
         title: "Delete Failed",
@@ -4361,19 +4389,21 @@ function DeliveryModule({
     }
     const snapshot = whatsappGroups;
     const nextGroups = [...snapshot, touchUpdatedAt({ id: genId("GRP"), name, link })];
-    if (cloudMode && onPersistWhatsappGroups) {
-      try {
-        await onPersistWhatsappGroups(nextGroups);
-      } catch (err) {
-        addNotification({
-          type: "error",
-          title: "Save Failed",
-          message: err?.message || "Could not save WhatsApp group to cloud.",
-        });
-        return;
-      }
+    try {
+      await writeCloudFirst({
+        snapshot,
+        next: nextGroups,
+        setState: persistWhatsappGroups,
+        flush: cloudMode && onPersistWhatsappGroups ? (n) => onPersistWhatsappGroups(n) : undefined,
+      });
+    } catch (err) {
+      addNotification({
+        type: "error",
+        title: "Save Failed",
+        message: err?.message || "Could not save WhatsApp group to cloud.",
+      });
+      return;
     }
-    persistWhatsappGroups(nextGroups);
     setGroupForm({ name: "", link: "" });
     addNotification({ type: "success", title: "Group Saved", message: `${name} added to WhatsApp groups.` });
   };
@@ -4384,22 +4414,23 @@ function DeliveryModule({
       return;
     }
     const snapshot = whatsappGroups;
-    markDeleted("whatsapp_groups", id);
     const nextGroups = snapshot.filter((g) => g.id !== id);
-    if (cloudMode && onPersistWhatsappGroups) {
-      try {
-        await onPersistWhatsappGroups(nextGroups);
-      } catch (err) {
-        unmarkDeleted("whatsapp_groups", id);
-        addNotification({
-          type: "error",
-          title: "Delete Failed",
-          message: err?.message || "Could not remove WhatsApp group. Try again.",
-        });
-        return;
-      }
+    try {
+      await writeCloudFirst({
+        snapshot,
+        next: nextGroups,
+        setState: persistWhatsappGroups,
+        flush: cloudMode && onPersistWhatsappGroups ? (n) => onPersistWhatsappGroups(n) : undefined,
+        deleteMeta: cloudMode && onPersistWhatsappGroups ? { entity: "whatsapp_groups", id } : undefined,
+      });
+    } catch (err) {
+      addNotification({
+        type: "error",
+        title: "Delete Failed",
+        message: err?.message || "Could not remove WhatsApp group. Try again.",
+      });
+      return;
     }
-    persistWhatsappGroups(nextGroups);
   };
 
   const openWhatsappPicker = (d) => {

@@ -16,6 +16,7 @@ import { openWhatsAppChat } from '../lib/invoiceWhatsApp'
 import { isAppVisibleCustomerKoi } from '../lib/retention'
 import { uploadInlinePhotoIfNeeded } from '../lib/farmImage'
 import { persistCustomerKoiList } from '../lib/imageUploadOps'
+import { writeListCloudFirst } from '../lib/cloudWrite.js'
 import { touchUpdatedAt } from '../lib/syncMeta'
 import StoredImage from '../components/StoredImage'
 import EmptyState from '../components/ui/EmptyState'
@@ -323,9 +324,13 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
         deathDate: null, deathCause: null, deathPhoto: null, deathNotes: '',
       })
       const nextList = [...records, rec]
-      await persistCustomerKoiList(nextList)
-      await onRecordsSaved?.(nextList)
-      setRecords(nextList)
+      await writeListCloudFirst({
+        snapshot,
+        next: nextList,
+        setState: setRecords,
+        flush: onRecordsSaved,
+        isCloudConfigured: isSupabaseConfigured,
+      })
       addNotification({ type: 'success', title: 'Record Added', message: `${displayFishName(rec)} added for ${customer.name}` })
       setShowAdd(false)
       setForm(emptyRecord())
@@ -398,9 +403,13 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       )
       updated = touchUpdatedAt({ ...updated, photo })
       const nextList = records.map((r) => (sameRecordId(r.id, editRec.id) ? updated : r))
-      await persistCustomerKoiList(nextList)
-      await onRecordsSaved?.(nextList)
-      setRecords(nextList)
+      await writeListCloudFirst({
+        snapshot,
+        next: nextList,
+        setState: setRecords,
+        flush: onRecordsSaved,
+        isCloudConfigured: isSupabaseConfigured,
+      })
       addNotification({ type: 'success', title: 'Updated', message: `${displayFishName(updated)} — ${formatCustomerKoiStatus(updated.status)}` })
       setEditRec(null)
     } catch (err) {
@@ -440,9 +449,13 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
     const snapshot = records
     try {
       setSaving(true)
-      await persistCustomerKoiList(nextList)
-      await onRecordsSaved?.(nextList)
-      setRecords(nextList)
+      await writeListCloudFirst({
+        snapshot,
+        next: nextList,
+        setState: setRecords,
+        flush: onRecordsSaved,
+        isCloudConfigured: isSupabaseConfigured,
+      })
       addNotification({ type: 'success', title: 'Marked Taken Away', message: `${displayFishName(collectRec)} — customer collected on ${collectDate}` })
       setCollectRec(null)
     } catch (err) {
@@ -479,9 +492,13 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       )
       const patch = buildCustomerKoiDeathPatch(deathRec, { ...deathForm, deathPhoto })
       const nextList = records.map((r) => (sameRecordId(r.id, deathRec.id) ? patch : r))
-      await persistCustomerKoiList(nextList)
-      await onRecordsSaved?.(nextList)
-      setRecords(nextList)
+      await writeListCloudFirst({
+        snapshot,
+        next: nextList,
+        setState: setRecords,
+        flush: onRecordsSaved,
+        isCloudConfigured: isSupabaseConfigured,
+      })
       addNotification({ type: 'warning', title: 'Death Recorded', message: `${displayFishName(deathRec)} (${deathRec.customerName}) recorded deceased` })
       setDeathRec(null)
     } catch (err) {

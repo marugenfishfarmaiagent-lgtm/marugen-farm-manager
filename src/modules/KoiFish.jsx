@@ -25,6 +25,7 @@ import { hasLinkedCustomerKoiForRefund } from '../lib/customerKoiOps'
 import { isAppVisibleKoiFarm } from '../lib/retention'
 import { uploadInlinePhotoIfNeeded } from '../lib/farmImage'
 import { persistKoiFishList } from '../lib/imageUploadOps'
+import { writeListCloudFirst } from '../lib/cloudWrite.js'
 import { touchUpdatedAt } from '../lib/syncMeta'
 
 const STATUS_STYLE = {
@@ -244,19 +245,19 @@ export default function KoiFish({
         sellDisposition: null, keepPondName: null,
         deathDate: null, deathCause: null, deathPhoto: null,
       })
-      await persistKoiFishList([...koiList, koiBase])
-
       const photo = await uploadInlinePhotoIfNeeded(
         form.photo,
         (data) => db.uploadKoiFishPhoto(id, data, 'photo'),
       )
       const koi = touchUpdatedAt({ ...koiBase, photo })
       const nextList = [...koiList, koi]
-      await persistKoiFishList(nextList)
-      if (isSupabaseConfigured) {
-        await onSyncKoiFish?.(nextList)
-      }
-      setKoiList(nextList)
+      await writeListCloudFirst({
+        snapshot: snapshotKoi,
+        next: nextList,
+        setState: setKoiList,
+        flush: onSyncKoiFish,
+        isCloudConfigured: isSupabaseConfigured,
+      })
       addNotification({ type: 'success', title: 'Koi Added', message: `${koi.variety} added to ${koi.pondName}` })
       setShowAdd(false)
       setForm(emptyKoiForm())
@@ -314,11 +315,13 @@ export default function KoiFish({
         keepPondName: null,
       })
       const nextList = koiList.map((k) => (sameKoiId(k.id, editKoi.id) ? updated : k))
-      await persistKoiFishList(nextList)
-      if (isSupabaseConfigured) {
-        await onSyncKoiFish?.(nextList)
-      }
-      setKoiList(nextList)
+      await writeListCloudFirst({
+        snapshot: snapshotKoi,
+        next: nextList,
+        setState: setKoiList,
+        flush: onSyncKoiFish,
+        isCloudConfigured: isSupabaseConfigured,
+      })
       addNotification({ type: 'success', title: 'Updated', message: `${editKoi.id} saved` })
       setEditKoi(null)
     } catch (err) {
@@ -341,11 +344,13 @@ export default function KoiFish({
     const nextList = koiList.map((k) => (sameKoiId(k.id, koi.id) ? touchUpdatedAt({ ...k, status }) : k))
     const snapshotKoi = koiList
     try {
-      await persistKoiFishList(nextList)
-      if (isSupabaseConfigured) {
-        await onSyncKoiFish?.(nextList)
-      }
-      setKoiList(nextList)
+      await writeListCloudFirst({
+        snapshot: snapshotKoi,
+        next: nextList,
+        setState: setKoiList,
+        flush: onSyncKoiFish,
+        isCloudConfigured: isSupabaseConfigured,
+      })
       if (status === KOI_STATUS.SICK) {
         addNotification({ type: 'warning', title: 'Marked Sick', message: `${koi.name || koi.variety} moved to sick list — use Ship to quarantine if needed.` })
       } else if (status === KOI_STATUS.AVAILABLE) {
@@ -385,11 +390,13 @@ export default function KoiFish({
     const nextList = koiList.map((k) => (sameKoiId(k.id, shipKoi.id) ? touchUpdatedAt({ ...k, pondName: to }) : k))
     const snapshotKoi = koiList
     try {
-      await persistKoiFishList(nextList)
-      if (isSupabaseConfigured) {
-        await onSyncKoiFish?.(nextList)
-      }
-      setKoiList(nextList)
+      await writeListCloudFirst({
+        snapshot: snapshotKoi,
+        next: nextList,
+        setState: setKoiList,
+        flush: onSyncKoiFish,
+        isCloudConfigured: isSupabaseConfigured,
+      })
       addNotification({ type: 'success', title: 'Pond Transfer', message: `${shipKoi.name || shipKoi.variety} moved ${from} → ${to}` })
       setShipKoi(null)
       setShipToPond('')
@@ -448,10 +455,16 @@ export default function KoiFish({
         })
       }
       if (isSupabaseConfigured) {
-        await persistKoiFishList(nextList)
-        await onSyncKoiFish?.(nextList)
+        await writeListCloudFirst({
+          snapshot: snapshotKoi,
+          next: nextList,
+          setState: setKoiList,
+          flush: onSyncKoiFish,
+          isCloudConfigured: true,
+        })
+      } else {
+        setKoiList(nextList)
       }
-      setKoiList(nextList)
       setStatusFilter('sold')
       const dispositionNote = sellForm.disposition === 'keep'
         ? `kept at ${keepPondName} — added to Customer Koi`
@@ -531,11 +544,13 @@ export default function KoiFish({
       )
       const patch = buildDeceasedKoiPatch(deathKoi, { ...deathForm, deathPhoto })
       const nextList = koiList.map((k) => (sameKoiId(k.id, deathKoi.id) ? patch : k))
-      await persistKoiFishList(nextList)
-      if (isSupabaseConfigured) {
-        await onSyncKoiFish?.(nextList)
-      }
-      setKoiList(nextList)
+      await writeListCloudFirst({
+        snapshot: snapshotKoi,
+        next: nextList,
+        setState: setKoiList,
+        flush: onSyncKoiFish,
+        isCloudConfigured: isSupabaseConfigured,
+      })
       addNotification({ type: 'warning', title: 'Death Recorded', message: `${deathKoi.name || deathKoi.variety} recorded as deceased` })
       setDeathKoi(null)
       setDeathForm({ deathDate: today(), deathCause: KOI_DEATH_CAUSES[0], deathPhoto: null, notes: '' })

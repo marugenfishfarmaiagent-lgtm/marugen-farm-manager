@@ -12,6 +12,8 @@
     "verify:migrations": "bash scripts/verify-migrations-order.sh",
     "verify:monitoring": "bash scripts/verify-monitoring.sh",
     "verify:smoke": "bash scripts/smoke-test-production.sh",
+    "verify:sync-order": "bash scripts/verify-sync-order.sh",
+    "test": "node --test src/lib/cloudWrite.test.js",
     "verify:setup": "bash scripts/verify-migrations-order.sh && bash scripts/verify-monitoring.sh",
     "generate:vapid": "bash scripts/generate-vapid-keys.sh"
   },
