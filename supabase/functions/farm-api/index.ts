@@ -889,6 +889,13 @@ Deno.serve(async (req) => {
       if (entity === "customers") {
         const incoming = (data || []) as Record<string, unknown>[];
         const CUSTOMER_TIERS = new Set(["Bronze", "Silver", "Gold", "Platinum"]);
+        const customerDeletedIds = (syncOpts.deletedIds || [])
+          .map((id) => String(id ?? "").trim())
+          .filter(Boolean);
+        if (customerDeletedIds.length) {
+          const { error: delErr } = await db.from("customers").delete().in("id", customerDeletedIds);
+          if (delErr) throw delErr;
+        }
         for (const c of incoming) {
           if (!String(c.name ?? "").trim()) return J({ error: "Customer name is required" }, 400);
           const whatsapp = String(c.whatsapp ?? c.phone ?? "").trim();
@@ -906,9 +913,16 @@ Deno.serve(async (req) => {
           id: c.id, name: String(c.name ?? "").trim(), phone: c.phone, whatsapp: c.whatsapp, area: c.area,
           postal_code: c.postalCode, address: c.address,
           fish_types: c.fishTypes, tier: c.tier, notes: c.notes, total_spent: c.totalSpent,
-        }, c)), "id", syncOpts);
+        }, c)), "id", { ...syncOpts, deletedIds: [] });
       } else if (entity === "products") {
         const incoming = (data || []) as Record<string, unknown>[];
+        const productDeletedIds = (syncOpts.deletedIds || [])
+          .map((id) => String(id ?? "").trim())
+          .filter(Boolean);
+        if (productDeletedIds.length) {
+          const { error: delErr } = await db.from("products").delete().in("id", productDeletedIds);
+          if (delErr) throw delErr;
+        }
         for (const p of incoming) {
           if (!String(p.name ?? "").trim()) return J({ error: "Product name is required" }, 400);
           const price = nullableNumeric(p.price, -1);
@@ -926,7 +940,7 @@ Deno.serve(async (req) => {
           cost: nullableNumeric(p.cost ?? 0), unit: p.unit, stock: nullableNumeric(p.stock),
           min_stock: nullableNumeric(p.minStock ?? p.min_stock), description: p.description,
           track_stock: p.trackStock !== false,
-        }, p)), "id", syncOpts);
+        }, p)), "id", { ...syncOpts, deletedIds: [] });
       } else if (entity === "invoices") {
         const incoming = (data || []) as Record<string, unknown>[];
         await upsertSync("invoices", incoming.map((i) => withTs({

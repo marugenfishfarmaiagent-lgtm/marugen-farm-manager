@@ -3707,7 +3707,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
         priority
         backdropClose={!deletingExpense}
         footer={deleteConfirm && (
-          <ConfirmModalFooter onCancel={() => setDeleteConfirm(null)} cancelDisabled={deletingExpense}>
+          <ConfirmModalFooter onCancel={() => { if (!deletingExpense) setDeleteConfirm(null); }} cancelDisabled={deletingExpense}>
             <Btn variant="danger" onClick={confirmDeleteExpense} disabled={deletingExpense} className="w-full sm:w-auto justify-center">
               {deletingExpense ? <><Loader2 size={14} className="animate-spin" />Deleting...</> : <><Trash2 size={14} />Delete</>}
             </Btn>
@@ -7661,6 +7661,7 @@ export default function App() {
     }
     const ckoiId = genId("CKOI");
     let photo = resolvePhotoRefFromKoi(koi.photo, koi.id);
+    const snapshotCustomerKoi = customerKoiList;
     try {
       if (photo && isSupabaseConfigured) {
         photo = await uploadInlinePhotoIfNeeded(
@@ -7700,10 +7701,11 @@ export default function App() {
         message: `Koi kept at ${keepPondName} for ${customer.name}. Track in Customer Koi.`,
       });
     } catch (err) {
+      setCustomerKoiList(snapshotCustomerKoi);
       addNotification({
         type: "error",
-        title: "Customer Koi Photo Failed",
-        message: err?.message || "Could not save customer koi photo to cloud.",
+        title: "Customer Koi Save Failed",
+        message: err?.message || "Could not save customer koi record to cloud.",
       });
     }
   }, [addNotification, customerKoiList, flushCustomerKoiSync]);
@@ -7749,14 +7751,18 @@ export default function App() {
       (inv) => !["cancelled", "paid"].includes(getInvoiceStatus(inv)),
     );
 
+    let customerKoiSynced = false;
     try {
       await flushCustomerKoiSync(nextCustomerKoi);
+      customerKoiSynced = true;
       if (nextKoiList !== koiFishList) {
         await flushKoiFishSync(nextKoiList);
       }
     } catch (err) {
-      linkedCustomerKoi.forEach((r) => unmarkDeleted("customer_koi", r.id));
-      setCustomerKoiList(snapshotCustomerKoi);
+      if (!customerKoiSynced) {
+        linkedCustomerKoi.forEach((r) => unmarkDeleted("customer_koi", r.id));
+        setCustomerKoiList(snapshotCustomerKoi);
+      }
       if (nextKoiList !== koiFishList) setKoiFishList(snapshotKoiList);
       addNotification({
         type: "error",
