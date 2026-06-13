@@ -101,6 +101,17 @@ input[type='time']::-webkit-calendar-picker-indicator {
   margin-top: 1.25rem;
 }
 
+.modal-actions button {
+  min-height: 44px;
+}
+
+@media (max-width: 639px) {
+  .modal-actions button {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
 @media (min-width: 640px) {
   .modal-actions {
     flex-direction: row;

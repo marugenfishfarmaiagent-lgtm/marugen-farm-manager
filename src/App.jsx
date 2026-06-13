@@ -148,18 +148,25 @@ function BookedBadge({ booked, bookedBy }) {
 
 function AccountsMarkConfirmModal({ open, recordLabel, currentlyBooked, onCancel, onSubmit }) {
   return (
-    <Modal open={open} onClose={onCancel} title={currentlyBooked ? "Remove accounts mark?" : "Mark in accounts?"} size="sm" priority>
-      <p className="text-slate-300 text-sm mb-4">
+    <Modal
+      open={open}
+      onClose={onCancel}
+      title={currentlyBooked ? "Remove accounts mark?" : "Mark in accounts?"}
+      size="sm"
+      priority
+      footer={(
+        <ConfirmModalFooter onCancel={onCancel}>
+          <Btn variant={currentlyBooked ? "danger" : "success"} onClick={onSubmit} className="w-full sm:w-auto justify-center">
+            <BookCheck size={14} />{currentlyBooked ? "Remove mark" : "Submit"}
+          </Btn>
+        </ConfirmModalFooter>
+      )}
+    >
+      <p className="text-slate-300 text-sm">
         {currentlyBooked
           ? <>Remove <strong className="text-white">{recordLabel}</strong> from accounts? It will show as <span className="text-amber-300">Pending accounts</span> again.</>
           : <>Confirm <strong className="text-white">{recordLabel}</strong> has been entered in your external accounting app.</>}
       </p>
-      <div className="flex justify-end gap-2">
-        <Btn variant="secondary" onClick={onCancel}>Cancel</Btn>
-        <Btn variant={currentlyBooked ? "danger" : "success"} onClick={onSubmit}>
-          <BookCheck size={14} />{currentlyBooked ? "Remove mark" : "Submit"}
-        </Btn>
-      </div>
     </Modal>
   );
 }
@@ -171,17 +178,25 @@ function InvoiceCancelConfirmModal({ open, invoiceId, customerName, onCancel, on
     if (!loading) onCancel();
   };
   return (
-    <Modal open={open} onClose={loading ? undefined : onCancel} title="Cancel invoice?" size="sm" priority backdropClose={!loading}>
-      <p className="text-slate-300 text-sm mb-4">
+    <Modal
+      open={open}
+      onClose={loading ? undefined : onCancel}
+      title="Cancel invoice?"
+      size="sm"
+      priority
+      backdropClose={!loading}
+      footer={(
+        <ConfirmModalFooter onCancel={handleKeep} cancelLabel="Keep invoice" cancelDisabled={loading}>
+          <Btn variant="danger" onClick={onConfirm} disabled={loading} className="w-full sm:w-auto justify-center">
+            {loading ? <><Loader2 size={14} className="animate-spin" />Cancelling...</> : <><XCircle size={14} />Cancel invoice</>}
+          </Btn>
+        </ConfirmModalFooter>
+      )}
+    >
+      <p className="text-slate-300 text-sm">
         Cancel <strong className="text-white">{invoiceId}</strong> for <strong className="text-white">{customerName}</strong>?
         Inventory and fish stock will be restored where applicable. This cannot be undone.
       </p>
-      <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
-        <Btn variant="secondary" onMouseDown={handleKeep} onClick={handleKeep} disabled={loading} className="w-full sm:w-auto justify-center">Keep invoice</Btn>
-        <Btn variant="danger" onClick={onConfirm} disabled={loading} className="w-full sm:w-auto justify-center">
-          {loading ? <><Loader2 size={14} className="animate-spin" />Cancelling...</> : <><XCircle size={14} />Cancel invoice</>}
-        </Btn>
-      </div>
     </Modal>
   );
 }
@@ -254,7 +269,16 @@ function Card({ children, className = "" }) {
   return <div className={`bg-slate-800/60 border border-slate-700/50 rounded-xl ${className}`}>{children}</div>;
 }
 
-const MODAL_CLICK_GUARD_MS = 400;
+const MODAL_CLICK_GUARD_MS = 200;
+
+function ConfirmModalFooter({ onCancel, cancelLabel = "Cancel", cancelDisabled = false, children }) {
+  return (
+    <div className="modal-actions !mt-0 w-full">
+      <Btn variant="secondary" onClick={onCancel} disabled={cancelDisabled} className="w-full sm:w-auto justify-center">{cancelLabel}</Btn>
+      {children}
+    </div>
+  );
+}
 
 function Modal({ open, onClose, title, children, size = "md", priority = false, footer = null, backdropClose = true }) {
   const [guardActive, setGuardActive] = useState(false);
@@ -278,6 +302,10 @@ function Modal({ open, onClose, title, children, size = "md", priority = false, 
   if (!open && !guardActive) return null;
 
   const sizes = { sm: "max-w-sm", md: "max-w-lg", lg: "max-w-2xl", xl: "max-w-4xl", full: "max-w-[900px]" };
+  const isCompact = size === "sm";
+  const panelHeightClass = isCompact
+    ? "h-auto max-h-[92dvh]"
+    : "h-[92dvh] sm:h-auto max-h-[92dvh] sm:max-h-[90vh]";
   const zClass = priority ? "z-[60]" : "z-50";
   const guardZClass = priority ? "z-[70]" : "z-[55]";
 
@@ -303,19 +331,19 @@ function Modal({ open, onClose, title, children, size = "md", priority = false, 
           onClick={handleBackdropClick}
         >
           <div
-            className={`bg-slate-800 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full ${sizes[size]} h-[92dvh] sm:h-auto max-h-[92dvh] sm:max-h-[90vh] flex flex-col shadow-2xl overflow-hidden`}
+            className={`bg-slate-800 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full ${sizes[size]} ${panelHeightClass} flex flex-col shadow-2xl overflow-hidden`}
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="sticky top-0 z-10 flex items-center justify-between gap-3 p-4 sm:p-5 border-b border-slate-700 shrink-0 bg-slate-800 pt-[max(1rem,env(safe-area-inset-top,0px))]">
               <h3 className="text-base sm:text-lg font-bold text-white pr-2 min-w-0 truncate">{title}</h3>
               {onClose && (
-                <button type="button" onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white p-2 -mr-1 rounded-lg hover:bg-slate-700 transition-colors touch-manipulation shrink-0"><X size={20} /></button>
+                <button type="button" onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white p-2 -mr-1 rounded-lg hover:bg-slate-700 transition-colors touch-manipulation shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center"><X size={20} /></button>
               )}
             </div>
-            <div className="overflow-y-auto flex-1 p-4 sm:p-5 overscroll-contain min-w-0">{children}</div>
+            <div className={`overflow-y-auto overscroll-contain min-w-0 p-4 sm:p-5 ${footer ? "flex-none" : "flex-1 min-h-0"}`}>{children}</div>
             {footer && (
-              <div className="sticky bottom-0 shrink-0 border-t border-slate-700 bg-slate-800/95 backdrop-blur-sm p-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))]">
+              <div className="sticky bottom-0 z-10 shrink-0 border-t border-slate-700 bg-slate-800/95 backdrop-blur-sm p-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))]">
                 {footer}
               </div>
             )}
@@ -375,7 +403,7 @@ function Btn({ children, onClick, variant = "primary", size = "md", className = 
     success: "bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30",
     ghost: "text-slate-400 hover:text-white hover:bg-slate-700",
   };
-  const sizes = { sm: "px-3 py-2 text-xs min-h-[40px]", md: "px-4 py-2.5 text-sm min-h-[44px]", lg: "px-6 py-3 text-base min-h-[48px]" };
+  const sizes = { sm: "px-3 py-2 text-xs min-h-[44px]", md: "px-4 py-2.5 text-sm min-h-[44px]", lg: "px-6 py-3 text-base min-h-[48px]" };
   const handleClick = (e) => {
     if (disabled || !onClick) return;
     e.preventDefault();
@@ -1344,54 +1372,76 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       </Modal>
 
       {/* Delete Product Modal */}
-      <Modal open={!!deleteProduct} onClose={() => setDeleteProduct(null)} title="Delete Product" size="sm">
+      <Modal
+        open={!!deleteProduct}
+        onClose={() => setDeleteProduct(null)}
+        title="Delete Product"
+        size="sm"
+        footer={deleteProduct && (
+          <ConfirmModalFooter onCancel={() => setDeleteProduct(null)}>
+            <Btn variant="danger" onClick={confirmDeleteProduct} className="w-full sm:w-auto justify-center"><Trash2 size={14} />Delete</Btn>
+          </ConfirmModalFooter>
+        )}
+      >
         {deleteProduct && (
-          <div className="space-y-4">
-            <p className="text-slate-300 text-sm">
-              Remove <strong className="text-white">{deleteProduct.name}</strong> from inventory?
-              Activity log history for this product will be kept.
-            </p>
-            <div className="flex justify-end gap-2">
-              <Btn variant="secondary" onClick={() => setDeleteProduct(null)}>Cancel</Btn>
-              <Btn variant="danger" onClick={confirmDeleteProduct}><Trash2 size={14} />Delete</Btn>
-            </div>
-          </div>
+          <p className="text-slate-300 text-sm">
+            Remove <strong className="text-white">{deleteProduct.name}</strong> from inventory?
+            Activity log history for this product will be kept.
+          </p>
         )}
       </Modal>
 
       {/* Use Stock Modal */}
-      <Modal open={!!showUse} onClose={() => setShowUse(null)} title={`Use: ${showUse?.name}`} size="sm">
+      <Modal
+        open={!!showUse}
+        onClose={() => setShowUse(null)}
+        title={`Use: ${showUse?.name}`}
+        size="sm"
+        footer={(
+          <ConfirmModalFooter onCancel={() => setShowUse(null)}>
+            <Btn onClick={() => confirmUseStock(showUse)} disabled={parseStockQty(useQty) <= 0} className="w-full sm:w-auto justify-center"><Archive size={14} />Confirm Use</Btn>
+          </ConfirmModalFooter>
+        )}
+      >
         <p className="text-slate-400 text-sm mb-4">Available: <span className="text-white font-bold">{showUse?.stock} {showUse?.unit}</span></p>
         <Input label="Quantity to Use" type="number" value={useQty} onChange={(e) => setUseQty(parseStockQty(e.target.value) || "")} min="1" className="mb-3" />
-        <Textarea label="Note (optional)" value={useNote} onChange={e => setUseNote(e.target.value)} rows={2} className="mb-4" />
-        <div className="flex justify-end gap-2">
-          <Btn variant="secondary" onClick={() => setShowUse(null)}>Cancel</Btn>
-          <Btn onClick={() => confirmUseStock(showUse)} disabled={parseStockQty(useQty) <= 0}><Archive size={14} />Confirm Use</Btn>
-        </div>
+        <Textarea label="Note (optional)" value={useNote} onChange={e => setUseNote(e.target.value)} rows={2} />
       </Modal>
 
       {/* Restock Modal */}
-      <Modal open={!!showRestock} onClose={() => setShowRestock(null)} title={`Restock: ${showRestock?.name}`} size="sm">
+      <Modal
+        open={!!showRestock}
+        onClose={() => setShowRestock(null)}
+        title={`Restock: ${showRestock?.name}`}
+        size="sm"
+        footer={(
+          <ConfirmModalFooter onCancel={() => setShowRestock(null)}>
+            <Btn onClick={() => { const q = parseStockQty(restockQty); if (q > 0) { restock(showRestock, q); setShowRestock(null); } }} disabled={parseStockQty(restockQty) <= 0} className="w-full sm:w-auto justify-center"><Plus size={14} />Confirm Restock</Btn>
+          </ConfirmModalFooter>
+        )}
+      >
         <p className="text-slate-400 text-sm mb-4">Current stock: <span className="text-white font-bold">{showRestock?.stock} {showRestock?.unit}</span></p>
-        <Input label="Quantity to Add" type="number" value={restockQty} onChange={(e) => setRestockQty(parseStockQty(e.target.value) || "")} min="1" className="mb-4" />
-        <div className="flex justify-end gap-2">
-          <Btn variant="secondary" onClick={() => setShowRestock(null)}>Cancel</Btn>
-          <Btn onClick={() => { const q = parseStockQty(restockQty); if (q > 0) { restock(showRestock, q); setShowRestock(null); } }} disabled={parseStockQty(restockQty) <= 0}><Plus size={14} />Confirm Restock</Btn>
-        </div>
+        <Input label="Quantity to Add" type="number" value={restockQty} onChange={(e) => setRestockQty(parseStockQty(e.target.value) || "")} min="1" />
       </Modal>
 
       {/* Sell Stock Modal */}
-      <Modal open={!!showSell} onClose={() => setShowSell(null)} title={`Sell: ${showSell?.name}`} size="sm">
+      <Modal
+        open={!!showSell}
+        onClose={() => setShowSell(null)}
+        title={`Sell: ${showSell?.name}`}
+        size="sm"
+        footer={(
+          <ConfirmModalFooter onCancel={() => setShowSell(null)}>
+            <Btn variant="success" onClick={() => sellStock(showSell)} disabled={parseStockQty(sellQty) <= 0} className="w-full sm:w-auto justify-center"><ShoppingBag size={14} />Confirm Sale</Btn>
+          </ConfirmModalFooter>
+        )}
+      >
         <p className="text-slate-400 text-sm mb-4">Available: <span className="text-white font-bold">{showSell?.stock} {showSell?.unit}</span></p>
         <Input label="Quantity to Sell" type="number" value={sellQty} onChange={(e) => setSellQty(parseStockQty(e.target.value) || "")} min="1" className="mb-3" />
         <Input label="Selling Price (S$)" type="number" value={sellPrice} onChange={e => setSellPrice(e.target.value)} step="0.01" className="mb-1" />
         <p className="text-xs text-slate-500 mb-4">Default: {showSell ? formatSGD(showSell.price) : ""} per {showSell?.unit}</p>
-        <div className="bg-slate-900/50 rounded-lg p-3 mb-4">
+        <div className="bg-slate-900/50 rounded-lg p-3">
           <p className="text-sm text-slate-400">Total: <span className="text-emerald-400 font-black text-lg">{formatSGD(parseStockQty(sellQty) * (parseStockQty(sellPrice) || Number(showSell?.price) || 0))}</span></p>
-        </div>
-        <div className="flex justify-end gap-2">
-          <Btn variant="secondary" onClick={() => setShowSell(null)}>Cancel</Btn>
-          <Btn variant="success" onClick={() => sellStock(showSell)} disabled={parseStockQty(sellQty) <= 0}><ShoppingBag size={14} />Confirm Sale</Btn>
         </div>
       </Modal>
     </div>
@@ -2887,7 +2937,17 @@ function CustomerModule({
         )}
       </Modal>
 
-      <Modal open={!!deleteCustomer} onClose={() => setDeleteCustomer(null)} title="Delete Customer" size="sm">
+      <Modal
+        open={!!deleteCustomer}
+        onClose={() => setDeleteCustomer(null)}
+        title="Delete Customer"
+        size="sm"
+        footer={deleteCustomer && (
+          <ConfirmModalFooter onCancel={() => setDeleteCustomer(null)}>
+            <Btn variant="danger" onClick={confirmDeleteCustomer} className="w-full sm:w-auto justify-center"><Trash2 size={14} />Delete</Btn>
+          </ConfirmModalFooter>
+        )}
+      >
         {deleteCustomer && (
           <div className="space-y-4">
             <p className="text-slate-300 text-sm">
@@ -2898,10 +2958,6 @@ function CustomerModule({
                 {warning} — past records may still reference this customer.
               </p>
             ))}
-            <div className="modal-actions flex justify-end gap-2">
-              <Btn variant="secondary" onClick={() => setDeleteCustomer(null)}>Cancel</Btn>
-              <Btn variant="danger" onClick={confirmDeleteCustomer}><Trash2 size={14} />Delete</Btn>
-            </div>
           </div>
         )}
       </Modal>
@@ -3502,7 +3558,17 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
         onSubmit={applyExpenseBookedConfirm}
       />
 
-      <Modal open={!!deleteConfirm} onClose={() => setDeleteConfirm(null)} title="Delete Receipt" size="sm">
+      <Modal
+        open={!!deleteConfirm}
+        onClose={() => setDeleteConfirm(null)}
+        title="Delete Receipt"
+        size="sm"
+        footer={deleteConfirm && (
+          <ConfirmModalFooter onCancel={() => setDeleteConfirm(null)}>
+            <Btn variant="danger" onClick={confirmDeleteExpense} className="w-full sm:w-auto justify-center"><Trash2 size={14} />Delete</Btn>
+          </ConfirmModalFooter>
+        )}
+      >
         {deleteConfirm && (
           <div className="space-y-4">
             <p className="text-slate-300 text-sm">
@@ -3513,10 +3579,6 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
                 This receipt is marked as entered in accounts. Delete only if it was uploaded by mistake.
               </p>
             )}
-            <div className="modal-actions flex justify-end gap-2">
-              <Btn variant="secondary" onClick={() => setDeleteConfirm(null)}>Cancel</Btn>
-              <Btn variant="danger" onClick={confirmDeleteExpense}><Trash2 size={14} />Delete</Btn>
-            </div>
           </div>
         )}
       </Modal>
@@ -4477,7 +4539,17 @@ function DeliveryModule({
         )}
       </Modal>
 
-      <Modal open={!!deleteConfirm} onClose={() => setDeleteConfirm(null)} title="Delete Delivery" size="sm">
+      <Modal
+        open={!!deleteConfirm}
+        onClose={() => setDeleteConfirm(null)}
+        title="Delete Delivery"
+        size="sm"
+        footer={deleteConfirm && (
+          <ConfirmModalFooter onCancel={() => setDeleteConfirm(null)}>
+            <Btn variant="danger" onClick={confirmDeleteDelivery} className="w-full sm:w-auto justify-center"><Trash2 size={14} />Delete</Btn>
+          </ConfirmModalFooter>
+        )}
+      >
         {deleteConfirm && (
           <div className="space-y-4">
             <p className="text-slate-300 text-sm">
@@ -4493,10 +4565,6 @@ function DeliveryModule({
                 This delivery is still {deleteConfirm.status === "transit" ? "in transit" : "scheduled"}.
               </p>
             )}
-            <div className="modal-actions flex justify-end gap-2">
-              <Btn variant="secondary" onClick={() => setDeleteConfirm(null)}>Cancel</Btn>
-              <Btn variant="danger" onClick={confirmDeleteDelivery}><Trash2 size={14} />Delete</Btn>
-            </div>
           </div>
         )}
       </Modal>
@@ -4836,7 +4904,17 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
         </div>
       </Modal>
 
-      <Modal open={!!deleteConfirm} onClose={() => setDeleteConfirm(null)} title="Delete Event" size="sm">
+      <Modal
+        open={!!deleteConfirm}
+        onClose={() => setDeleteConfirm(null)}
+        title="Delete Event"
+        size="sm"
+        footer={deleteConfirm && (
+          <ConfirmModalFooter onCancel={() => setDeleteConfirm(null)}>
+            <Btn variant="danger" onClick={confirmDeleteEvent} className="w-full sm:w-auto justify-center"><Trash2 size={14} />Delete</Btn>
+          </ConfirmModalFooter>
+        )}
+      >
         {deleteConfirm && (
           <div className="space-y-4">
             <p className="text-slate-300 text-sm">
@@ -4847,10 +4925,6 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
                 This event is scheduled for today or in the future.
               </p>
             )}
-            <div className="modal-actions flex justify-end gap-2">
-              <Btn variant="secondary" onClick={() => setDeleteConfirm(null)}>Cancel</Btn>
-              <Btn variant="danger" onClick={confirmDeleteEvent}><Trash2 size={14} />Delete</Btn>
-            </div>
           </div>
         )}
       </Modal>
@@ -4919,7 +4993,17 @@ function ChangePinModal({ open, onClose, currentUser, users, setUsers, addNotifi
   };
 
   return (
-    <Modal open={open} onClose={handleClose} title="Change My PIN" size="sm">
+    <Modal
+      open={open}
+      onClose={handleClose}
+      title="Change My PIN"
+      size="sm"
+      footer={(
+        <ConfirmModalFooter onCancel={handleClose} cancelDisabled={saving}>
+          <Btn onClick={handleSave} disabled={saving} className="w-full sm:w-auto justify-center"><Lock size={14} />{saving ? "Saving..." : "Update PIN"}</Btn>
+        </ConfirmModalFooter>
+      )}
+    >
       <p className="text-slate-400 text-sm mb-4">
         Update your login PIN for <span className="text-white font-semibold">{currentUser.name}</span>.
         {currentUser.role === "owner" && " As admin, keep your PIN private and unique."}
@@ -4936,10 +5020,6 @@ function ChangePinModal({ open, onClose, currentUser, users, setUsers, addNotifi
             <AlertTriangle size={14} />{error}
           </div>
         )}
-      </div>
-      <div className="modal-actions">
-        <Btn variant="secondary" onClick={handleClose} disabled={saving}>Cancel</Btn>
-        <Btn onClick={handleSave} disabled={saving}><Lock size={14} />{saving ? "Saving..." : "Update PIN"}</Btn>
       </div>
     </Modal>
   );
@@ -5402,7 +5482,17 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
         </div>
       </Modal>
 
-      <Modal open={!!deleteConfirm} onClose={() => setDeleteConfirm(null)} title="Remove User" size="sm">
+      <Modal
+        open={!!deleteConfirm}
+        onClose={() => setDeleteConfirm(null)}
+        title="Remove User"
+        size="sm"
+        footer={deleteConfirm && (
+          <ConfirmModalFooter onCancel={() => setDeleteConfirm(null)}>
+            <Btn variant="danger" onClick={confirmDeleteUser} className="w-full sm:w-auto justify-center"><Trash2 size={14} />Remove</Btn>
+          </ConfirmModalFooter>
+        )}
+      >
         {deleteConfirm && (
           <div className="space-y-4">
             <p className="text-slate-300 text-sm">
@@ -5413,10 +5503,6 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
                 This user is an owner. Ensure another active owner remains before removing them.
               </p>
             )}
-            <div className="modal-actions flex justify-end gap-2">
-              <Btn variant="secondary" onClick={() => setDeleteConfirm(null)}>Cancel</Btn>
-              <Btn variant="danger" onClick={confirmDeleteUser}><Trash2 size={14} />Remove</Btn>
-            </div>
           </div>
         )}
       </Modal>
@@ -5778,27 +5864,49 @@ function ChatModule({ aiContext, messages, setMessages, isMobile = false }) {
         {!isMobile && <AiUsageBar usage={usage} />}
       </div>
 
-      <Modal open={confirmOpen} onClose={handleConfirmDecline} title="Continue AI Usage?" size="sm">
+      <Modal
+        open={confirmOpen}
+        onClose={handleConfirmDecline}
+        title="Continue AI Usage?"
+        size="sm"
+        footer={(
+          <ConfirmModalFooter onCancel={handleConfirmDecline} cancelLabel="Not now">
+            <Btn onClick={handleConfirmContinue} className="w-full sm:w-auto justify-center"><Check size={14} />Yes, continue</Btn>
+          </ConfirmModalFooter>
+        )}
+      >
         <p className="text-slate-300 text-sm mb-3">{confirmMsg}</p>
-        <p className="text-slate-500 text-xs mb-4">
+        <p className="text-slate-500 text-xs">
           Used today: <span className="text-amber-400 font-bold">{formatTokens(usage?.tokens ?? AI_DAILY_FREE_TOKENS)}/{formatTokens(AI_DAILY_FREE_TOKENS)}</span> tokens.
           Extra usage may incur API costs.
         </p>
-        <div className="flex justify-end gap-2">
-          <Btn variant="secondary" onClick={handleConfirmDecline}>Not now</Btn>
-          <Btn onClick={handleConfirmContinue}><Check size={14} />Yes, continue</Btn>
-        </div>
       </Modal>
 
-      <Modal open={clearConfirmOpen} onClose={() => setClearConfirmOpen(false)} title="Clear Chat" size="sm">
-        <p className="text-slate-300 text-sm mb-4">Clear this chat history? This cannot be undone.</p>
-        <div className="flex justify-end gap-2">
-          <Btn variant="secondary" onClick={() => setClearConfirmOpen(false)}>Cancel</Btn>
-          <Btn variant="danger" onClick={clearChat}><Trash2 size={14} />Clear</Btn>
-        </div>
+      <Modal
+        open={clearConfirmOpen}
+        onClose={() => setClearConfirmOpen(false)}
+        title="Clear Chat"
+        size="sm"
+        footer={(
+          <ConfirmModalFooter onCancel={() => setClearConfirmOpen(false)}>
+            <Btn variant="danger" onClick={clearChat} className="w-full sm:w-auto justify-center"><Trash2 size={14} />Clear</Btn>
+          </ConfirmModalFooter>
+        )}
+      >
+        <p className="text-slate-300 text-sm">Clear this chat history? This cannot be undone.</p>
       </Modal>
 
-      <Modal open={actionConfirmOpen} onClose={handleActionCancel} title="Confirm Action" size="sm">
+      <Modal
+        open={actionConfirmOpen}
+        onClose={handleActionCancel}
+        title="Confirm Action"
+        size="sm"
+        footer={(
+          <ConfirmModalFooter onCancel={handleActionCancel}>
+            <Btn variant="danger" onClick={handleActionConfirm} className="w-full sm:w-auto justify-center"><Check size={14} />Yes, proceed</Btn>
+          </ConfirmModalFooter>
+        )}
+      >
         <p className="text-slate-300 text-sm mb-4 whitespace-pre-wrap">{actionConfirmMsg}</p>
         {pendingActionExecuted.length > 0 && (
           <div className="mb-4 p-3 rounded-lg bg-slate-800/80 border border-slate-600 text-xs space-y-1">
@@ -5810,11 +5918,7 @@ function ChatModule({ aiContext, messages, setMessages, isMobile = false }) {
             ))}
           </div>
         )}
-        <p className="text-amber-400/90 text-xs mb-4">This may change or delete data. Only proceed if you intend to do this.</p>
-        <div className="flex justify-end gap-2">
-          <Btn variant="secondary" onClick={handleActionCancel}>Cancel</Btn>
-          <Btn variant="danger" onClick={handleActionConfirm}><Check size={14} />Yes, proceed</Btn>
-        </div>
+        <p className="text-amber-400/90 text-xs">This may change or delete data. Only proceed if you intend to do this.</p>
       </Modal>
 
       <Card className={`flex-1 overflow-hidden flex flex-col min-h-0 ${isMobile ? "rounded-none border-x-0 border-b-0" : ""}`}>
