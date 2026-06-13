@@ -1627,26 +1627,46 @@ function InvoiceModule({
     return true;
   };
 
+  const commitInvoiceShipping = (inv, shippingRaw, { silent = false } = {}) => {
+    if (!inv) return inv;
+    if (!canEditRecords(currentUser)) {
+      if (!silent) notifyPermissionDenied(addNotification, "edit");
+      return inv;
+    }
+    const shipping = shippingRaw === "" || shippingRaw == null ? 0 : +shippingRaw || 0;
+    if (shipping < 0) {
+      if (!silent) {
+        addNotification({ type: "error", title: "Invalid Shipping", message: "Shipping fee cannot be negative." });
+      }
+      return inv;
+    }
+    const prevShipping = Number(inv.shipping) || 0;
+    if (prevShipping === shipping) {
+      setShippingDraft(shipping > 0 ? String(shipping) : "");
+      return inv;
+    }
+    const amounts = calcInvoiceAmounts({ ...inv, shipping });
+    patchInvoice(inv.id, { shipping, total: amounts.total });
+    setShippingDraft(shipping > 0 ? String(shipping) : "");
+    if (!silent) {
+      addNotification({ type: "success", title: "Shipping Updated", message: `Total is now ${formatSGD(amounts.total)}` });
+    }
+    return { ...inv, shipping, total: amounts.total };
+  };
+
   const applyInvoiceShipping = (inv, shippingRaw) => {
     if (!canEditRecords(currentUser)) {
       notifyPermissionDenied(addNotification, "edit");
       return false;
     }
-    const shipping = shippingRaw === "" || shippingRaw == null ? 0 : +shippingRaw || 0;
-    if (shipping < 0) {
-      addNotification({ type: "error", title: "Invalid Shipping", message: "Shipping fee cannot be negative." });
-      return false;
-    }
-    const prevShipping = Number(inv.shipping) || 0;
-    if (prevShipping === shipping) {
-      setShippingDraft(shipping > 0 ? String(shipping) : "");
-      return true;
-    }
-    const amounts = calcInvoiceAmounts({ ...inv, shipping });
-    patchInvoice(inv.id, { shipping, total: amounts.total });
-    setShippingDraft(shipping > 0 ? String(shipping) : "");
-    addNotification({ type: "success", title: "Shipping Updated", message: `Total is now ${formatSGD(amounts.total)}` });
+    commitInvoiceShipping(inv, shippingRaw);
     return true;
+  };
+
+  const resolveInvForPayment = (inv) => {
+    if (!inv || !activeViewInv || String(activeViewInv.id) !== String(inv.id)) return inv;
+    if (!["pending", "overdue"].includes(getInvoiceStatus(inv))) return inv;
+    return commitInvoiceShipping(inv, shippingDraft, { silent: true });
   };
 
   const stripBlankItems = (items) => items.filter(
@@ -1931,7 +1951,7 @@ function InvoiceModule({
   const markPaid = async (id) => {
     if (markingPaidId) return;
     const invId = String(id);
-    const inv = invoices.find((i) => String(i.id) === invId);
+    const inv = resolveInvForPayment(invoices.find((i) => String(i.id) === invId));
     if (!inv) return;
     if (getInvoiceStatus(inv) === "paid") return;
     if (!canMarkPaid(inv)) {
@@ -6960,6 +6980,12 @@ export default function App() {
 
     syncInFlightRef.current += 1;
     try {
+      if (isSupabaseConfigured && auth.hasCloudSession()) {
+        await db.upsertInvoiceCloud(touchUpdatedAt(db.sanitizeInvoiceForSync({
+          ...inv,
+          total: paidTotal,
+        })));
+      }
       const { invoice: confirmed, customer: confirmedCustomer } = await db.markInvoicePaidCloud(invId);
       const confirmedRow = touchUpdatedAt(db.sanitizeInvoiceForSync(confirmed));
       const localRow = syncStateRef.current.invoices.find((i) => String(i.id) === invId);
