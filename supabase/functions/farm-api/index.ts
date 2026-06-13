@@ -1009,6 +1009,14 @@ Deno.serve(async (req) => {
       } else if (entity === "deliveries") {
         const incoming = (data || []) as Record<string, unknown>[];
         const DELIVERY_STATUSES = new Set(["scheduled", "transit", "delivered", "cancelled"]);
+        const deliveryDeletedIds = (syncOpts.deletedIds || [])
+          .map((id) => String(id ?? "").trim())
+          .filter(Boolean);
+        if (deliveryDeletedIds.length) {
+          await deleteDeliveryPhotos(db, deliveryDeletedIds);
+          const { error: delErr } = await db.from("deliveries").delete().in("id", deliveryDeletedIds);
+          if (delErr) throw delErr;
+        }
         for (const d of incoming) {
           if (d.id == null || String(d.id).trim() === "") {
             return J({ error: "Delivery id is required" }, 400);
@@ -1045,26 +1053,34 @@ Deno.serve(async (req) => {
         }));
         await upsertSyncAssignedTeam("deliveries", deliveryRows, "id", {
           ...syncOpts,
+          deletedIds: [],
           beforeDelete: async (ids) => { await deleteDeliveryPhotos(db, ids); },
         });
       } else if (entity === "events") {
         const incoming = (data || []) as Record<string, unknown>[];
         const EVENT_TYPES = new Set(["maintenance", "feeding", "purchase", "customer", "other"]);
-        for (const e of incoming) {
-          if (e.id == null || String(e.id).trim() === "") {
-            return J({ error: "Event id is required" }, 400);
-          }
-          if (!String(e.title ?? "").trim()) return J({ error: "Event title is required" }, 400);
-          if (!String(e.date ?? "").trim()) return J({ error: "Event date is required" }, 400);
-          const type = String(e.type ?? "other");
-          if (!EVENT_TYPES.has(type)) return J({ error: `Invalid event type: ${e.type}` }, 400);
+        const eventDeletedIds = (syncOpts.deletedIds || [])
+          .map((id) => String(id ?? "").trim())
+          .filter(Boolean);
+        if (eventDeletedIds.length) {
+          const { error: delErr } = await db.from("events").delete().in("id", eventDeletedIds);
+          if (delErr) throw delErr;
         }
-        await upsertSyncAssignedTeam("events", incoming.map((e: Record<string, unknown>) => withTs({
+        const upsertIncoming: Record<string, unknown>[] = [];
+        for (const e of incoming) {
+          if (e.id == null || String(e.id).trim() === "") continue;
+          if (!String(e.title ?? "").trim()) continue;
+          if (!String(e.date ?? "").trim()) continue;
+          const type = String(e.type ?? "other");
+          e.type = EVENT_TYPES.has(type) ? type : "other";
+          upsertIncoming.push(e);
+        }
+        await upsertSyncAssignedTeam("events", upsertIncoming.map((e: Record<string, unknown>) => withTs({
           id: e.id, title: e.title, date: e.date, time: e.time ?? "09:00", type: e.type ?? "other",
           note: e.note ?? "", created_by: e.createdBy ?? "",
           pond_reminder_id: e.pondReminderId ?? e.pond_reminder_id ?? "",
           assigned_user_ids: normalizeAssignedUserIds(e.assignedUserIds ?? e.assigned_user_ids),
-        }, e)), "id", syncOpts);
+        }, e)), "id", { ...syncOpts, deletedIds: [] });
       } else if (entity === "stock_activity") {
         const incoming = (data || []) as Record<string, unknown>[];
         const allowedTypes = new Set(["sell", "use", "restock"]);

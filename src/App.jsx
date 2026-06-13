@@ -5080,9 +5080,10 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
 
       <Modal
         open={!!deleteConfirm}
-        onClose={() => setDeleteConfirm(null)}
+        onClose={deletingEvent ? undefined : () => setDeleteConfirm(null)}
         title="Delete Event"
         size="sm"
+        backdropClose={!deletingEvent}
         footer={deleteConfirm && (
           <ConfirmModalFooter onCancel={() => setDeleteConfirm(null)} cancelDisabled={deletingEvent}>
             <Btn variant="danger" onClick={confirmDeleteEvent} disabled={deletingEvent} className="w-full sm:w-auto justify-center">
@@ -6864,6 +6865,7 @@ export default function App() {
       touchLastSync();
     } catch (err) {
       handleSyncFailure(err);
+      throw err;
     } finally {
       syncInFlightRef.current -= 1;
     }
@@ -6969,6 +6971,7 @@ export default function App() {
       touchLastSync();
     } catch (err) {
       handleSyncFailure(err);
+      throw err;
     } finally {
       syncInFlightRef.current -= 1;
     }
@@ -7695,6 +7698,8 @@ export default function App() {
     if (!koi || (!isSold && !linkedCustomerKoi.length)) return;
 
     const removedIds = new Set(linkedCustomerKoi.map((r) => String(r.id)));
+    const snapshotCustomerKoi = customerKoiList;
+    const snapshotKoiList = koiFishList;
     linkedCustomerKoi.forEach((r) => markDeleted("customer_koi", r.id));
     const nextCustomerKoi = customerKoiList.filter((r) => !removedIds.has(String(r.id)));
 
@@ -7718,6 +7723,23 @@ export default function App() {
       (inv) => !["cancelled", "paid"].includes(getInvoiceStatus(inv)),
     );
 
+    try {
+      await Promise.all([
+        flushCustomerKoiSync(nextCustomerKoi),
+        nextKoiList !== koiFishList ? flushKoiFishSync(nextKoiList) : Promise.resolve(),
+      ]);
+    } catch (err) {
+      linkedCustomerKoi.forEach((r) => unmarkDeleted("customer_koi", r.id));
+      setCustomerKoiList(snapshotCustomerKoi);
+      if (nextKoiList !== koiFishList) setKoiFishList(snapshotKoiList);
+      addNotification({
+        type: "error",
+        title: "Refund Save Failed",
+        message: err?.message || "Could not sync refund to cloud. Try again.",
+      });
+      return;
+    }
+
     addNotification({
       type: "success",
       title: isSold ? "Refund Complete" : "Keep-at-farm Sale Reversed",
@@ -7731,15 +7753,6 @@ export default function App() {
         title: "Check Linked Invoices",
         message: `Cancel or adjust: ${linkedInvoices.map((inv) => inv.id).join(", ")}`,
       });
-    }
-
-    try {
-      await Promise.all([
-        flushCustomerKoiSync(nextCustomerKoi),
-        nextKoiList !== koiFishList ? flushKoiFishSync(nextKoiList) : Promise.resolve(),
-      ]);
-    } catch {
-      /* sync errors surfaced via handleSyncFailure in flush helpers */
     }
   }, [
     invoices, addNotification, currentUser, customerKoiList, koiFishList,
