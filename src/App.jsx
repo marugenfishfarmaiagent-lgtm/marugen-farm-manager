@@ -1505,10 +1505,7 @@ function InvoiceModule({
     setShippingDraft(saved > 0 ? String(saved) : "");
   }, []);
 
-  const openViewInvoiceFromNav = useCallback((inv) => {
-    resetShippingDraft(inv);
-    setViewInv(inv);
-  }, [resetShippingDraft]);
+  const openViewInvoiceRef = useRef(null);
 
   useEffect(() => {
     if (!openDraft) return;
@@ -1533,14 +1530,14 @@ function InvoiceModule({
     queueMicrotask(() => {
       if (cancelled || openedFromNavRef.current === openViewId) return;
       openedFromNavRef.current = openViewId;
-      openViewInvoiceFromNav(inv);
+      openViewInvoiceRef.current?.(inv);
       setHighlightInvId(inv.id);
       setShowNew(false);
       setFormError("");
       onViewOpened?.();
     });
     return () => { cancelled = true; };
-  }, [openViewId, invoices, onViewOpened, openViewInvoiceFromNav]);
+  }, [openViewId, invoices, onViewOpened]);
 
   const filtered = useMemo(() => sortInvoices(invoices.filter((i) => {
     if (!showOlderInvoices && !isAppVisibleInvoice(i)) return false;
@@ -1660,12 +1657,12 @@ function InvoiceModule({
       }
       return inv;
     }
-    const prevShipping = Number(inv.shipping) || 0;
+    const latest = invoices.find((i) => String(i.id) === String(inv.id)) || inv;
+    const prevShipping = Number(latest.shipping) || 0;
     if (prevShipping === shipping) {
       setShippingDraft(shipping > 0 ? String(shipping) : "");
-      return inv;
+      return latest;
     }
-    const latest = invoices.find((i) => String(i.id) === String(inv.id)) || inv;
     const amounts = calcInvoiceAmounts({ ...latest, shipping });
     patchInvoice(inv.id, { shipping, total: amounts.total });
     setShippingDraft(shipping > 0 ? String(shipping) : "");
@@ -1693,10 +1690,11 @@ function InvoiceModule({
   const persistShippingDraftIfDirty = (inv, draftRaw = shippingDraft) => {
     if (!inv || !canEditRecords(currentUser)) return inv;
     if (!["pending", "overdue"].includes(getInvoiceStatus(inv))) return inv;
+    const latest = invoices.find((i) => String(i.id) === String(inv.id)) || inv;
     const draftShipping = draftRaw === "" ? 0 : (+draftRaw || 0);
-    const prevShipping = Number(inv.shipping) || 0;
-    if (draftShipping === prevShipping) return inv;
-    return commitInvoiceShipping(inv, draftRaw, { silent: true });
+    const prevShipping = Number(latest.shipping) || 0;
+    if (draftShipping === prevShipping) return latest;
+    return commitInvoiceShipping(latest, draftRaw, { silent: true });
   };
 
   const openViewInvoice = (inv) => {
@@ -1727,6 +1725,7 @@ function InvoiceModule({
     viewInvRef.current = viewInv;
     invoicesRef.current = invoices;
     persistShippingDraftRef.current = persistShippingDraftIfDirty;
+    openViewInvoiceRef.current = openViewInvoice;
   });
 
   useEffect(() => () => {
