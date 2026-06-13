@@ -4782,6 +4782,7 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
   const [form, setForm] = useState(emptyEventForm());
   const [showAllPast, setShowAllPast] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [deletingEvent, setDeletingEvent] = useState(false);
 
   const commitEventList = async (buildNext) => {
     if (savingEventRef.current) {
@@ -4936,32 +4937,37 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
   };
 
   const confirmDeleteEvent = async () => {
-    if (!deleteConfirm) return;
+    if (!deleteConfirm || deletingEvent) return;
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
       return;
     }
     const e = deleteConfirm;
     const label = e.title || "this event";
+    setDeletingEvent(true);
     markDeleted("events", e.id);
-    const saved = await commitEventList((prev) => prev.filter((x) => !sameEventId(x.id, e.id)));
-    if (!saved) {
-      unmarkDeleted("events", e.id);
-      const detail = lastEventSaveErrorRef.current || "Could not remove event. Try again.";
-      const saveFailedAlreadyShown = detail !== "Another save is in progress. Wait a moment and try again."
-        && detail !== "Nothing to save.";
-      if (!saveFailedAlreadyShown) {
-        addNotification({
-          type: "error",
-          title: "Delete Failed",
-          message: detail,
-        });
+    try {
+      const saved = await commitEventList((prev) => prev.filter((x) => !sameEventId(x.id, e.id)));
+      if (!saved) {
+        unmarkDeleted("events", e.id);
+        const detail = lastEventSaveErrorRef.current || "Could not remove event. Try again.";
+        const saveFailedAlreadyShown = detail !== "Another save is in progress. Wait a moment and try again."
+          && detail !== "Nothing to save.";
+        if (!saveFailedAlreadyShown) {
+          addNotification({
+            type: "error",
+            title: "Delete Failed",
+            message: detail,
+          });
+        }
+        return;
       }
-      return;
+      if (sameEventId(editEventId, e.id)) closeEventForm();
+      addNotification({ type: "info", title: "Event Deleted", message: `"${label}" removed.` });
+      setDeleteConfirm(null);
+    } finally {
+      setDeletingEvent(false);
     }
-    if (sameEventId(editEventId, e.id)) closeEventForm();
-    addNotification({ type: "info", title: "Event Deleted", message: `"${label}" removed.` });
-    setDeleteConfirm(null);
   };
 
   const sorted = sortEventsBySchedule(events);
@@ -5078,8 +5084,10 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
         title="Delete Event"
         size="sm"
         footer={deleteConfirm && (
-          <ConfirmModalFooter onCancel={() => setDeleteConfirm(null)}>
-            <Btn variant="danger" onClick={confirmDeleteEvent} className="w-full sm:w-auto justify-center"><Trash2 size={14} />Delete</Btn>
+          <ConfirmModalFooter onCancel={() => setDeleteConfirm(null)} cancelDisabled={deletingEvent}>
+            <Btn variant="danger" onClick={confirmDeleteEvent} disabled={deletingEvent} className="w-full sm:w-auto justify-center">
+              {deletingEvent ? <><Loader2 size={14} className="animate-spin" />Deleting...</> : <><Trash2 size={14} />Delete</>}
+            </Btn>
           </ConfirmModalFooter>
         )}
       >
@@ -6297,6 +6305,7 @@ export default function App() {
   const lastUserActivityAt = useRef(0);
   const syncTimersRef = useRef({});
   const syncInFlightRef = useRef(0);
+  const explicitFlushAtRef = useRef({ expenses: 0, calendar: 0 });
   const pondSyncChainRef = useRef(Promise.resolve());
   const syncStateRef = useRef({});
   const inventorySyncPendingRef = useRef(false);
@@ -6891,6 +6900,7 @@ export default function App() {
       await db.syncEvents(payload, { force: true });
       resetSyncHealth();
       touchLastSync();
+      explicitFlushAtRef.current.calendar = Date.now();
     } catch (err) {
       handleSyncFailure(err);
       throw err;
@@ -6928,6 +6938,7 @@ export default function App() {
       await db.syncExpenses(payload, { force: true });
       resetSyncHealth();
       touchLastSync();
+      explicitFlushAtRef.current.expenses = Date.now();
     } catch (err) {
       handleSyncFailure(err);
       throw err;
@@ -7063,6 +7074,7 @@ export default function App() {
       await db.syncEvents(payload, { force: true });
       resetSyncHealth();
       touchLastSync();
+      explicitFlushAtRef.current.calendar = Date.now();
     } catch (err) {
       handleSyncFailure(err);
       throw err;
@@ -7319,6 +7331,8 @@ export default function App() {
     if (syncTimersRef.current[key]) clearTimeout(syncTimersRef.current[key]);
     syncTimersRef.current[key] = setTimeout(() => {
       delete syncTimersRef.current[key];
+      const flushKey = perm === "calendar" ? "calendar" : perm;
+      if (Date.now() - (explicitFlushAtRef.current[flushKey] || 0) < 3000) return;
       syncInFlightRef.current += 1;
       (async () => {
         const ready = await ensureCloudSyncReady();

@@ -2,7 +2,7 @@ import { clearSession, cloudFetch, fetchWithSessionRetry, getAuthHeaders } from 
 import { getFunctionsUrl, isSupabaseConfigured } from './supabase'
 import { normalizeCustomerKoiRecord } from '../data/constants'
 import { normalizeCustomerRecord } from './customerOps'
-import { normalizeExpenseRecord } from './expenseOps'
+import { normalizeExpenseRecord, sanitizeExpenseForSync } from './expenseOps'
 import { normalizeDeliveryRecord } from './deliveryOps'
 import { normalizeEventRecord } from './calendarOps'
 import { normalizeAssignedUserIds } from './assignTeam'
@@ -482,18 +482,21 @@ export async function uploadCustomerKoiPhoto(recordId, imageData, field = 'photo
 
 export async function syncExpenses(expenses, options) {
   if (!isSupabaseConfigured) return
-  const payload = expenses.map((e) => {
-    const normalized = normalizeExpenseRecord(e)
-    const hasHttpUrl = normalized.imageUrl?.startsWith('http')
-    const hasInlineImage = Boolean(normalized.imageData?.startsWith?.('data:image'))
-    return {
-      ...normalized,
-      imageUrl: hasHttpUrl
-        ? expenseStoragePath(normalized.id)
-        : (hasInlineImage ? '' : (normalized.imageUrl || '')),
-      imageData: hasHttpUrl ? '' : (normalized.imageData || ''),
-    }
-  })
+  const payload = (expenses || [])
+    .map((e) => {
+      const normalized = sanitizeExpenseForSync(e)
+      if (!normalized) return null
+      const hasHttpUrl = normalized.imageUrl?.startsWith('http')
+      const hasInlineImage = Boolean(normalized.imageData?.startsWith?.('data:image'))
+      return {
+        ...normalized,
+        imageUrl: hasHttpUrl
+          ? expenseStoragePath(normalized.id)
+          : (hasInlineImage ? '' : (normalized.imageUrl || '')),
+        imageData: hasHttpUrl ? '' : (normalized.imageData || ''),
+      }
+    })
+    .filter(Boolean)
   await syncCall('expenses', payload, options)
 }
 

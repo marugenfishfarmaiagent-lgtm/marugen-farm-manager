@@ -959,21 +959,32 @@ Deno.serve(async (req) => {
           "Feed", "Transport", "Utilities", "Rent", "Equipment", "Labor",
           "Medicine", "Packaging", "Marketing", "Other",
         ]);
+        const expenseDeletedIds = (syncOpts.deletedIds || [])
+          .map((id) => resolveExpenseId(id))
+          .filter((id): id is number => id != null);
+        if (expenseDeletedIds.length) {
+          await deleteExpenseReceiptImages(db, expenseDeletedIds);
+          const { error: delErr } = await db.from("expenses").delete().in("id", expenseDeletedIds);
+          if (delErr) throw delErr;
+        }
+
+        const upsertIncoming: Record<string, unknown>[] = [];
         for (const e of incoming) {
           const expenseId = resolveExpenseId(e.id);
-          if (expenseId == null) {
-            return J({ error: `Invalid expense id: ${e.id}` }, 400);
+          if (expenseId == null) continue;
+          if (!String(e.date ?? "").trim()) {
+            e.date = new Date().toISOString().slice(0, 10);
           }
-          if (!String(e.date ?? "").trim()) return J({ error: "Expense date is required" }, 400);
           if (e.amount != null && e.amount !== "") {
             const amt = nullableNumeric(e.amount, -1);
             if (amt < 0) return J({ error: "Expense amount cannot be negative" }, 400);
           }
           if (e.category && !EXPENSE_CATEGORIES.has(String(e.category))) {
-            return J({ error: `Invalid expense category: ${e.category}` }, 400);
+            e.category = null;
           }
+          upsertIncoming.push(e);
         }
-        const rows = await Promise.all(incoming.map(async (e) => {
+        const rows = await Promise.all(upsertIncoming.map(async (e) => {
           const expenseId = resolveExpenseId(e.id)!;
           let imagePath = normalizeImageUrlForStorage(String(e.imageUrl ?? ""), expenseId);
           let imageData = e.imageData ?? null;
@@ -992,6 +1003,7 @@ Deno.serve(async (req) => {
         }));
         await upsertSync("expenses", rows, "id", {
           ...syncOpts,
+          deletedIds: [],
           beforeDelete: async (ids) => { await deleteExpenseReceiptImages(db, ids); },
         });
       } else if (entity === "deliveries") {

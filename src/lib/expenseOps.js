@@ -1,4 +1,4 @@
-import { EXPENSE_CATEGORIES } from '../data/constants'
+import { EXPENSE_CATEGORIES, today } from '../data/constants'
 import { touchUpdatedAt } from './syncMeta'
 
 const NOTE_MAX_LEN = 500
@@ -11,6 +11,22 @@ export function genExpenseId() {
 export function sameExpenseId(a, b) {
   if (a == null || b == null) return false
   return String(a) === String(b)
+}
+
+export function expenseSyncId(expense) {
+  if (expense?.id == null || expense.id === '') return null
+  const n = Number(expense.id)
+  if (!Number.isFinite(n) || n <= 0) return null
+  return Math.trunc(n)
+}
+
+export function sanitizeExpenseForSync(expense) {
+  if (!expense) return null
+  const id = expenseSyncId(expense)
+  if (id == null) return null
+  const normalized = normalizeExpenseRecord(expense)
+  const date = String(normalized.date ?? '').trim() || today()
+  return { ...normalized, id, date }
 }
 
 export function normalizeExpenseRecord(expense) {
