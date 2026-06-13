@@ -1143,21 +1143,27 @@ Deno.serve(async (req) => {
       } else if (entity === "customer_koi") {
         const incoming = (data || []) as Record<string, unknown>[];
         const CKOI_STATUSES = new Set(["in_pond", "collected", "deceased"]);
+        const ckoiDeletedIds = (syncOpts.deletedIds || [])
+          .map((id) => String(id ?? "").trim())
+          .filter(Boolean);
+        if (ckoiDeletedIds.length) {
+          await deleteCustomerKoiImages(db, ckoiDeletedIds);
+          const { error: delErr } = await db.from("customer_koi").delete().in("id", ckoiDeletedIds);
+          if (delErr) throw delErr;
+        }
+        const upsertIncoming: Record<string, unknown>[] = [];
         for (const r of incoming) {
-          if (!String(r.id ?? "").trim()) return J({ error: "Customer koi id is required" }, 400);
-          if (r.customerId == null && r.customer_id == null) {
-            return J({ error: "Customer id is required" }, 400);
-          }
-          if (!String(r.variety ?? "").trim()) return J({ error: "Koi variety is required" }, 400);
+          if (!String(r.id ?? "").trim()) continue;
+          if (r.customerId == null && r.customer_id == null) continue;
+          if (!String(r.variety ?? "").trim()) continue;
           const price = nullableNumeric(r.purchasePrice ?? r.purchase_price, -1);
           if (price < 0) return J({ error: "Purchase price cannot be negative" }, 400);
           const status = String(r.status ?? "in_pond").toLowerCase();
-          if (!CKOI_STATUSES.has(status)) return J({ error: `Invalid customer koi status: ${status}` }, 400);
-          if (status === "in_pond" && !String(r.pondName ?? r.pond_name ?? "").trim()) {
-            return J({ error: "Pond name is required when status is in_pond" }, 400);
-          }
+          r.status = CKOI_STATUSES.has(status) ? status : "in_pond";
+          if (r.status === "in_pond" && !String(r.pondName ?? r.pond_name ?? "").trim()) continue;
+          upsertIncoming.push(r);
         }
-        const rows = await Promise.all(incoming.map(async (r) => withTs({
+        const rows = await Promise.all(upsertIncoming.map(async (r) => withTs({
           id: r.id,
           customer_id: nullableBigint(r.customerId),
           customer_name: r.customerName ?? "",
@@ -1179,6 +1185,7 @@ Deno.serve(async (req) => {
         }, r)));
         await upsertSync("customer_koi", rows, "id", {
           ...syncOpts,
+          deletedIds: [],
           beforeDelete: async (ids) => { await deleteCustomerKoiImages(db, ids); },
         });
       } else if (entity === "farm_pond_data") {

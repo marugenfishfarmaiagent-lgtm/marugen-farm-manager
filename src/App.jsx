@@ -4789,14 +4789,24 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
       lastEventSaveErrorRef.current = "Another save is in progress. Wait a moment and try again.";
       return null;
     }
-    const snapshot = events;
-    const nextList = buildNext(snapshot);
-    if (nextList === snapshot) {
+    let nextList = null;
+    let snapshot = null;
+    let unchanged = false;
+    setEvents((prev) => {
+      snapshot = prev;
+      const built = buildNext(prev);
+      if (built === prev) {
+        unchanged = true;
+        return prev;
+      }
+      nextList = built;
+      return nextList;
+    });
+    if (unchanged || !nextList) {
       lastEventSaveErrorRef.current = "Nothing to save.";
       return null;
     }
 
-    setEvents(nextList);
     if (!onPersistEvents) {
       if (isSupabaseConfigured) {
         lastEventSaveErrorRef.current = "Cloud save is unavailable. Try again after refresh.";
@@ -5085,7 +5095,7 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
         size="sm"
         backdropClose={!deletingEvent}
         footer={deleteConfirm && (
-          <ConfirmModalFooter onCancel={() => setDeleteConfirm(null)} cancelDisabled={deletingEvent}>
+          <ConfirmModalFooter onCancel={() => { if (!deletingEvent) setDeleteConfirm(null); }} cancelDisabled={deletingEvent}>
             <Btn variant="danger" onClick={confirmDeleteEvent} disabled={deletingEvent} className="w-full sm:w-auto justify-center">
               {deletingEvent ? <><Loader2 size={14} className="animate-spin" />Deleting...</> : <><Trash2 size={14} />Delete</>}
             </Btn>
@@ -6306,7 +6316,7 @@ export default function App() {
   const lastUserActivityAt = useRef(0);
   const syncTimersRef = useRef({});
   const syncInFlightRef = useRef(0);
-  const explicitFlushAtRef = useRef({ expenses: 0, calendar: 0 });
+  const explicitFlushAtRef = useRef({ expenses: 0, calendar: 0, customerkoi: 0, koifish: 0 });
   const pondSyncChainRef = useRef(Promise.resolve());
   const syncStateRef = useRef({});
   const inventorySyncPendingRef = useRef(false);
@@ -6844,8 +6854,13 @@ export default function App() {
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
   const flushCustomerKoiSync = useCallback(async (recordsOverride) => {
-    if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
-    if (!hasPermission(currentUser, "customerkoi")) return;
+    if (!isSupabaseConfigured) return;
+    if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
+      throw new Error("Cloud sync is not ready.");
+    }
+    if (!hasPermission(currentUser, "customerkoi")) {
+      throw new Error("Permission denied (customerkoi).");
+    }
     const syncKey = "customerkoi:Customer koi";
     if (syncTimersRef.current[syncKey]) {
       clearTimeout(syncTimersRef.current[syncKey]);
@@ -6856,13 +6871,16 @@ export default function App() {
       await new Promise((r) => setTimeout(r, 100));
       waited += 100;
     }
-    if (!(await ensureCloudSyncReady())) return;
+    if (!(await ensureCloudSyncReady())) {
+      throw new Error("Session needs refresh. Log out and log in again.");
+    }
     const payload = recordsOverride ?? syncStateRef.current.customerKoiList ?? [];
     syncInFlightRef.current += 1;
     try {
       await db.syncCustomerKoi(payload);
       resetSyncHealth();
       touchLastSync();
+      explicitFlushAtRef.current.customerkoi = Date.now();
     } catch (err) {
       handleSyncFailure(err);
       throw err;
@@ -6950,8 +6968,13 @@ export default function App() {
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
   const flushKoiFishSync = useCallback(async (koiOverride) => {
-    if (!cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
-    if (!hasPermission(currentUser, "koifish")) return;
+    if (!isSupabaseConfigured) return;
+    if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
+      throw new Error("Cloud sync is not ready.");
+    }
+    if (!hasPermission(currentUser, "koifish")) {
+      throw new Error("Permission denied (koifish).");
+    }
     const syncKey = "koifish:Koi fish";
     if (syncTimersRef.current[syncKey]) {
       clearTimeout(syncTimersRef.current[syncKey]);
@@ -6962,13 +6985,16 @@ export default function App() {
       await new Promise((r) => setTimeout(r, 100));
       waited += 100;
     }
-    if (!(await ensureCloudSyncReady())) return;
+    if (!(await ensureCloudSyncReady())) {
+      throw new Error("Session needs refresh. Log out and log in again.");
+    }
     const payload = koiOverride ?? syncStateRef.current.koiFishList ?? [];
     syncInFlightRef.current += 1;
     try {
       await db.syncKoiFish(payload);
       resetSyncHealth();
       touchLastSync();
+      explicitFlushAtRef.current.koifish = Date.now();
     } catch (err) {
       handleSyncFailure(err);
       throw err;
@@ -7724,10 +7750,10 @@ export default function App() {
     );
 
     try {
-      await Promise.all([
-        flushCustomerKoiSync(nextCustomerKoi),
-        nextKoiList !== koiFishList ? flushKoiFishSync(nextKoiList) : Promise.resolve(),
-      ]);
+      await flushCustomerKoiSync(nextCustomerKoi);
+      if (nextKoiList !== koiFishList) {
+        await flushKoiFishSync(nextKoiList);
+      }
     } catch (err) {
       linkedCustomerKoi.forEach((r) => unmarkDeleted("customer_koi", r.id));
       setCustomerKoiList(snapshotCustomerKoi);
