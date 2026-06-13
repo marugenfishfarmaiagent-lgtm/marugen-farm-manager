@@ -7221,12 +7221,19 @@ export default function App() {
     syncStateRef.current = { ...syncStateRef.current, invoices: nextInvoices };
     setInvoices(applyInvoicePins(nextInvoices));
 
+    let removedCustomerKoiIds = [];
+
     const applyCancelSideEffects = () => {
       restoreStockForInvoice(setProducts, setStockLog, products, inv.items || [], {
         invoiceId: invId,
         by: currentUser?.name || "Staff",
       });
-      restoreInvoiceKoiSales(inv.items || [], setKoiFishList, setCustomerKoiList);
+      removedCustomerKoiIds = restoreInvoiceKoiSales(
+        inv.items || [],
+        setKoiFishList,
+        setCustomerKoiList,
+        { customerKoiList },
+      );
       setDeliveries((prev) => prev.map((d) => {
         if (String(d.invoiceId || "") !== invId) return d;
         if (!["scheduled", "transit"].includes(d.status)) return d;
@@ -7236,6 +7243,8 @@ export default function App() {
     };
 
     const revertCancelSideEffects = () => {
+      removedCustomerKoiIds.forEach((id) => unmarkDeleted("customer_koi", id));
+      removedCustomerKoiIds = [];
       deductStockForInvoice(setProducts, setStockLog, products, inv.items || [], {
         invoiceId: invId,
         by: currentUser?.name || "Staff",
@@ -7294,7 +7303,7 @@ export default function App() {
       syncInFlightRef.current -= 1;
     }
   }, [
-    currentUser, products, customers, koiFishList, handleSyncFailure, touchLastSync, ensureCloudSyncReady,
+    currentUser, products, customers, koiFishList, customerKoiList, handleSyncFailure, touchLastSync, ensureCloudSyncReady,
     setProducts, setStockLog, setKoiFishList, setCustomerKoiList, setDeliveries, addNotification, resetSyncHealth,
   ]);
 
@@ -7751,19 +7760,26 @@ export default function App() {
       (inv) => !["cancelled", "paid"].includes(getInvoiceStatus(inv)),
     );
 
-    let customerKoiSynced = false;
+    let koiSynced = false;
     try {
-      await flushCustomerKoiSync(nextCustomerKoi);
-      customerKoiSynced = true;
       if (nextKoiList !== koiFishList) {
         await flushKoiFishSync(nextKoiList);
+        koiSynced = true;
       }
+      await flushCustomerKoiSync(nextCustomerKoi);
     } catch (err) {
-      if (!customerKoiSynced) {
-        linkedCustomerKoi.forEach((r) => unmarkDeleted("customer_koi", r.id));
-        setCustomerKoiList(snapshotCustomerKoi);
+      linkedCustomerKoi.forEach((r) => unmarkDeleted("customer_koi", r.id));
+      setCustomerKoiList(snapshotCustomerKoi);
+      if (nextKoiList !== koiFishList) {
+        setKoiFishList(snapshotKoiList);
+        if (koiSynced) {
+          try {
+            await flushKoiFishSync(snapshotKoiList);
+          } catch {
+            /* best-effort server rollback */
+          }
+        }
       }
-      if (nextKoiList !== koiFishList) setKoiFishList(snapshotKoiList);
       addNotification({
         type: "error",
         title: "Refund Save Failed",

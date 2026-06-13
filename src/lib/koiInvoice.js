@@ -96,10 +96,10 @@ export function applyInvoiceKoiSales({
   return { ok: true }
 }
 
-/** Restore fish stock when an invoice with koi lines is cancelled. */
-export function restoreInvoiceKoiSales(items, setKoiList, setCustomerKoiList) {
+/** Restore fish stock when an invoice with koi lines is cancelled. Returns removed Customer Koi record ids (for rollback). */
+export function restoreInvoiceKoiSales(items, setKoiList, setCustomerKoiList, options = {}) {
   const koiItems = (items || []).filter((it) => it.koiId && !it.koiAlreadySold)
-  if (!koiItems.length) return
+  if (!koiItems.length) return []
 
   const ids = new Set(koiItems.map((it) => String(it.koiId)))
   setKoiList((prev) => prev.map((k) => {
@@ -114,13 +114,27 @@ export function restoreInvoiceKoiSales(items, setKoiList, setCustomerKoiList) {
       keepPondName: null,
     })
   }))
-  if (setCustomerKoiList) {
-    setCustomerKoiList((prev) => {
-      const removed = prev.filter((r) => koiItems.some((it) => sameKoiId(it.koiId, r.koiId)))
-      removed.forEach((r) => markDeleted('customer_koi', r.id))
-      return prev.filter((r) => !koiItems.some((it) => sameKoiId(it.koiId, r.koiId)))
-    })
+
+  if (!setCustomerKoiList) return []
+
+  const sourceList = options.customerKoiList
+  let removedIds = []
+  if (Array.isArray(sourceList)) {
+    const removed = sourceList.filter((r) => koiItems.some((it) => sameKoiId(it.koiId, r.koiId)))
+    removedIds = removed.map((r) => r.id)
+    const removedIdSet = new Set(removedIds.map(String))
+    removed.forEach((r) => markDeleted('customer_koi', r.id))
+    setCustomerKoiList((prev) => prev.filter((r) => !removedIdSet.has(String(r.id))))
+    return removedIds
   }
+
+  setCustomerKoiList((prev) => {
+    const removed = prev.filter((r) => koiItems.some((it) => sameKoiId(it.koiId, r.koiId)))
+    removed.forEach((r) => markDeleted('customer_koi', r.id))
+    removedIds = removed.map((r) => r.id)
+    return prev.filter((r) => !koiItems.some((it) => sameKoiId(it.koiId, r.koiId)))
+  })
+  return removedIds
 }
 
 export function findLinkedKoiInvoices(invoices, koiId) {
