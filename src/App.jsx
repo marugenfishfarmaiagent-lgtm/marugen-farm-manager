@@ -909,7 +909,7 @@ function Dashboard({
 // ─────────────────────────────────────────────
 const EMPTY_PRODUCT_FORM = { name: "", category: "Fish Food", sku: "", price: "", unit: "kg", stock: "", minStock: "", description: "", trackStock: true };
 
-function InventoryModule({ products, setProducts, stockLog, setStockLog, invoices = [], addNotification, currentUser, onProductsSaved }) {
+function InventoryModule({ products, setProducts, stockLog, setStockLog, invoices = [], addNotification, currentUser, onProductsSaved, onInventorySaved }) {
   const canEdit = canEditRecords(currentUser);
   const canDelete = canDeleteRecords(currentUser);
   const [tab, setTab] = useState("stock");
@@ -950,7 +950,24 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   const productPage = usePagination(filtered, LIST_PAGE_SIZE, `${tab}-${search}-${catFilter}`);
   const stockLogPage = usePagination(visibleStockLog, LIST_PAGE_SIZE, String(showOlderStockLog));
 
-  const addProduct = () => {
+  const persistInventory = async (nextProducts, nextStockLog, snapshotProducts, snapshotStockLog) => {
+    if (!onInventorySaved) return true;
+    try {
+      await onInventorySaved(nextProducts, nextStockLog);
+      return true;
+    } catch (err) {
+      setProducts(snapshotProducts);
+      setStockLog(snapshotStockLog);
+      addNotification({
+        type: "error",
+        title: "Save Failed",
+        message: err?.message || "Could not save inventory to cloud.",
+      });
+      return false;
+    }
+  };
+
+  const addProduct = async () => {
     if (!canEdit) {
       notifyPermissionDenied(addNotification, "edit");
       return;
@@ -963,17 +980,23 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     }
     const normalized = normalizeProductRecord(form, { catalogOnly });
     const p = touchUpdatedAt({ ...form, ...normalized, id: Date.now() });
-    setProducts((prev) => [...prev, p]);
+    const productsSnapshot = products;
+    const stockSnapshot = stockLog;
+    const nextProducts = [...productsSnapshot, p];
+    let nextStockLog = stockSnapshot;
     if (!catalogOnly && p.stock > 0) {
-      setStockLog((prev) => [
+      nextStockLog = [
         buildStockLogEntry(p, "restock", {
           qty: p.stock,
           note: "Opening stock",
           by: currentUser?.name || "Staff",
         }),
-        ...prev,
-      ]);
+        ...stockSnapshot,
+      ];
     }
+    setProducts(nextProducts);
+    if (!catalogOnly && p.stock > 0) setStockLog(nextStockLog);
+    if (!(await persistInventory(nextProducts, nextStockLog, productsSnapshot, stockSnapshot))) return;
     addNotification({
       type: "success",
       title: catalogOnly ? "Price List Item Added" : "Product Added",
@@ -1061,7 +1084,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     }
   };
 
-  const confirmUseStock = (product) => {
+  const confirmUseStock = async (product) => {
     if (!canEdit) {
       notifyPermissionDenied(addNotification, "edit");
       return;
@@ -1080,11 +1103,16 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       });
       return;
     }
-    setProducts((prev) => adjustProductStockInList(prev, product.id, -qty));
-    setStockLog((prev) => [
+    const productsSnapshot = products;
+    const stockSnapshot = stockLog;
+    const nextProducts = adjustProductStockInList(productsSnapshot, product.id, -qty);
+    const nextStockLog = [
       buildStockLogEntry(product, "use", { qty, note: useNote, by: currentUser?.name || "Staff" }),
-      ...prev,
-    ]);
+      ...stockSnapshot,
+    ];
+    setProducts(nextProducts);
+    setStockLog(nextStockLog);
+    if (!(await persistInventory(nextProducts, nextStockLog, productsSnapshot, stockSnapshot))) return;
     const remaining = available - qty;
     if (product.minStock > 0 && remaining <= product.minStock) {
       addNotification({
@@ -1098,7 +1126,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     setUseNote("");
   };
 
-  const sellStock = (product) => {
+  const sellStock = async (product) => {
     if (!canEdit) {
       notifyPermissionDenied(addNotification, "edit");
       return;
@@ -1122,16 +1150,21 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       addNotification({ type: "error", title: "Invalid Price", message: "Selling price cannot be negative." });
       return;
     }
-    setProducts((prev) => adjustProductStockInList(prev, product.id, -qty));
-    setStockLog((prev) => [
+    const productsSnapshot = products;
+    const stockSnapshot = stockLog;
+    const nextProducts = adjustProductStockInList(productsSnapshot, product.id, -qty);
+    const nextStockLog = [
       buildStockLogEntry(product, "sell", {
         qty,
         price,
         total: qty * price,
         by: currentUser?.name || "Staff",
       }),
-      ...prev,
-    ]);
+      ...stockSnapshot,
+    ];
+    setProducts(nextProducts);
+    setStockLog(nextStockLog);
+    if (!(await persistInventory(nextProducts, nextStockLog, productsSnapshot, stockSnapshot))) return;
     addNotification({
       type: "success",
       title: "Sale Recorded",
@@ -1142,7 +1175,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     setSellPrice("");
   };
 
-  const restock = (product, qty) => {
+  const restock = async (product, qty) => {
     if (!canEdit) {
       notifyPermissionDenied(addNotification, "edit");
       return;
@@ -1152,15 +1185,20 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       addNotification({ type: "error", title: "Invalid Quantity", message: "Enter a quantity of at least 1." });
       return;
     }
-    setProducts((prev) => adjustProductStockInList(prev, product.id, amount));
-    setStockLog((prev) => [
+    const productsSnapshot = products;
+    const stockSnapshot = stockLog;
+    const nextProducts = adjustProductStockInList(productsSnapshot, product.id, amount);
+    const nextStockLog = [
       buildStockLogEntry(product, "restock", {
         qty: amount,
         note: "Manual restock",
         by: currentUser?.name || "Staff",
       }),
-      ...prev,
-    ]);
+      ...stockSnapshot,
+    ];
+    setProducts(nextProducts);
+    setStockLog(nextStockLog);
+    if (!(await persistInventory(nextProducts, nextStockLog, productsSnapshot, stockSnapshot))) return;
     addNotification({
       type: "info",
       title: "Restocked",
@@ -1993,6 +2031,12 @@ function InvoiceModule({
         koiFishList: koiSalePreview.hasKoiLines ? koiSalePreview.nextKoiList : undefined,
         nextProducts: stockPreview.hasStockLines ? stockPreview.nextProducts : undefined,
         nextStockLog: stockPreview.hasStockLines ? stockPreview.nextStockLog : undefined,
+        revertStock: stockPreview.hasStockLines
+          ? previewRestoreStockForInvoice(products, stockLog, invoiceItems, stockSideEffectMeta)
+          : undefined,
+        revertKoi: koiSalePreview.hasKoiLines
+          ? previewRestoreInvoiceKoiSales(invoiceItems, koiSalePreview.nextKoiList, customerKoiList)
+          : undefined,
       });
       setShowNew(false);
       setFormError("");
@@ -2016,8 +2060,12 @@ function InvoiceModule({
         const restoredStock = previewRestoreStockForInvoice(products, stockLog, invoiceItems, stockSideEffectMeta);
         try {
           await onSyncInventoryToCloud?.(restoredStock.nextProducts, restoredStock.nextStockLog);
-        } catch {
-          /* debounced sync may retry inventory restore */
+        } catch (syncErr) {
+          addNotification({
+            type: "warning",
+            title: "Stock Sync Incomplete",
+            message: syncErr?.message || "Local stock was restored but cloud sync may need a retry.",
+          });
         }
       }
       if (koiSalePreview.hasKoiLines) {
@@ -2028,13 +2076,21 @@ function InvoiceModule({
         );
         try {
           await onSyncKoiFishToCloud?.(restored.nextKoiList);
-        } catch {
-          /* debounced sync may retry koi restore */
+        } catch (syncErr) {
+          addNotification({
+            type: "warning",
+            title: "Koi Sync Incomplete",
+            message: syncErr?.message || "Local koi was restored but cloud sync may need a retry.",
+          });
         }
         try {
           await onSyncCustomerKoiToCloud?.(restored.nextCustomerKoiList);
-        } catch {
-          /* debounced sync may retry customer koi restore */
+        } catch (syncErr) {
+          addNotification({
+            type: "warning",
+            title: "Customer Koi Sync Incomplete",
+            message: syncErr?.message || "Local customer koi was restored but cloud sync may need a retry.",
+          });
         }
       }
       onInventorySideEffect?.();
@@ -7727,7 +7783,7 @@ export default function App() {
     const invId = String(inv.id);
     const optimistic = touchUpdatedAt(db.sanitizeInvoiceForSync(inv));
     const koiPayload = options.koiFishList;
-    const { nextProducts, nextStockLog } = options;
+    const { nextProducts, nextStockLog, revertStock, revertKoi } = options;
 
     const timerKey = "invoices:Invoices";
     if (syncTimersRef.current[timerKey]) {
@@ -7745,15 +7801,22 @@ export default function App() {
     const nextInvoices = sortInvoices([optimistic, ...syncStateRef.current.invoices.filter((i) => String(i.id) !== invId)]);
     syncStateRef.current = { ...syncStateRef.current, invoices: nextInvoices };
 
-    if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
+    if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) {
+      unpinInvoice(invId);
+      throw new Error("Cloud sync is not ready.");
+    }
     if (!hasPermission(currentUser, "invoices")) {
+      unpinInvoice(invId);
       throw new Error("Permission denied (invoices).");
     }
     if (!(await ensureCloudSyncReady())) {
+      unpinInvoice(invId);
       throw new Error("Session needs refresh. Log out and log in again.");
     }
 
     syncInFlightRef.current += 1;
+    let inventoryFlushed = false;
+    let koiFlushed = false;
     try {
       if (nextProducts && hasPermission(currentUser, "inventory")) {
         syncStateRef.current = {
@@ -7762,10 +7825,12 @@ export default function App() {
           stockLog: nextStockLog ?? syncStateRef.current.stockLog ?? [],
         };
         await flushInventorySync(nextProducts, nextStockLog);
+        inventoryFlushed = true;
       }
       if (koiPayload && hasPermission(currentUser, "koifish")) {
         syncStateRef.current = { ...syncStateRef.current, koiFishList: koiPayload };
         await flushKoiFishSync(koiPayload);
+        koiFlushed = true;
       }
       const confirmed = await db.upsertInvoiceCloud(optimistic);
       const confirmedRow = touchUpdatedAt(db.sanitizeInvoiceForSync(confirmed));
@@ -7781,12 +7846,28 @@ export default function App() {
       touchLastSync();
     } catch (err) {
       unpinInvoice(invId);
+      try {
+        if (inventoryFlushed && revertStock?.hasStockLines && hasPermission(currentUser, "inventory")) {
+          await flushInventorySync(revertStock.nextProducts, revertStock.nextStockLog);
+        }
+        if (koiFlushed && revertKoi?.nextKoiList && hasPermission(currentUser, "koifish")) {
+          await flushKoiFishSync(revertKoi.nextKoiList);
+        }
+        if (koiFlushed && revertKoi?.nextCustomerKoiList && hasPermission(currentUser, "customerkoi")) {
+          await flushCustomerKoiSync(revertKoi.nextCustomerKoiList);
+        }
+      } catch (revertErr) {
+        handleSyncFailure(revertErr);
+      }
       handleSyncFailure(err);
       throw err;
     } finally {
       syncInFlightRef.current -= 1;
     }
-  }, [currentUser, handleSyncFailure, touchLastSync, ensureCloudSyncReady, resetSyncHealth, flushKoiFishSync, flushInventorySync]);
+  }, [
+    currentUser, handleSyncFailure, touchLastSync, ensureCloudSyncReady, resetSyncHealth,
+    flushKoiFishSync, flushInventorySync, flushCustomerKoiSync,
+  ]);
 
   const requestInventorySideEffect = useCallback(() => {
     inventorySyncPendingRef.current = true;
@@ -8514,7 +8595,7 @@ export default function App() {
           cloudStale={dashboardCloudStale}
         />
       ));
-      case "inventory": return guard("inventory", "Inventory", <InventoryModule products={products} setProducts={setProducts} stockLog={stockLog} setStockLog={setStockLog} invoices={invoices} addNotification={addNotification} currentUser={currentUser} onProductsSaved={flushProductSync} />);
+      case "inventory": return guard("inventory", "Inventory", <InventoryModule products={products} setProducts={setProducts} stockLog={stockLog} setStockLog={setStockLog} invoices={invoices} addNotification={addNotification} currentUser={currentUser} onProductsSaved={flushProductSync} onInventorySaved={flushInventorySync} />);
       case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} customerKoiList={customerKoiList} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} onSyncKoiFish={flushKoiFishSync} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} onRecordsSaved={flushCustomerKoiSync} />);
       case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondDataWithRef} addNotification={addNotification} currentUser={currentUser} users={users} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} onPersistPondData={syncPondDataNow} onSyncReminderCalendar={syncReminderCalendar} />);

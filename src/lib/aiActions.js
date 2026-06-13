@@ -745,6 +745,12 @@ export async function executeAiAction(name, args, ctx) {
               koiFishList: koiSalePreview.hasKoiLines ? koiSalePreview.nextKoiList : undefined,
               nextProducts: stockPreview.hasStockLines ? stockPreview.nextProducts : undefined,
               nextStockLog: stockPreview.hasStockLines ? stockPreview.nextStockLog : undefined,
+              revertStock: stockPreview.hasStockLines
+                ? previewRestoreStockForInvoice(ctx.products, ctx.stockLog, invoiceItems, stockSideEffectMeta)
+                : undefined,
+              revertKoi: koiSalePreview.hasKoiLines
+                ? previewRestoreInvoiceKoiSales(invoiceItems, koiSalePreview.nextKoiList, ctx.customerKoiList)
+                : undefined,
             })
           } catch (err) {
             restoreStockForInvoice(ctx.setProducts, ctx.setStockLog, ctx.products, invoiceItems, stockSideEffectMeta)
