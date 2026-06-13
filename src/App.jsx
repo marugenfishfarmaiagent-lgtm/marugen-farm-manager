@@ -1490,7 +1490,18 @@ function InvoiceModule({
   const [formError, setFormError] = useState("");
   const [showWhatsappInput, setShowWhatsappInput] = useState(false);
   const [whatsappDraft, setWhatsappDraft] = useState("");
+  const [shippingDraft, setShippingDraft] = useState("");
   const [form, setForm] = useState(() => (openDraft ? buildFormFromDraft(openDraft) : emptyForm()));
+
+  const resetShippingDraft = useCallback((inv) => {
+    const saved = Number(inv?.shipping) || 0;
+    setShippingDraft(saved > 0 ? String(saved) : "");
+  }, []);
+
+  const openViewInvoice = useCallback((inv) => {
+    resetShippingDraft(inv);
+    setViewInv(inv);
+  }, [resetShippingDraft]);
 
   useEffect(() => {
     if (!openDraft) return;
@@ -1507,14 +1518,14 @@ function InvoiceModule({
     const inv = invoices.find((i) => String(i.id) === String(openViewId));
     queueMicrotask(() => {
       if (inv) {
-        setViewInv(inv);
+        openViewInvoice(inv);
         setHighlightInvId(inv.id);
         setShowNew(false);
         setFormError("");
       }
       onViewOpened?.();
     });
-  }, [openViewId, invoices, onViewOpened]);
+  }, [openViewId, invoices, onViewOpened, openViewInvoice]);
 
   const filtered = useMemo(() => sortInvoices(invoices.filter((i) => {
     if (!showOlderInvoices && !isAppVisibleInvoice(i)) return false;
@@ -1549,6 +1560,7 @@ function InvoiceModule({
     if (cancelConfirm || blockViewDismiss) return;
     setViewInv(null);
     setShowWhatsappInput(false);
+    setShippingDraft("");
   };
   const canCancelInvoice = (inv) => ["pending", "overdue"].includes(getInvoiceStatus(inv));
   const canMarkPaid = (inv) => ["pending", "overdue"].includes(getInvoiceStatus(inv));
@@ -1625,8 +1637,14 @@ function InvoiceModule({
       addNotification({ type: "error", title: "Invalid Shipping", message: "Shipping fee cannot be negative." });
       return false;
     }
+    const prevShipping = Number(inv.shipping) || 0;
+    if (prevShipping === shipping) {
+      setShippingDraft(shipping > 0 ? String(shipping) : "");
+      return true;
+    }
     const amounts = calcInvoiceAmounts({ ...inv, shipping });
     patchInvoice(inv.id, { shipping, total: amounts.total });
+    setShippingDraft(shipping > 0 ? String(shipping) : "");
     addNotification({ type: "success", title: "Shipping Updated", message: `Total is now ${formatSGD(amounts.total)}` });
     return true;
   };
@@ -2072,10 +2090,10 @@ function InvoiceModule({
               )}
             </div>
             <div className="grid grid-cols-4 gap-2 max-w-full">
-              <Btn variant="secondary" size="sm" onClick={() => setViewInv(inv)} className="col-span-2 justify-center min-w-0">
+              <Btn variant="secondary" size="sm" onClick={() => openViewInvoice(inv)} className="col-span-2 justify-center min-w-0">
                 <Eye size={14} />View
               </Btn>
-              <Btn variant="ghost" size="sm" onClick={() => { setViewInv(inv); sendWhatsApp(inv); }} disabled={pdfLoading} className="justify-center min-w-0" ariaLabel="Send WhatsApp">
+              <Btn variant="ghost" size="sm" onClick={() => { openViewInvoice(inv); sendWhatsApp(inv); }} disabled={pdfLoading} className="justify-center min-w-0" ariaLabel="Send WhatsApp">
                 <MessageSquare size={14} />
               </Btn>
               <Btn variant="ghost" size="sm" onClick={() => downloadPdf(inv)} disabled={pdfLoading} className="justify-center min-w-0" ariaLabel="Download PDF">
@@ -2146,8 +2164,8 @@ function InvoiceModule({
                   </td>
                   <td className="p-3">
                     <div className="flex gap-1 justify-center">
-                      <Btn variant="ghost" size="sm" onClick={() => setViewInv(inv)} ariaLabel="View invoice"><Eye size={12} /></Btn>
-                      <Btn variant="ghost" size="sm" onClick={() => { setViewInv(inv); sendWhatsApp(inv); }} ariaLabel="Send WhatsApp" disabled={pdfLoading}><MessageSquare size={12} /></Btn>
+                      <Btn variant="ghost" size="sm" onClick={() => openViewInvoice(inv)} ariaLabel="View invoice"><Eye size={12} /></Btn>
+                      <Btn variant="ghost" size="sm" onClick={() => { openViewInvoice(inv); sendWhatsApp(inv); }} ariaLabel="Send WhatsApp" disabled={pdfLoading}><MessageSquare size={12} /></Btn>
                       <Btn variant="ghost" size="sm" onClick={() => downloadPdf(inv)} ariaLabel="Download PDF" disabled={pdfLoading}><Printer size={12} /></Btn>
                       {canMarkAccounting(currentUser) && (
                         <Btn variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); requestInvoiceBookedChange(inv.id); }} ariaLabel={inv.booked ? "Change accounts mark" : "Mark in accounts"}>
@@ -2461,8 +2479,12 @@ function InvoiceModule({
         )}
       >
         {activeViewInv && (() => {
-          const viewAmounts = calcInvoiceAmounts(activeViewInv);
           const canEditDiscount = ["pending", "overdue"].includes(getInvoiceStatus(activeViewInv));
+          const canEditFees = canEditDiscount && canEditRecords(currentUser);
+          const draftShipping = shippingDraft === "" ? 0 : (+shippingDraft || 0);
+          const viewAmounts = calcInvoiceAmounts(
+            canEditFees ? { ...activeViewInv, shipping: draftShipping } : activeViewInv,
+          );
           const docInv = invoiceForDisplay(activeViewInv);
           const isMarkingView = String(markingPaidId) === String(activeViewInv.id);
           const isCancellingView = String(cancellingId) === String(activeViewInv.id);
@@ -2499,7 +2521,7 @@ function InvoiceModule({
                 )}
               </div>
             </div>
-            {canEditDiscount && canEditRecords(currentUser) && (
+            {canEditFees && (
               <Card className="no-print p-4 border-slate-700/50">
                 <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Discount &amp; fees</p>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -2546,9 +2568,9 @@ function InvoiceModule({
                   <Input
                     label="Shipping Fee (S$)"
                     type="number"
-                    value={activeViewInv.shipping ?? ""}
-                    onChange={(e) => patchInvoice(activeViewInv.id, { shipping: e.target.value })}
-                    onBlur={(e) => applyInvoiceShipping(activeViewInv, e.target.value)}
+                    value={shippingDraft}
+                    onChange={(e) => setShippingDraft(e.target.value)}
+                    onBlur={() => applyInvoiceShipping(activeViewInv, shippingDraft)}
                     min="0"
                     step="0.01"
                     placeholder="0.00"
@@ -2556,7 +2578,7 @@ function InvoiceModule({
                   <div className="flex items-end">
                     <Btn
                       className="w-full justify-center"
-                      onClick={() => applyInvoiceShipping(activeViewInv, activeViewInv.shipping ?? "")}
+                      onClick={() => applyInvoiceShipping(activeViewInv, shippingDraft)}
                     >
                       <Check size={14} />Apply shipping
                     </Btn>
