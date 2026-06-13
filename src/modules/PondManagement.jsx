@@ -140,7 +140,15 @@ export default function PondManagement({
         addNotification({ type: 'error', title: 'Reminder not updated', message: 'Could not find that reminder. Refresh and try again.' })
         return
       }
-      await onSyncReminderCalendar?.('remove', { id })
+      try {
+        await onSyncReminderCalendar?.('remove', { id })
+      } catch {
+        addNotification({
+          type: 'warning',
+          title: 'Calendar sync skipped',
+          message: 'Reminder marked done in pond data; calendar could not be updated.',
+        })
+      }
       addNotification({ type: 'success', title: 'Reminder completed', message: 'Marked as done.' })
     } catch {
       addNotification({ type: 'error', title: 'Save failed', message: 'Reminder could not be saved to cloud. Try again.' })

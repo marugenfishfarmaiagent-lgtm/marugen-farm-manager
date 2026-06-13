@@ -994,9 +994,9 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
         ...stockSnapshot,
       ];
     }
+    if (!(await persistInventory(nextProducts, nextStockLog, productsSnapshot, stockSnapshot))) return;
     setProducts(nextProducts);
     if (!catalogOnly && p.stock > 0) setStockLog(nextStockLog);
-    if (!(await persistInventory(nextProducts, nextStockLog, productsSnapshot, stockSnapshot))) return;
     addNotification({
       type: "success",
       title: catalogOnly ? "Price List Item Added" : "Product Added",
@@ -1042,17 +1042,15 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
         sameProductId(l.productId, updated.id) ? { ...l, productName: updated.name } : l
       ));
     }
-    setProducts(nextProducts);
-    if (prevName && prevName !== updated.name) setStockLog(nextStockLog);
     try {
       if (onInventorySaved) {
         await onInventorySaved(nextProducts, nextStockLog);
       } else {
         await onProductsSaved?.(nextProducts);
       }
+      setProducts(nextProducts);
+      if (prevName && prevName !== updated.name) setStockLog(nextStockLog);
     } catch (err) {
-      setProducts(productsSnapshot);
-      setStockLog(stockSnapshot);
       addNotification({
         type: "error",
         title: "Save Failed",
@@ -1082,17 +1080,16 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     const snapshot = products;
     const id = deleteProduct.id;
     const name = deleteProduct.name;
+    const nextProducts = snapshot.filter((p) => !sameProductId(p.id, id));
     setDeletingProduct(true);
     markDeleted("products", id);
-    const nextProducts = snapshot.filter((p) => !sameProductId(p.id, id));
-    setProducts(nextProducts);
     try {
       await onProductsSaved?.(nextProducts);
+      setProducts(nextProducts);
       addNotification({ type: "info", title: "Product Deleted", message: `${name} removed from inventory` });
       setDeleteProduct(null);
     } catch (err) {
       unmarkDeleted("products", id);
-      setProducts(snapshot);
       addNotification({
         type: "error",
         title: "Delete Failed",
@@ -1129,9 +1126,9 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       buildStockLogEntry(product, "use", { qty, note: useNote, by: currentUser?.name || "Staff" }),
       ...stockSnapshot,
     ];
+    if (!(await persistInventory(nextProducts, nextStockLog, productsSnapshot, stockSnapshot))) return;
     setProducts(nextProducts);
     setStockLog(nextStockLog);
-    if (!(await persistInventory(nextProducts, nextStockLog, productsSnapshot, stockSnapshot))) return;
     const remaining = available - qty;
     if (product.minStock > 0 && remaining <= product.minStock) {
       addNotification({
@@ -1181,9 +1178,9 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       }),
       ...stockSnapshot,
     ];
+    if (!(await persistInventory(nextProducts, nextStockLog, productsSnapshot, stockSnapshot))) return;
     setProducts(nextProducts);
     setStockLog(nextStockLog);
-    if (!(await persistInventory(nextProducts, nextStockLog, productsSnapshot, stockSnapshot))) return;
     addNotification({
       type: "success",
       title: "Sale Recorded",
@@ -1215,9 +1212,9 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       }),
       ...stockSnapshot,
     ];
+    if (!(await persistInventory(nextProducts, nextStockLog, productsSnapshot, stockSnapshot))) return;
     setProducts(nextProducts);
     setStockLog(nextStockLog);
-    if (!(await persistInventory(nextProducts, nextStockLog, productsSnapshot, stockSnapshot))) return;
     addNotification({
       type: "info",
       title: "Restocked",
@@ -2140,10 +2137,7 @@ function InvoiceModule({
       setCancelConfirm(null);
       return;
     }
-    const optimistic = touchUpdatedAt(db.sanitizeInvoiceForSync({ ...inv, status: "cancelled" }));
-
     setCancellingId(id);
-    setInvoices((prev) => sortInvoices(prev.map((i) => (String(i.id) === invId ? optimistic : i))));
 
     try {
       await onCancelInvoiceCloud?.(inv);
@@ -2173,17 +2167,15 @@ function InvoiceModule({
       return;
     }
     const paidTotal = calcInvoiceAmounts(inv).total;
-    const optimistic = touchUpdatedAt(db.sanitizeInvoiceForSync({ ...inv, status: "paid" }));
 
     setMarkingPaidId(id);
-    setInvoices((prev) => sortInvoices(prev.map((i) => (String(i.id) === invId ? optimistic : i))));
-    setViewInv((prev) => (prev && String(prev.id) === invId ? optimistic : prev));
 
     try {
       await onMarkInvoicePaid?.(inv, paidTotal);
+      const paidInv = touchUpdatedAt(db.sanitizeInvoiceForSync({ ...inv, status: "paid" }));
+      setViewInv((prev) => (prev && String(prev.id) === invId ? paidInv : prev));
       addNotification({ type: "success", title: "Payment Received", message: `${invId} marked as paid - ${formatSGD(paidTotal)}` });
     } catch (err) {
-      setInvoices((prev) => sortInvoices(prev.map((i) => (String(i.id) === invId ? inv : i))));
       setViewInv((prev) => (prev && String(prev.id) === invId ? inv : prev));
       addNotification({
         type: "error",
@@ -3053,15 +3045,14 @@ function CustomerModule({
     setDeletingCustomer(true);
     markDeleted("customers", id);
     const nextCustomers = snapshot.filter((c) => String(c.id) !== String(id));
-    setCustomers(nextCustomers);
-    if (String(viewId) === String(id)) setViewId(null);
     try {
       await onCustomersSaved?.(nextCustomers);
+      setCustomers(nextCustomers);
+      if (String(viewId) === String(id)) setViewId(null);
       addNotification({ type: "info", title: "Customer Deleted", message: `${name} removed from CRM` });
       setDeleteCustomer(null);
     } catch (err) {
       unmarkDeleted("customers", id);
-      setCustomers(snapshot);
       addNotification({
         type: "error",
         title: "Delete Failed",
@@ -4256,17 +4247,16 @@ function DeliveryModule({
     setDeletingDelivery(true);
     markDeleted("deliveries", d.id);
     const nextDeliveries = snapshot.filter((x) => !sameDeliveryId(x.id, d.id));
-    setDeliveries(nextDeliveries);
-    if (sameDeliveryId(editDeliveryId, d.id)) closeDeliveryForm();
-    if (sameDeliveryId(whatsappDeliveryId, d.id)) closeWhatsappPicker();
-    if (sameDeliveryId(viewDeliveryId, d.id)) setViewDeliveryId(null);
     try {
       await onPersistDeliveries?.(nextDeliveries);
+      setDeliveries(nextDeliveries);
+      if (sameDeliveryId(editDeliveryId, d.id)) closeDeliveryForm();
+      if (sameDeliveryId(whatsappDeliveryId, d.id)) closeWhatsappPicker();
+      if (sameDeliveryId(viewDeliveryId, d.id)) setViewDeliveryId(null);
       addNotification({ type: "info", title: "Delivery Deleted", message: `${d.id} removed.` });
       setDeleteConfirm(null);
     } catch (err) {
       unmarkDeleted("deliveries", d.id);
-      setDeliveries(snapshot);
       addNotification({
         type: "error",
         title: "Delete Failed",
@@ -4371,12 +4361,10 @@ function DeliveryModule({
     }
     const snapshot = whatsappGroups;
     const nextGroups = [...snapshot, touchUpdatedAt({ id: genId("GRP"), name, link })];
-    persistWhatsappGroups(nextGroups);
     if (cloudMode && onPersistWhatsappGroups) {
       try {
         await onPersistWhatsappGroups(nextGroups);
       } catch (err) {
-        persistWhatsappGroups(snapshot);
         addNotification({
           type: "error",
           title: "Save Failed",
@@ -4385,6 +4373,7 @@ function DeliveryModule({
         return;
       }
     }
+    persistWhatsappGroups(nextGroups);
     setGroupForm({ name: "", link: "" });
     addNotification({ type: "success", title: "Group Saved", message: `${name} added to WhatsApp groups.` });
   };
@@ -4397,19 +4386,20 @@ function DeliveryModule({
     const snapshot = whatsappGroups;
     markDeleted("whatsapp_groups", id);
     const nextGroups = snapshot.filter((g) => g.id !== id);
-    persistWhatsappGroups(nextGroups);
-    if (!cloudMode || !onPersistWhatsappGroups) return;
-    try {
-      await onPersistWhatsappGroups(nextGroups);
-    } catch (err) {
-      unmarkDeleted("whatsapp_groups", id);
-      persistWhatsappGroups(snapshot);
-      addNotification({
-        type: "error",
-        title: "Delete Failed",
-        message: err?.message || "Could not remove WhatsApp group. Try again.",
-      });
+    if (cloudMode && onPersistWhatsappGroups) {
+      try {
+        await onPersistWhatsappGroups(nextGroups);
+      } catch (err) {
+        unmarkDeleted("whatsapp_groups", id);
+        addNotification({
+          type: "error",
+          title: "Delete Failed",
+          message: err?.message || "Could not remove WhatsApp group. Try again.",
+        });
+        return;
+      }
     }
+    persistWhatsappGroups(nextGroups);
   };
 
   const openWhatsappPicker = (d) => {
