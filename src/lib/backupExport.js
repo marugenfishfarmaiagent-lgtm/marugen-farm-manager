@@ -84,7 +84,7 @@ function summarizeInvoiceItems(items = []) {
 export function invoicesToCsv(invoices = []) {
   const header = csvRow([
     'id', 'date', 'due', 'status', 'customer_name', 'customer_phone', 'customer_whatsapp',
-    'total', 'booked', 'booked_at', 'booked_by', 'discount_type', 'discount_value',
+    'total', 'booked', 'booked_at', 'booked_by', 'discount_type', 'discount_value', 'shipping',
     'notes', 'items_summary', 'created_by',
   ])
   const rows = invoices.map((inv) => csvRow([
@@ -101,6 +101,7 @@ export function invoicesToCsv(invoices = []) {
     inv.bookedBy || '',
     inv.discountType || 'none',
     inv.discountValue ?? 0,
+    inv.shipping ?? 0,
     inv.notes || '',
     summarizeInvoiceItems(inv.items),
     inv.createdBy || '',

@@ -1417,10 +1417,11 @@ function InvoiceModule({
     due: draft.due || today(),
     discountType: draft.discountType || "none",
     discountValue: draft.discountValue || "",
+    shipping: draft.shipping ?? "",
   }), [emptyItem]);
   const emptyForm = useCallback(() => ({
     customerId: "", customerName: "", manualCustomer: false, items: [emptyItem()], notes: "", due: today(),
-    discountType: "none", discountValue: "",
+    discountType: "none", discountValue: "", shipping: "",
   }), [emptyItem]);
 
   const [showNew, setShowNew] = useState(!!openDraft);
@@ -1535,7 +1536,7 @@ function InvoiceModule({
     const apply = (i) => {
       if (i.id !== id) return i;
       let merged = touchUpdatedAt(db.sanitizeInvoiceForSync({ ...i, ...normalized }));
-      if ("discountType" in normalized || "discountValue" in normalized) {
+      if ("discountType" in normalized || "discountValue" in normalized || "shipping" in normalized) {
         merged = { ...merged, total: calcInvoiceAmounts(merged).total };
       }
       return merged;
@@ -1561,6 +1562,22 @@ function InvoiceModule({
     const amounts = calcInvoiceAmounts({ ...inv, discountType, discountValue });
     patchInvoice(inv.id, { discountType, discountValue, total: amounts.total });
     addNotification({ type: "success", title: "Discount Updated", message: `Total is now ${formatSGD(amounts.total)}` });
+    return true;
+  };
+
+  const applyInvoiceShipping = (inv, shippingRaw) => {
+    if (!canEditRecords(currentUser)) {
+      notifyPermissionDenied(addNotification, "edit");
+      return false;
+    }
+    const shipping = shippingRaw === "" || shippingRaw == null ? 0 : +shippingRaw || 0;
+    if (shipping < 0) {
+      addNotification({ type: "error", title: "Invalid Shipping", message: "Shipping fee cannot be negative." });
+      return false;
+    }
+    const amounts = calcInvoiceAmounts({ ...inv, shipping });
+    patchInvoice(inv.id, { shipping, total: amounts.total });
+    addNotification({ type: "success", title: "Shipping Updated", message: `Total is now ${formatSGD(amounts.total)}` });
     return true;
   };
 
@@ -1650,6 +1667,7 @@ function InvoiceModule({
     items: form.items.map((it) => ({ name: it.name, qty: +it.qty || 0, price: +it.price || 0 })),
     discountType: form.discountType,
     discountValue: form.discountType === "none" ? 0 : +form.discountValue || 0,
+    shipping: +form.shipping || 0,
   });
 
   const createInvoice = async () => {
@@ -1686,6 +1704,10 @@ function InvoiceModule({
     }
     if (form.discountType === "fixed" && +form.discountValue <= 0) {
       setFormError("Enter a discount amount greater than zero.");
+      return;
+    }
+    if (form.shipping !== "" && +form.shipping < 0) {
+      setFormError("Shipping fee cannot be negative.");
       return;
     }
     const customerRecord = findCustomerRecord(customers, form.customerId, form.customerName);
@@ -1753,6 +1775,7 @@ function InvoiceModule({
       items: invoiceItems,
       discountType: form.discountType,
       discountValue,
+      shipping: +form.shipping || 0,
       total: formAmounts.total,
       status: "pending",
       date: issueDate,
@@ -2330,6 +2353,17 @@ function InvoiceModule({
                   />
                 )}
               </div>
+              <div className="mt-3">
+                <Input
+                  label="Shipping Fee (S$)"
+                  type="number"
+                  value={form.shipping}
+                  onChange={(e) => setForm((f) => ({ ...f, shipping: e.target.value }))}
+                  min="0"
+                  step="0.01"
+                  placeholder="0.00"
+                />
+              </div>
             </div>
             <div className="bg-slate-900/50 p-4 space-y-2 text-sm">
               <div className="flex justify-between text-slate-400">
@@ -2340,6 +2374,12 @@ function InvoiceModule({
                 <div className="flex justify-between text-emerald-400">
                   <span>{form.discountType === "percent" ? `Discount (${+form.discountValue || 0}%)` : "Discount"}</span>
                   <span>-{formatSGD(formAmounts.discountAmount)}</span>
+                </div>
+              )}
+              {(+form.shipping || 0) > 0 && (
+                <div className="flex justify-between text-slate-400">
+                  <span>Shipping</span>
+                  <span className="text-slate-200">{formatSGD(+form.shipping || 0)}</span>
                 </div>
               )}
               <div className="flex justify-between items-center pt-2 border-t border-slate-700/50">
@@ -2411,7 +2451,7 @@ function InvoiceModule({
             </div>
             {canEditDiscount && canEditRecords(currentUser) && (
               <Card className="no-print p-4 border-slate-700/50">
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Discount</p>
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Discount &amp; fees</p>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <Select
                     label="Type"
@@ -2447,15 +2487,38 @@ function InvoiceModule({
                         className="w-full justify-center"
                         onClick={() => applyInvoiceDiscount(activeViewInv, activeViewInv.discountType, activeViewInv.discountValue)}
                       >
-                        <Check size={14} />Apply
+                        <Check size={14} />Apply discount
                       </Btn>
                     </div>
                   )}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                  <Input
+                    label="Shipping Fee (S$)"
+                    type="number"
+                    value={activeViewInv.shipping ?? ""}
+                    onChange={(e) => patchInvoice(activeViewInv.id, { shipping: e.target.value })}
+                    onBlur={(e) => applyInvoiceShipping(activeViewInv, e.target.value)}
+                    min="0"
+                    step="0.01"
+                    placeholder="0.00"
+                  />
+                  <div className="flex items-end">
+                    <Btn
+                      className="w-full justify-center"
+                      onClick={() => applyInvoiceShipping(activeViewInv, activeViewInv.shipping ?? "")}
+                    >
+                      <Check size={14} />Apply shipping
+                    </Btn>
+                  </div>
                 </div>
                 <div className="flex flex-wrap gap-4 mt-3 text-xs text-slate-400">
                   <span>Subtotal: <span className="text-slate-200">{formatSGD(viewAmounts.subtotal)}</span></span>
                   {viewAmounts.discountAmount > 0 && (
                     <span>Discount: <span className="text-emerald-400">-{formatSGD(viewAmounts.discountAmount)}</span></span>
+                  )}
+                  {viewAmounts.shipping > 0 && (
+                    <span>Shipping: <span className="text-slate-200">{formatSGD(viewAmounts.shipping)}</span></span>
                   )}
                   <span>Total due: <span className="text-cyan-400 font-bold">{formatSGD(viewAmounts.total)}</span></span>
                 </div>

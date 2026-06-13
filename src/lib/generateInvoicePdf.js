@@ -164,7 +164,7 @@ export async function generateInvoicePdf(invoice) {
   const rows = [
     ['Subtotal', data.subtotalFmt],
     ...(data.discountAmount > 0 ? [[data.discountLabel, `-${data.discountFmt}`]] : []),
-    ['Shipping', data.shippingFmt],
+    ...(data.shipping > 0 ? [['Shipping', data.shippingFmt]] : []),
     ['Tax', data.taxFmt],
   ]
 

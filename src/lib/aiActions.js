@@ -662,7 +662,8 @@ export function executeAiAction(name, args, ctx) {
         const displayName = customer?.name || customerName
         const discountType = ['fixed', 'percent'].includes(a.discountType) ? a.discountType : 'none'
         const discountValue = Number(a.discountValue ?? a.discount) || 0
-        const { total } = calcInvoiceAmounts({ items, discountType, discountValue })
+        const shipping = Number(a.shipping) || 0
+        const { total } = calcInvoiceAmounts({ items, discountType, discountValue, shipping })
         const issueDate = today()
         const customerDetails = resolveInvoiceCustomer(
           { customerId: customer?.id || '', customerName: displayName },
@@ -686,6 +687,7 @@ export function executeAiAction(name, args, ctx) {
           items: invoiceItems,
           discountType: discountType === 'none' ? 'none' : discountType,
           discountValue: discountType === 'none' ? 0 : discountValue,
+          shipping,
           total,
           status: 'pending',
           date: issueDate,

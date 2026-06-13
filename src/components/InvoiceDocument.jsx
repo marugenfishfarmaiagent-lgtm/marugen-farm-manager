@@ -133,10 +133,12 @@ export default function InvoiceDocument({ invoice, className = '', preview = fal
                 <span className="font-medium">-{data.discountFmt}</span>
               </div>
             )}
-            <div className="flex justify-between text-gray-500">
-              <span>Shipping</span>
-              <span className="text-gray-800">{data.shippingFmt}</span>
-            </div>
+            {data.shipping > 0 && (
+              <div className="flex justify-between text-gray-500">
+                <span>Shipping</span>
+                <span className="text-gray-800">{data.shippingFmt}</span>
+              </div>
+            )}
             <div className="flex justify-between text-gray-500">
               <span>Tax</span>
               <span className="text-gray-800">{data.taxFmt}</span>

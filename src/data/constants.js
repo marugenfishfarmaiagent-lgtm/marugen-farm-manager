@@ -43,13 +43,13 @@ export const SINGAPORE_AREAS = [
 /** 25 HDB towns + Changi (legacy deliveries). */
 export const SG_AREAS = [...SINGAPORE_AREAS, 'Changi']
 
-export const PAYNOW_UEN = '53468842B'
+export const PAYNOW_UEN = '53280735M'
 
 /** Default page size for list/table pagination in modules. */
 export const LIST_PAGE_SIZE = 25
 
 export const INVOICE_COMPANY = {
-  name: 'Marugen Koi Farm',
+  name: 'Marugen Fish Farm',
   address: '21 Neo Tiew Lane 1, Singapore 718788',
   phone: '+65 9745 9730',
   email: 'koi@marugenfishfarm.com',

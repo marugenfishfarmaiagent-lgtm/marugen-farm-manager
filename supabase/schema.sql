@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS invoices (
   notes TEXT DEFAULT '',
   discount_type TEXT DEFAULT 'none',
   discount_value NUMERIC DEFAULT 0,
+  shipping NUMERIC DEFAULT 0,
   booked BOOLEAN DEFAULT false,
   booked_at TIMESTAMPTZ,
   booked_by TEXT DEFAULT '',

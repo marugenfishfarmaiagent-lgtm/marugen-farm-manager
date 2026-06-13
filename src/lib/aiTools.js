@@ -55,6 +55,7 @@ export const AI_TOOL_DEFINITIONS = [
         due: { type: 'string', description: 'YYYY-MM-DD' },
         discountType: { type: 'string', enum: ['none', 'fixed', 'percent'] },
         discountValue: { type: 'number' },
+        shipping: { type: 'number', description: 'Shipping fee in S$' },
       },
       required: ['customerName', 'items'],
     },
