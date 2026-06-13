@@ -16,7 +16,7 @@ import {
 } from "./lib/inventoryOps";
 import { isStockTracked, priceListProducts, stockProducts } from "./lib/productCatalog";
 import {
-  applyInvoiceKoiSales, restoreInvoiceKoiSales, availableKoiForInvoice,
+  applyInvoiceKoiSales, restoreInvoiceKoiSales, previewRestoreInvoiceKoiSales, availableKoiForInvoice,
   formatKoiInvoiceLineName, validateInvoiceKoiSales, findLinkedKoiInvoices, buildKoiRefundUpdate,
 } from "./lib/koiInvoice";
 import { buildKeepAtFarmReversePatch, sameKoiId } from "./lib/koiOps";
@@ -1899,16 +1899,33 @@ function InvoiceModule({
       return;
     }
     onInventorySideEffect?.();
-    const koiApply = applyInvoiceKoiSales({
-      items: activeItems,
-      koiList: koiFishList,
-      setKoiList: setKoiFishList,
-      customerId: form.customerId,
-      customers,
-      soldDate: issueDate,
-      onKoiSold,
-      addNotification,
-    });
+    let koiApply;
+    try {
+      koiApply = await applyInvoiceKoiSales({
+        items: activeItems,
+        koiList: koiFishList,
+        setKoiList: setKoiFishList,
+        customerId: form.customerId,
+        customers,
+        soldDate: issueDate,
+        onKoiSold,
+        addNotification,
+      });
+    } catch (err) {
+      restoreStockForInvoice(setProducts, setStockLog, products, invoiceItems, {
+        invoiceId: invId,
+        by: currentUser?.name || "Staff",
+      });
+      restoreInvoiceKoiSales(invoiceItems, setKoiFishList, setCustomerKoiList);
+      onInventorySideEffect?.();
+      setFormError(err?.message || "Could not save keep-at-farm Customer Koi record.");
+      addNotification({
+        type: "error",
+        title: "Fish Stock",
+        message: err?.message || "Could not save Customer Koi record for this sale.",
+      });
+      return;
+    }
     if (!koiApply.ok) {
       restoreStockForInvoice(setProducts, setStockLog, products, invoiceItems, {
         invoiceId: invId,
@@ -7222,6 +7239,12 @@ export default function App() {
     setInvoices(applyInvoicePins(nextInvoices));
 
     let removedCustomerKoiIds = [];
+    const koiRestorePreview = previewRestoreInvoiceKoiSales(
+      inv.items || [],
+      koiFishList,
+      customerKoiList,
+    );
+    const hasKoiCancelLines = (inv.items || []).some((it) => it.koiId && !it.koiAlreadySold);
 
     const applyCancelSideEffects = () => {
       restoreStockForInvoice(setProducts, setStockLog, products, inv.items || [], {
@@ -7232,7 +7255,7 @@ export default function App() {
         inv.items || [],
         setKoiFishList,
         setCustomerKoiList,
-        { customerKoiList },
+        { koiList: koiFishList, customerKoiList },
       );
       setDeliveries((prev) => prev.map((d) => {
         if (String(d.invoiceId || "") !== invId) return d;
@@ -7242,14 +7265,14 @@ export default function App() {
       inventorySyncPendingRef.current = true;
     };
 
-    const revertCancelSideEffects = () => {
+    const revertCancelSideEffects = async () => {
       removedCustomerKoiIds.forEach((id) => unmarkDeleted("customer_koi", id));
       removedCustomerKoiIds = [];
       deductStockForInvoice(setProducts, setStockLog, products, inv.items || [], {
         invoiceId: invId,
         by: currentUser?.name || "Staff",
       });
-      applyInvoiceKoiSales({
+      await applyInvoiceKoiSales({
         items: inv.items || [],
         koiList: koiFishList,
         setKoiList: setKoiFishList,
@@ -7272,16 +7295,29 @@ export default function App() {
       return;
     }
     if (!hasPermission(currentUser, "invoices") || !hasPermission(currentUser, "delete")) {
-      revertCancelSideEffects();
+      await revertCancelSideEffects();
       throw new Error("Permission denied.");
     }
     if (!(await ensureCloudSyncReady())) {
-      revertCancelSideEffects();
+      await revertCancelSideEffects();
       throw new Error("Session needs refresh. Log out and log in again.");
     }
 
     syncInFlightRef.current += 1;
     try {
+      if (hasKoiCancelLines) {
+        syncStateRef.current = {
+          ...syncStateRef.current,
+          koiFishList: koiRestorePreview.nextKoiList,
+          customerKoiList: koiRestorePreview.nextCustomerKoiList,
+        };
+        if (hasPermission(currentUser, "koifish")) {
+          await flushKoiFishSync(koiRestorePreview.nextKoiList);
+        }
+        if (hasPermission(currentUser, "customerkoi")) {
+          await flushCustomerKoiSync(koiRestorePreview.nextCustomerKoiList);
+        }
+      }
       const confirmed = await db.cancelInvoiceCloud(invId);
       const confirmedRow = touchUpdatedAt(db.sanitizeInvoiceForSync(confirmed));
       const localRow = syncStateRef.current.invoices.find((i) => String(i.id) === invId);
@@ -7296,7 +7332,7 @@ export default function App() {
       touchLastSync();
     } catch (err) {
       unpinInvoice(invId);
-      revertCancelSideEffects();
+      await revertCancelSideEffects();
       handleSyncFailure(err);
       throw err;
     } finally {
@@ -7304,6 +7340,7 @@ export default function App() {
     }
   }, [
     currentUser, products, customers, koiFishList, customerKoiList, handleSyncFailure, touchLastSync, ensureCloudSyncReady,
+    flushKoiFishSync, flushCustomerKoiSync,
     setProducts, setStockLog, setKoiFishList, setCustomerKoiList, setDeliveries, addNotification, resetSyncHealth,
   ]);
 
@@ -7666,7 +7703,7 @@ export default function App() {
         title: "Already in Customer Koi",
         message: `${koi.id} is already linked to ${existing.customerName}. Update status in Customer Koi.`,
       });
-      return;
+      throw new Error("Customer Koi record already exists for this fish.");
     }
     const ckoiId = genId("CKOI");
     let photo = resolvePhotoRefFromKoi(koi.photo, koi.id);
@@ -7716,6 +7753,7 @@ export default function App() {
         title: "Customer Koi Save Failed",
         message: err?.message || "Could not save customer koi record to cloud.",
       });
+      throw err;
     }
   }, [addNotification, customerKoiList, flushCustomerKoiSync]);
 
@@ -7726,7 +7764,7 @@ export default function App() {
   const handleKoiRefund = useCallback(async (koi, { reason = "" } = {}) => {
     if (!canRefundSales(currentUser)) {
       notifyPermissionDenied(addNotification, "refund");
-      return;
+      throw new Error("Permission denied.");
     }
     const linkedCustomerKoi = customerKoiList.filter(
       (r) => sameKoiId(r.koiId, koi.id) && r.status !== CUSTOMER_KOI_STATUS.DECEASED,
@@ -7785,7 +7823,7 @@ export default function App() {
         title: "Refund Save Failed",
         message: err?.message || "Could not sync refund to cloud. Try again.",
       });
-      return;
+      throw err;
     }
 
     addNotification({

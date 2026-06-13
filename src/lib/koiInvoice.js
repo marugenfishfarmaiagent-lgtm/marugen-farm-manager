@@ -45,7 +45,7 @@ export function validateInvoiceKoiSales({ items, koiList, customerId, customers 
 }
 
 /** Mark fish stock as sold when an invoice with koi line items is created. */
-export function applyInvoiceKoiSales({
+export async function applyInvoiceKoiSales({
   items, koiList, setKoiList, customerId, customers, soldDate, onKoiSold, addNotification,
 }) {
   const koiItems = (items || []).filter((it) => it.koiId)
@@ -73,16 +73,16 @@ export function applyInvoiceKoiSales({
     })
   }))
 
-  koiItems.filter((it) => !it.koiAlreadySold).forEach((it) => {
+  for (const it of koiItems.filter((item) => !item.koiAlreadySold)) {
     const koi = koiList.find((k) => sameKoiId(k.id, it.koiId))
-    if (!koi) return
+    if (!koi) continue
     if ((it.koiDisposition || 'taken') === 'keep') {
-      onKoiSold?.(koi, customer, +it.price || koi.price, soldDate, {
+      await onKoiSold?.(koi, customer, +it.price || koi.price, soldDate, {
         disposition: 'keep',
         keepPondName: it.keepPondName?.trim() || koi.pondName,
       })
     }
-  })
+  }
 
   const soldCount = koiItems.filter((it) => !it.koiAlreadySold).length
   if (soldCount > 0) {
@@ -96,10 +96,47 @@ export function applyInvoiceKoiSales({
   return { ok: true }
 }
 
+export function previewRestoreInvoiceKoiSales(items, koiList, customerKoiList) {
+  const koiItems = (items || []).filter((it) => it.koiId && !it.koiAlreadySold)
+  if (!koiItems.length) {
+    return { nextKoiList: koiList, nextCustomerKoiList: customerKoiList, removedCustomerKoiIds: [] }
+  }
+
+  const ids = new Set(koiItems.map((it) => String(it.koiId)))
+  const nextKoiList = koiList.map((k) => {
+    if (!ids.has(String(k.id))) return k
+    return touchUpdatedAt({
+      ...k,
+      status: KOI_STATUS.AVAILABLE,
+      soldTo: null,
+      soldPrice: null,
+      soldDate: null,
+      sellDisposition: null,
+      keepPondName: null,
+    })
+  })
+
+  const removed = customerKoiList.filter((r) => koiItems.some((it) => sameKoiId(it.koiId, r.koiId)))
+  const removedCustomerKoiIds = removed.map((r) => r.id)
+  const removedIdSet = new Set(removedCustomerKoiIds.map(String))
+  const nextCustomerKoiList = customerKoiList.filter((r) => !removedIdSet.has(String(r.id)))
+
+  return { nextKoiList, nextCustomerKoiList, removedCustomerKoiIds }
+}
+
 /** Restore fish stock when an invoice with koi lines is cancelled. Returns removed Customer Koi record ids (for rollback). */
 export function restoreInvoiceKoiSales(items, setKoiList, setCustomerKoiList, options = {}) {
   const koiItems = (items || []).filter((it) => it.koiId && !it.koiAlreadySold)
   if (!koiItems.length) return []
+
+  const { koiList, customerKoiList } = options
+  if (Array.isArray(koiList) && Array.isArray(customerKoiList)) {
+    const preview = previewRestoreInvoiceKoiSales(items, koiList, customerKoiList)
+    preview.removedCustomerKoiIds.forEach((id) => markDeleted('customer_koi', id))
+    setKoiList(preview.nextKoiList)
+    setCustomerKoiList(preview.nextCustomerKoiList)
+    return preview.removedCustomerKoiIds
+  }
 
   const ids = new Set(koiItems.map((it) => String(it.koiId)))
   setKoiList((prev) => prev.map((k) => {
@@ -117,17 +154,7 @@ export function restoreInvoiceKoiSales(items, setKoiList, setCustomerKoiList, op
 
   if (!setCustomerKoiList) return []
 
-  const sourceList = options.customerKoiList
   let removedIds = []
-  if (Array.isArray(sourceList)) {
-    const removed = sourceList.filter((r) => koiItems.some((it) => sameKoiId(it.koiId, r.koiId)))
-    removedIds = removed.map((r) => r.id)
-    const removedIdSet = new Set(removedIds.map(String))
-    removed.forEach((r) => markDeleted('customer_koi', r.id))
-    setCustomerKoiList((prev) => prev.filter((r) => !removedIdSet.has(String(r.id))))
-    return removedIds
-  }
-
   setCustomerKoiList((prev) => {
     const removed = prev.filter((r) => koiItems.some((it) => sameKoiId(it.koiId, r.koiId)))
     removed.forEach((r) => markDeleted('customer_koi', r.id))

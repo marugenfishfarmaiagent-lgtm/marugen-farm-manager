@@ -185,16 +185,23 @@ export default function KoiFish({
     setRefundReason('')
   }
 
-  const confirmRefund = () => {
-    if (!refundKoi) return
+  const confirmRefund = async () => {
+    if (!refundKoi || saving) return
     if (!canRefund) {
       addNotification?.({ type: 'error', title: 'Permission Denied', message: 'You need the "Refund sales" permission. Contact the farm owner.' })
       return
     }
-    onKoiRefund?.(refundKoi, { reason: refundReason })
-    if (viewKoi?.id === refundKoi.id) setViewKoi(null)
-    setRefundKoi(null)
-    setRefundReason('')
+    try {
+      setSaving(true)
+      await onKoiRefund?.(refundKoi, { reason: refundReason })
+      if (viewKoi?.id === refundKoi.id) setViewKoi(null)
+      setRefundKoi(null)
+      setRefundReason('')
+    } catch {
+      /* handleKoiRefund shows the error toast */
+    } finally {
+      setSaving(false)
+    }
   }
 
   const refundLinkedInvoices = refundKoi
@@ -383,56 +390,58 @@ export default function KoiFish({
       keepPondName,
     })
     const nextList = koiList.map((k) => (sameKoiId(k.id, currentKoi.id) ? soldPatch : k))
-    setKoiList(nextList)
-    setStatusFilter('sold')
-    await onKoiSold?.(currentKoi, customer, soldPrice, soldDate, {
-      disposition: sellForm.disposition,
-      keepPondName,
-    })
-    const dispositionNote = sellForm.disposition === 'keep'
-      ? `kept at ${keepPondName} — added to Customer Koi`
-      : 'taken away by customer'
-    addNotification({
-      type: 'success',
-      title: 'Koi Sold',
-      message: `${currentKoi.id} sold to ${customer?.name || 'customer'} for ${formatSGD(soldPrice)} (${dispositionNote})`,
-    })
-    if (sellForm.createInvoice) {
-      onCreateInvoiceFromSale?.({
-        customerId: String(customer.id),
-        customerName: customer.name,
-        manualCustomer: false,
-        items: [{
-          name: formatKoiInvoiceLineName(currentKoi),
-          qty: 1,
-          price: soldPrice,
-          productId: '',
-          manual: false,
-          koiId: currentKoi.id,
-          koiDisposition: sellForm.disposition,
-          keepPondName: sellForm.disposition === 'keep' ? keepPondName : '',
-          koiAlreadySold: true,
-        }],
-        notes: `Koi sale — ${currentKoi.name || currentKoi.variety} (${currentKoi.id})`,
-        due: soldDate,
-        discountType: 'none',
-        discountValue: '',
-      })
-    }
-    setSellKoi(null)
-    if (isSupabaseConfigured) {
-      try {
-        setSaving(true)
-        await persistKoiFishList(nextList)
-      } catch (err) {
-        addNotification({
-          type: 'warning',
-          title: 'Cloud Sync Pending',
-          message: err?.message || 'Sale saved on this device. Retry cloud sync when online.',
+    try {
+      setSaving(true)
+      if (sellForm.disposition === 'keep') {
+        await onKoiSold?.(currentKoi, customer, soldPrice, soldDate, {
+          disposition: sellForm.disposition,
+          keepPondName,
         })
-      } finally {
-        setSaving(false)
       }
+      setKoiList(nextList)
+      setStatusFilter('sold')
+      const dispositionNote = sellForm.disposition === 'keep'
+        ? `kept at ${keepPondName} — added to Customer Koi`
+        : 'taken away by customer'
+      addNotification({
+        type: 'success',
+        title: 'Koi Sold',
+        message: `${currentKoi.id} sold to ${customer?.name || 'customer'} for ${formatSGD(soldPrice)} (${dispositionNote})`,
+      })
+      if (sellForm.createInvoice) {
+        onCreateInvoiceFromSale?.({
+          customerId: String(customer.id),
+          customerName: customer.name,
+          manualCustomer: false,
+          items: [{
+            name: formatKoiInvoiceLineName(currentKoi),
+            qty: 1,
+            price: soldPrice,
+            productId: '',
+            manual: false,
+            koiId: currentKoi.id,
+            koiDisposition: sellForm.disposition,
+            keepPondName: sellForm.disposition === 'keep' ? keepPondName : '',
+            koiAlreadySold: true,
+          }],
+          notes: `Koi sale — ${currentKoi.name || currentKoi.variety} (${currentKoi.id})`,
+          due: soldDate,
+          discountType: 'none',
+          discountValue: '',
+        })
+      }
+      setSellKoi(null)
+      if (isSupabaseConfigured) {
+        await persistKoiFishList(nextList)
+      }
+    } catch (err) {
+      addNotification({
+        type: 'error',
+        title: 'Sale Not Completed',
+        message: err?.message || 'Could not complete this sale. Try again.',
+      })
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -837,7 +846,7 @@ export default function KoiFish({
             />
             <div className="modal-actions flex justify-end gap-2">
               <Btn variant="secondary" onClick={() => { setRefundKoi(null); setRefundReason('') }}>Cancel</Btn>
-              <Btn variant="danger" onClick={confirmRefund}><Undo2 size={14} />Confirm Refund</Btn>
+              <Btn variant="danger" onClick={confirmRefund} disabled={saving}><Undo2 size={14} />Confirm Refund</Btn>
             </div>
           </div>
         )}
