@@ -739,7 +739,6 @@ export async function executeAiAction(name, args, ctx) {
         }))
 
         if (ctx.onCreateInvoiceCloud) {
-          ctx.setInvoices((prev) => [inv, ...prev])
           try {
             await ctx.onCreateInvoiceCloud(inv, {
               koiFishList: koiSalePreview.hasKoiLines ? koiSalePreview.nextKoiList : undefined,

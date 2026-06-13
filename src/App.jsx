@@ -2044,7 +2044,6 @@ function InvoiceModule({
     }));
 
     setCreatingInvoice(true);
-    setInvoices((prev) => sortInvoices([inv, ...prev]));
     try {
       await onCreateInvoiceCloud?.(inv, {
         koiFishList: koiSalePreview.hasKoiLines ? koiSalePreview.nextKoiList : undefined,
@@ -2974,11 +2973,9 @@ function CustomerModule({
     }
     const snapshot = customers;
     const nextCustomers = [...snapshot, built.customer];
-    setCustomers(nextCustomers);
     try {
       await onCustomersSaved?.(nextCustomers);
     } catch (err) {
-      setCustomers(snapshot);
       addNotification({
         type: "error",
         title: "Save Failed",
@@ -2986,6 +2983,7 @@ function CustomerModule({
       });
       return;
     }
+    setCustomers(nextCustomers);
     addNotification({ type: "success", title: "Customer Added", message: `${built.customer.name} added to CRM` });
     setShowAdd(false);
     setForm(emptyForm());
@@ -3015,7 +3013,6 @@ function CustomerModule({
     const snapshot = customers;
     const updated = built.customer;
     const nextCustomers = snapshot.map((c) => (sameCustomerId(c.id, updated.id) ? updated : c));
-    setCustomers(nextCustomers);
     const related = propagateCustomerProfileChange({
       customerId: updated.id,
       prevCustomer: prev,
@@ -3024,16 +3021,9 @@ function CustomerModule({
       deliveries,
       customerKoiList,
     });
-    if (related.invoices && setInvoices) setInvoices(related.invoices);
-    if (related.deliveries && setDeliveries) setDeliveries(related.deliveries);
-    if (related.customerKoiList && setCustomerKoiList) setCustomerKoiList(related.customerKoiList);
     try {
       await onCustomersSaved?.(nextCustomers);
     } catch (err) {
-      setCustomers(snapshot);
-      if (related.invoices && setInvoices) setInvoices(invoices);
-      if (related.deliveries && setDeliveries) setDeliveries(deliveries);
-      if (related.customerKoiList && setCustomerKoiList) setCustomerKoiList(customerKoiList);
       addNotification({
         type: "error",
         title: "Save Failed",
@@ -3041,6 +3031,10 @@ function CustomerModule({
       });
       return;
     }
+    setCustomers(nextCustomers);
+    if (related.invoices && setInvoices) setInvoices(related.invoices);
+    if (related.deliveries && setDeliveries) setDeliveries(related.deliveries);
+    if (related.customerKoiList && setCustomerKoiList) setCustomerKoiList(related.customerKoiList);
     addNotification({ type: "success", title: "Customer Updated", message: `${updated.name} saved` });
     setEditCustomer(null);
     editAddressManual.current = false;
@@ -4195,10 +4189,10 @@ function DeliveryModule({
       const nextDeliveries = isEditing
         ? deliveriesSnapshot.map((row) => (sameDeliveryId(row.id, editDeliveryId) ? d : row))
         : [...deliveriesSnapshot, d];
-      setDeliveries(nextDeliveries);
       if (cloudMode && onPersistDeliveries) {
         await onPersistDeliveries(nextDeliveries);
       }
+      setDeliveries(nextDeliveries);
       if (isEditing) {
         addNotification({ type: "success", title: "Delivery Updated", message: `${editDeliveryId} saved.` });
         if (newlyAssignedUserIds(existing.assignedUserIds, d.assignedUserIds).length) {
@@ -4330,11 +4324,11 @@ function DeliveryModule({
     const nextDeliveries = snapshot.map((d) => (
       sameDeliveryId(d.id, id) ? touchUpdatedAt({ ...d, ...built.patch }) : d
     ));
-    setDeliveries(nextDeliveries);
     try {
       if (cloudMode && onPersistDeliveries) {
         await onPersistDeliveries(nextDeliveries);
       }
+      setDeliveries(nextDeliveries);
     } catch (err) {
       setDeliveries(snapshot);
       addNotification({
@@ -7514,7 +7508,7 @@ export default function App() {
 
     const raw = eventsOverride ?? syncStateRef.current.events ?? [];
     const payload = raw.map((e) => touchUpdatedAt(e));
-    syncStateRef.current = { ...syncStateRef.current, events: payload };
+    const previousEvents = syncStateRef.current.events ?? [];
 
     syncInFlightRef.current += 1;
     try {
@@ -7522,10 +7516,12 @@ export default function App() {
         throw new Error("Session needs refresh. Log out and log in again.");
       }
       await db.syncEvents(payload, { force: true });
+      syncStateRef.current = { ...syncStateRef.current, events: payload };
       resetSyncHealth();
       touchLastSync();
       explicitFlushAtRef.current.calendar = Date.now();
     } catch (err) {
+      syncStateRef.current = { ...syncStateRef.current, events: previousEvents };
       handleSyncFailure(err);
       throw err;
     } finally {
@@ -7537,22 +7533,18 @@ export default function App() {
     if (!hasPermission(currentUser, "calendar")) return;
     const reminderId = reminder?.id;
     if (!reminderId) return;
-    let changed = false;
-    let nextEvents = null;
-    setEventsWithRef((prev) => {
-      if (action === "upsert") {
-        nextEvents = upsertCalendarEventForReminder(prev, reminder, currentUser?.name || "Staff");
-      } else if (action === "remove") {
-        nextEvents = removeCalendarEventForReminder(prev, reminderId);
-      } else {
-        return prev;
-      }
-      if (nextEvents === prev) return prev;
-      changed = true;
-      return nextEvents;
-    });
-    if (!changed) return;
+    const prev = syncStateRef.current.events ?? [];
+    let nextEvents;
+    if (action === "upsert") {
+      nextEvents = upsertCalendarEventForReminder(prev, reminder, currentUser?.name || "Staff");
+    } else if (action === "remove") {
+      nextEvents = removeCalendarEventForReminder(prev, reminderId);
+    } else {
+      return;
+    }
+    if (nextEvents === prev) return;
     await syncEventsNow(nextEvents);
+    setEventsWithRef(nextEvents);
   }, [currentUser, setEventsWithRef, syncEventsNow]);
 
   const markInvoicePaidCloud = useCallback(async (inv, paidTotal) => {
@@ -7862,16 +7854,25 @@ export default function App() {
     const nextInvoices = sortInvoices([optimistic, ...syncStateRef.current.invoices.filter((i) => String(i.id) !== invId)]);
     syncStateRef.current = { ...syncStateRef.current, invoices: nextInvoices };
 
-    if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) {
+    const revertCreateOptimistic = () => {
       unpinInvoice(invId);
+      const revertedInvoices = sortInvoices(
+        syncStateRef.current.invoices.filter((i) => String(i.id) !== invId),
+      );
+      syncStateRef.current = { ...syncStateRef.current, invoices: revertedInvoices };
+      setInvoices(applyInvoicePins(revertedInvoices));
+    };
+
+    if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) {
+      revertCreateOptimistic();
       throw new Error("Cloud sync is not ready.");
     }
     if (!hasPermission(currentUser, "invoices")) {
-      unpinInvoice(invId);
+      revertCreateOptimistic();
       throw new Error("Permission denied (invoices).");
     }
     if (!(await ensureCloudSyncReady())) {
-      unpinInvoice(invId);
+      revertCreateOptimistic();
       throw new Error("Session needs refresh. Log out and log in again.");
     }
 
@@ -7906,7 +7907,7 @@ export default function App() {
       resetSyncHealth();
       touchLastSync();
     } catch (err) {
-      unpinInvoice(invId);
+      revertCreateOptimistic();
       try {
         if (inventoryFlushed && revertStock?.hasStockLines && hasPermission(currentUser, "inventory")) {
           await flushInventorySync(revertStock.nextProducts, revertStock.nextStockLog);
