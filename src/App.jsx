@@ -2876,7 +2876,7 @@ function CustomerModule({
     fillAddressFromPostal(postalCode, setEditCustomer, editAddressManual, setPostalLookupEdit);
   };
 
-  const addCustomer = () => {
+  const addCustomer = async () => {
     if (!canEdit) {
       notifyPermissionDenied(addNotification, "edit");
       return;
@@ -2897,14 +2897,27 @@ function CustomerModule({
       });
       return;
     }
-    setCustomers((prev) => [...prev, built.customer]);
+    const snapshot = customers;
+    const nextCustomers = [...snapshot, built.customer];
+    setCustomers(nextCustomers);
+    try {
+      await onCustomersSaved?.(nextCustomers);
+    } catch (err) {
+      setCustomers(snapshot);
+      addNotification({
+        type: "error",
+        title: "Save Failed",
+        message: err?.message || "Could not save customer to cloud.",
+      });
+      return;
+    }
     addNotification({ type: "success", title: "Customer Added", message: `${built.customer.name} added to CRM` });
     setShowAdd(false);
     setForm(emptyForm());
     addAddressManual.current = false;
   };
 
-  const saveEdit = () => {
+  const saveEdit = async () => {
     if (!editCustomer) return;
     if (!canEdit) {
       notifyPermissionDenied(addNotification, "edit");
@@ -2924,8 +2937,10 @@ function CustomerModule({
       });
       return;
     }
+    const snapshot = customers;
     const updated = built.customer;
-    setCustomers((prev) => prev.map((c) => (sameCustomerId(c.id, updated.id) ? updated : c)));
+    const nextCustomers = snapshot.map((c) => (sameCustomerId(c.id, updated.id) ? updated : c));
+    setCustomers(nextCustomers);
     const related = propagateCustomerProfileChange({
       customerId: updated.id,
       prevCustomer: prev,
@@ -2937,6 +2952,20 @@ function CustomerModule({
     if (related.invoices && setInvoices) setInvoices(related.invoices);
     if (related.deliveries && setDeliveries) setDeliveries(related.deliveries);
     if (related.customerKoiList && setCustomerKoiList) setCustomerKoiList(related.customerKoiList);
+    try {
+      await onCustomersSaved?.(nextCustomers);
+    } catch (err) {
+      setCustomers(snapshot);
+      if (related.invoices && setInvoices) setInvoices(invoices);
+      if (related.deliveries && setDeliveries) setDeliveries(deliveries);
+      if (related.customerKoiList && setCustomerKoiList) setCustomerKoiList(customerKoiList);
+      addNotification({
+        type: "error",
+        title: "Save Failed",
+        message: err?.message || "Could not save customer to cloud.",
+      });
+      return;
+    }
     addNotification({ type: "success", title: "Customer Updated", message: `${updated.name} saved` });
     setEditCustomer(null);
     editAddressManual.current = false;
@@ -4079,6 +4108,7 @@ function DeliveryModule({
       return;
     }
     let d = applyDeliveryPhotoFields(built.delivery);
+    const deliveriesSnapshot = deliveries;
     try {
       if (d.photoData?.startsWith?.("data:image")) {
         setPhotoUploading(true);
@@ -4087,10 +4117,14 @@ function DeliveryModule({
           d = { ...d, photo: result?.photo || result?.photoPath || "", photoData: "" };
         }
       }
+      const nextDeliveries = isEditing
+        ? deliveriesSnapshot.map((row) => (sameDeliveryId(row.id, editDeliveryId) ? d : row))
+        : [...deliveriesSnapshot, d];
+      setDeliveries(nextDeliveries);
+      if (cloudMode && onPersistDeliveries) {
+        await onPersistDeliveries(nextDeliveries);
+      }
       if (isEditing) {
-        setDeliveries((prev) => prev.map((row) => (
-          sameDeliveryId(row.id, editDeliveryId) ? d : row
-        )));
         addNotification({ type: "success", title: "Delivery Updated", message: `${editDeliveryId} saved.` });
         if (newlyAssignedUserIds(existing.assignedUserIds, d.assignedUserIds).length) {
           notifyAssignmentChange({
@@ -4105,7 +4139,6 @@ function DeliveryModule({
           });
         }
       } else {
-        setDeliveries((prev) => [...prev, d]);
         const scheduleMsg = d.invoiceId ? `${d.id} linked to ${d.invoiceId} → ${d.customerName}` : `${d.id} → ${d.customerName}`;
         if (hasAssignedTeam(d.assignedUserIds)) {
           addNotification({ type: "success", title: "Delivery Scheduled", message: scheduleMsg, team: false });
@@ -4128,7 +4161,8 @@ function DeliveryModule({
       }
       closeDeliveryForm();
     } catch (err) {
-      addNotification({ type: "error", title: "Save Failed", message: err?.message || "Could not save delivery photo." });
+      setDeliveries(deliveriesSnapshot);
+      addNotification({ type: "error", title: "Save Failed", message: err?.message || "Could not save delivery to cloud." });
     } finally {
       setPhotoUploading(false);
     }
@@ -4205,7 +4239,7 @@ function DeliveryModule({
     setForm((f) => ({ ...f, invoiceId: "", ...customerDeliveryFields(c), schedule: f.schedule, items: f.items, driver: f.driver, notes: f.notes, status: f.status }));
   };
 
-  const updateStatus = (id, status) => {
+  const updateStatus = async (id, status) => {
     if (!canEdit) {
       notifyPermissionDenied(addNotification, "edit");
       return;
@@ -4217,9 +4251,24 @@ function DeliveryModule({
       addNotification({ type: "error", title: "Invalid Status", message: built.message });
       return;
     }
-    setDeliveries((prev) => prev.map((d) => (
+    const snapshot = deliveries;
+    const nextDeliveries = snapshot.map((d) => (
       sameDeliveryId(d.id, id) ? touchUpdatedAt({ ...d, ...built.patch }) : d
-    )));
+    ));
+    setDeliveries(nextDeliveries);
+    try {
+      if (cloudMode && onPersistDeliveries) {
+        await onPersistDeliveries(nextDeliveries);
+      }
+    } catch (err) {
+      setDeliveries(snapshot);
+      addNotification({
+        type: "error",
+        title: "Update Failed",
+        message: err?.message || "Could not save delivery status to cloud.",
+      });
+      return;
+    }
     if (status === "delivered") {
       addNotification({ type: "success", title: "Delivery Completed", message: `${id} delivered successfully!` });
     } else if (status === "transit") {
@@ -4240,7 +4289,7 @@ function DeliveryModule({
     if (!cloudMode) saveWhatsappGroups(groups);
   };
 
-  const addWhatsappGroup = () => {
+  const addWhatsappGroup = async () => {
     const name = groupForm.name.trim();
     const link = normalizeWhatsAppGroupLink(groupForm.link);
     if (!name) {
@@ -4251,7 +4300,22 @@ function DeliveryModule({
       addNotification({ type: "error", title: "Invalid Link", message: "Paste a WhatsApp group invite link (chat.whatsapp.com/...)." });
       return;
     }
-    persistWhatsappGroups([...whatsappGroups, touchUpdatedAt({ id: genId("GRP"), name, link })]);
+    const snapshot = whatsappGroups;
+    const nextGroups = [...snapshot, touchUpdatedAt({ id: genId("GRP"), name, link })];
+    persistWhatsappGroups(nextGroups);
+    if (cloudMode && onPersistWhatsappGroups) {
+      try {
+        await onPersistWhatsappGroups(nextGroups);
+      } catch (err) {
+        persistWhatsappGroups(snapshot);
+        addNotification({
+          type: "error",
+          title: "Save Failed",
+          message: err?.message || "Could not save WhatsApp group to cloud.",
+        });
+        return;
+      }
+    }
     setGroupForm({ name: "", link: "" });
     addNotification({ type: "success", title: "Group Saved", message: `${name} added to WhatsApp groups.` });
   };

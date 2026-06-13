@@ -259,15 +259,6 @@ function buildProductFromArgs(a, id) {
   })
 }
 
-function addProductToInventory(ctx, product, { by, note = 'AI initial stock' } = {}) {
-  ctx.setProducts((prev) => [...prev, product])
-  if (product.stock > 0) {
-    ctx.setStockLog((prev) => [
-      buildStockLogEntry(product, 'restock', { qty: product.stock, note, by: by || 'Staff' }),
-      ...prev,
-    ])
-  }
-}
 
 function findProductInCatalog(catalog, name) {
   return findProductInList(catalog, name)
@@ -858,7 +849,15 @@ export async function executeAiAction(name, args, ctx) {
         if (isDuplicateCustomerName(ctx.customers, built.customer.name)) {
           return { success: false, error: `Customer "${built.customer.name}" already exists` }
         }
-        ctx.setCustomers((prev) => [...prev, built.customer])
+        const snapshot = ctx.customers
+        const nextCustomers = [...snapshot, built.customer]
+        ctx.setCustomers(nextCustomers)
+        try {
+          await ctx.onPersistCustomers?.(nextCustomers)
+        } catch (err) {
+          ctx.setCustomers(snapshot)
+          return { success: false, error: err?.message || 'Could not save customer to cloud.' }
+        }
         addNotification?.({ type: 'success', title: 'Customer Added (AI)', message: built.customer.name })
         onNavigate?.('customers')
         return { success: true, message: `Added customer ${built.customer.name}` }
@@ -877,7 +876,25 @@ export async function executeAiAction(name, args, ctx) {
           }
         }
         const product = buildProductFromArgs(a, Date.now())
-        addProductToInventory(ctx, product, { by: currentUser.name })
+        const productsSnapshot = ctx.products
+        const stockSnapshot = ctx.stockLog
+        const nextProducts = [...productsSnapshot, product]
+        let nextStockLog = stockSnapshot
+        if (product.stock > 0) {
+          nextStockLog = [
+            buildStockLogEntry(product, 'restock', { qty: product.stock, note: 'AI initial stock', by: currentUser.name }),
+            ...stockSnapshot,
+          ]
+        }
+        ctx.setProducts(nextProducts)
+        if (product.stock > 0) ctx.setStockLog(nextStockLog)
+        try {
+          await ctx.onSyncInventoryToCloud?.(nextProducts, nextStockLog)
+        } catch (err) {
+          ctx.setProducts(productsSnapshot)
+          ctx.setStockLog(stockSnapshot)
+          return { success: false, error: err?.message || 'Could not save product to cloud.' }
+        }
         addNotification?.({ type: 'success', title: 'Product Added (AI)', message: product.name })
         onNavigate?.('inventory')
         return {
@@ -926,9 +943,18 @@ export async function executeAiAction(name, args, ctx) {
         }
 
         if (newProducts.length) {
-          ctx.setProducts((prev) => [...prev, ...newProducts])
-          if (newLogEntries.length) {
-            ctx.setStockLog((prev) => [...newLogEntries, ...prev])
+          const productsSnapshot = ctx.products
+          const stockSnapshot = ctx.stockLog
+          const nextProducts = [...productsSnapshot, ...newProducts]
+          const nextStockLog = newLogEntries.length ? [...newLogEntries, ...stockSnapshot] : stockSnapshot
+          ctx.setProducts(nextProducts)
+          if (newLogEntries.length) ctx.setStockLog(nextStockLog)
+          try {
+            await ctx.onSyncInventoryToCloud?.(nextProducts, nextStockLog)
+          } catch (err) {
+            ctx.setProducts(productsSnapshot)
+            ctx.setStockLog(stockSnapshot)
+            return { success: false, error: err?.message || 'Could not save products to cloud.' }
           }
           addNotification?.({
             type: 'success',
@@ -968,11 +994,22 @@ export async function executeAiAction(name, args, ctx) {
         const qty = parseQuantity(a.quantity)
         if (!qty || qty <= 0) return { success: false, error: 'How much stock to add?' }
 
-        ctx.setProducts((prev) => adjustProductStockInList(prev, product.id, qty))
-        ctx.setStockLog((prev) => [
+        const productsSnapshot = ctx.products
+        const stockSnapshot = ctx.stockLog
+        const nextProducts = adjustProductStockInList(productsSnapshot, product.id, qty)
+        const nextStockLog = [
           buildStockLogEntry(product, 'restock', { qty, note: 'AI restock', by: currentUser.name }),
-          ...prev,
-        ])
+          ...stockSnapshot,
+        ]
+        ctx.setProducts(nextProducts)
+        ctx.setStockLog(nextStockLog)
+        try {
+          await ctx.onSyncInventoryToCloud?.(nextProducts, nextStockLog)
+        } catch (err) {
+          ctx.setProducts(productsSnapshot)
+          ctx.setStockLog(stockSnapshot)
+          return { success: false, error: err?.message || 'Could not restock product on cloud.' }
+        }
         addNotification?.({ type: 'info', title: 'Restocked (AI)', message: `${product.name} +${qty} ${product.unit}` })
         onNavigate?.('inventory')
         const matched = productMatchHint(a.productName, product)
@@ -995,7 +1032,15 @@ export async function executeAiAction(name, args, ctx) {
             addedBy: currentUser?.name || 'Staff',
           })
           if (!built.ok) return { success: false, error: built.message }
-          ctx.setExpenses?.((prev) => [...prev, built.expense])
+          const snapshot = ctx.expenses
+          const nextExpenses = [...snapshot, built.expense]
+          ctx.setExpenses(nextExpenses)
+          try {
+            await ctx.onPersistExpenses?.(nextExpenses)
+          } catch (err) {
+            ctx.setExpenses(snapshot)
+            return { success: false, error: err?.message || 'Could not save expense to cloud.' }
+          }
           onNavigate?.('expenses')
           addNotification?.({
             type: 'success',
@@ -1048,7 +1093,15 @@ export async function executeAiAction(name, args, ctx) {
         })
         if (!built.ok) return { success: false, error: built.message }
         const d = built.delivery
-        ctx.setDeliveries((prev) => [...prev, d])
+        const snapshot = ctx.deliveries
+        const nextDeliveries = [...snapshot, d]
+        ctx.setDeliveries(nextDeliveries)
+        try {
+          await ctx.onPersistDeliveries?.(nextDeliveries)
+        } catch (err) {
+          ctx.setDeliveries(snapshot)
+          return { success: false, error: err?.message || 'Could not schedule delivery on cloud.' }
+        }
         addNotification?.({ type: 'info', title: 'Delivery Scheduled (AI)', message: `${d.id} → ${d.customerName}` })
         onNavigate?.('deliveries')
         return { success: true, message: `Scheduled ${d.id} for ${d.customerName} at ${d.schedule}` }
@@ -1062,9 +1115,17 @@ export async function executeAiAction(name, args, ctx) {
         const status = resolveStatus(a.status)
         const built = buildDeliveryStatusPatch(status, del)
         if (!built.ok) return { success: false, error: built.message }
-        ctx.setDeliveries((prev) => prev.map((d) => (
+        const snapshot = ctx.deliveries
+        const nextDeliveries = snapshot.map((d) => (
           sameDeliveryId(d.id, del.id) ? touchUpdatedAt({ ...d, ...built.patch }) : d
-        )))
+        ))
+        ctx.setDeliveries(nextDeliveries)
+        try {
+          await ctx.onPersistDeliveries?.(nextDeliveries)
+        } catch (err) {
+          ctx.setDeliveries(snapshot)
+          return { success: false, error: err?.message || 'Could not update delivery on cloud.' }
+        }
         if (status === 'delivered') {
           addNotification?.({ type: 'success', title: 'Delivery Completed (AI)', message: `${del.id} delivered` })
         }
@@ -1087,7 +1148,15 @@ export async function executeAiAction(name, args, ctx) {
         })
         if (!built.ok) return { success: false, error: built.message }
         const ev = built.event
-        ctx.setEvents((prev) => [...prev, ev])
+        const snapshot = ctx.events
+        const nextEvents = [...snapshot, ev]
+        ctx.setEvents(nextEvents)
+        try {
+          await ctx.onPersistEvents?.(nextEvents)
+        } catch (err) {
+          ctx.setEvents(snapshot)
+          return { success: false, error: err?.message || 'Could not save event to cloud.' }
+        }
         addNotification?.({ type: 'info', title: 'Event Added (AI)', message: ev.title })
         onNavigate?.('calendar')
         return { success: true, message: `Added "${ev.title}" on ${ev.date}` }
@@ -1141,7 +1210,15 @@ export async function executeAiAction(name, args, ctx) {
         if (isDuplicateCustomerName(ctx.customers, built.customer.name, built.customer.id)) {
           return { success: false, error: `Another customer is already named "${built.customer.name}"` }
         }
-        ctx.setCustomers((prev) => prev.map((c) => (sameCustomerId(c.id, customer.id) ? built.customer : c)))
+        const snapshot = ctx.customers
+        const nextCustomers = snapshot.map((c) => (sameCustomerId(c.id, customer.id) ? built.customer : c))
+        ctx.setCustomers(nextCustomers)
+        try {
+          await ctx.onPersistCustomers?.(nextCustomers)
+        } catch (err) {
+          ctx.setCustomers(snapshot)
+          return { success: false, error: err?.message || 'Could not update customer on cloud.' }
+        }
         addNotification?.({ type: 'success', title: 'Customer Updated (AI)', message: built.customer.name })
         onNavigate?.('customers')
         return { success: true, message: `Updated ${built.customer.name}` }
@@ -1299,9 +1376,17 @@ export async function executeAiAction(name, args, ctx) {
           deliveries: ctx.deliveries,
         })
         if (!built.ok) return { success: false, error: built.message }
-        ctx.setDeliveries((prev) => prev.map((d) => (
+        const snapshot = ctx.deliveries
+        const nextDeliveries = snapshot.map((d) => (
           sameDeliveryId(d.id, del.id) ? built.delivery : d
-        )))
+        ))
+        ctx.setDeliveries(nextDeliveries)
+        try {
+          await ctx.onPersistDeliveries?.(nextDeliveries)
+        } catch (err) {
+          ctx.setDeliveries(snapshot)
+          return { success: false, error: err?.message || 'Could not update delivery on cloud.' }
+        }
         addNotification?.({ type: 'success', title: 'Delivery Updated (AI)', message: del.id })
         onNavigate?.('deliveries')
         return { success: true, message: `Updated delivery ${del.id}` }
@@ -1341,9 +1426,17 @@ export async function executeAiAction(name, args, ctx) {
           note: a.note ?? ev.note,
         }, ev)
         if (!built.ok) return { success: false, error: built.message }
-        ctx.setEvents((prev) => prev.map((e) => (
+        const snapshot = ctx.events
+        const nextEvents = snapshot.map((e) => (
           sameEventId(e.id, ev.id) ? built.event : e
-        )))
+        ))
+        ctx.setEvents(nextEvents)
+        try {
+          await ctx.onPersistEvents?.(nextEvents)
+        } catch (err) {
+          ctx.setEvents(snapshot)
+          return { success: false, error: err?.message || 'Could not update event on cloud.' }
+        }
         addNotification?.({ type: 'success', title: 'Event Updated (AI)', message: built.event.title })
         onNavigate?.('calendar')
         return { success: true, message: `Updated event "${built.event.title}"` }
