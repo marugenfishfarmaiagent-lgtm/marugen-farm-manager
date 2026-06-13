@@ -7578,7 +7578,7 @@ export default function App() {
     syncStateRef.current = { ...syncStateRef.current, invoices: nextInvoices };
     setInvoices(applyInvoicePins(nextInvoices));
 
-    if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) {
+    const revertPaidOptimistic = () => {
       unpinInvoice(invId);
       const revertedInvoices = sortInvoices(
         syncStateRef.current.invoices.map((i) => (
@@ -7587,28 +7587,18 @@ export default function App() {
       );
       syncStateRef.current = { ...syncStateRef.current, invoices: revertedInvoices };
       setInvoices(applyInvoicePins(revertedInvoices));
+    };
+
+    if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) {
+      revertPaidOptimistic();
       throw new Error("Cloud sync is not ready.");
     }
     if (!hasPermission(currentUser, "invoices")) {
-      unpinInvoice(invId);
-      const revertedInvoices = sortInvoices(
-        syncStateRef.current.invoices.map((i) => (
-          String(i.id) === invId ? touchUpdatedAt(db.sanitizeInvoiceForSync(inv)) : i
-        )),
-      );
-      syncStateRef.current = { ...syncStateRef.current, invoices: revertedInvoices };
-      setInvoices(applyInvoicePins(revertedInvoices));
+      revertPaidOptimistic();
       throw new Error("Permission denied (invoices).");
     }
     if (!(await ensureCloudSyncReady())) {
-      unpinInvoice(invId);
-      const revertedInvoices = sortInvoices(
-        syncStateRef.current.invoices.map((i) => (
-          String(i.id) === invId ? touchUpdatedAt(db.sanitizeInvoiceForSync(inv)) : i
-        )),
-      );
-      syncStateRef.current = { ...syncStateRef.current, invoices: revertedInvoices };
-      setInvoices(applyInvoicePins(revertedInvoices));
+      revertPaidOptimistic();
       throw new Error("Session needs refresh. Log out and log in again.");
     }
 
@@ -7638,7 +7628,7 @@ export default function App() {
       resetSyncHealth();
       touchLastSync();
     } catch (err) {
-      unpinInvoice(invId);
+      revertPaidOptimistic();
       handleSyncFailure(err);
       throw err;
     } finally {
@@ -8284,14 +8274,21 @@ export default function App() {
       if (isSupabaseConfigured) {
         await persistCustomerKoiList(nextList);
       }
-      setCustomerKoiList(nextList);
       await flushCustomerKoiSync(nextList);
+      setCustomerKoiList(nextList);
       addNotification({
         type: "info",
         title: "Customer Record Created",
         message: `Koi kept at ${keepPondName} for ${customer.name}. Track in Customer Koi.`,
       });
     } catch (err) {
+      if (isSupabaseConfigured) {
+        try {
+          await persistCustomerKoiList(snapshotCustomerKoi);
+        } catch {
+          /* best-effort local rollback */
+        }
+      }
       setCustomerKoiList(snapshotCustomerKoi);
       addNotification({
         type: "error",
@@ -8333,11 +8330,6 @@ export default function App() {
         sameKoiId(k.id, koi.id) ? buildKeepAtFarmReversePatch(k, reason) : k
       ));
     }
-    if (nextKoiList !== koiFishList) {
-      setKoiFishList(nextKoiList);
-    }
-
-    setCustomerKoiList(nextCustomerKoi);
 
     const linkedInvoices = findLinkedKoiInvoices(invoices, koi.id).filter(
       (inv) => !["cancelled", "paid"].includes(getInvoiceStatus(inv)),
@@ -8350,6 +8342,10 @@ export default function App() {
         koiSynced = true;
       }
       await flushCustomerKoiSync(nextCustomerKoi);
+      if (nextKoiList !== koiFishList) {
+        setKoiFishList(nextKoiList);
+      }
+      setCustomerKoiList(nextCustomerKoi);
     } catch (err) {
       linkedCustomerKoi.forEach((r) => unmarkDeleted("customer_koi", r.id));
       setCustomerKoiList(snapshotCustomerKoi);

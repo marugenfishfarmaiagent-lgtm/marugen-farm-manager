@@ -324,12 +324,17 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       })
       const nextList = [...records, rec]
       await persistCustomerKoiList(nextList)
-      setRecords(nextList)
       await onRecordsSaved?.(nextList)
+      setRecords(nextList)
       addNotification({ type: 'success', title: 'Record Added', message: `${displayFishName(rec)} added for ${customer.name}` })
       setShowAdd(false)
       setForm(emptyRecord())
     } catch (err) {
+      try {
+        await persistCustomerKoiList(snapshot)
+      } catch {
+        /* best-effort local rollback */
+      }
       setRecords(snapshot)
       notifyImageError(err?.message || 'Could not save record with photo.')
     } finally {
@@ -394,11 +399,16 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       updated = touchUpdatedAt({ ...updated, photo })
       const nextList = records.map((r) => (sameRecordId(r.id, editRec.id) ? updated : r))
       await persistCustomerKoiList(nextList)
-      setRecords(nextList)
       await onRecordsSaved?.(nextList)
+      setRecords(nextList)
       addNotification({ type: 'success', title: 'Updated', message: `${displayFishName(updated)} — ${formatCustomerKoiStatus(updated.status)}` })
       setEditRec(null)
     } catch (err) {
+      try {
+        await persistCustomerKoiList(snapshot)
+      } catch {
+        /* best-effort local rollback */
+      }
       setRecords(snapshot)
       notifyImageError(err?.message || 'Could not save record photo.')
     } finally {
@@ -431,11 +441,16 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
     try {
       setSaving(true)
       await persistCustomerKoiList(nextList)
-      setRecords(nextList)
       await onRecordsSaved?.(nextList)
+      setRecords(nextList)
       addNotification({ type: 'success', title: 'Marked Taken Away', message: `${displayFishName(collectRec)} — customer collected on ${collectDate}` })
       setCollectRec(null)
     } catch (err) {
+      try {
+        await persistCustomerKoiList(snapshot)
+      } catch {
+        /* best-effort local rollback */
+      }
       setRecords(snapshot)
       addNotification({ type: 'error', title: 'Save Failed', message: err?.message || 'Could not save taken away status.' })
     } finally {
@@ -465,11 +480,16 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       const patch = buildCustomerKoiDeathPatch(deathRec, { ...deathForm, deathPhoto })
       const nextList = records.map((r) => (sameRecordId(r.id, deathRec.id) ? patch : r))
       await persistCustomerKoiList(nextList)
-      setRecords(nextList)
       await onRecordsSaved?.(nextList)
+      setRecords(nextList)
       addNotification({ type: 'warning', title: 'Death Recorded', message: `${displayFishName(deathRec)} (${deathRec.customerName}) recorded deceased` })
       setDeathRec(null)
     } catch (err) {
+      try {
+        await persistCustomerKoiList(snapshot)
+      } catch {
+        /* best-effort local rollback */
+      }
       setRecords(snapshot)
       notifyImageError(err?.message || 'Could not save death photo.')
     } finally {
