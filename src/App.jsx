@@ -1570,16 +1570,14 @@ function InvoiceModule({
     customers,
   );
 
-  const invoiceForPdfExport = (inv) => {
-    if (!inv) return inv;
-    const editingSameInvoice = activeViewInv && String(activeViewInv.id) === String(inv.id);
-    const canEditFees = editingSameInvoice
-      && ["pending", "overdue"].includes(getInvoiceStatus(inv))
-      && canEditRecords(currentUser);
-    if (!canEditFees) return invoiceForDisplay(inv);
+  const invoiceWithDraftShipping = (inv) => {
+    if (!inv || !activeViewInv || String(activeViewInv.id) !== String(inv.id)) return inv;
+    if (!["pending", "overdue"].includes(getInvoiceStatus(inv)) || !canEditRecords(currentUser)) return inv;
     const draftShipping = shippingDraft === "" ? 0 : (+shippingDraft || 0);
-    return invoiceForDisplay({ ...inv, shipping: draftShipping });
+    return { ...activeViewInv, shipping: draftShipping };
   };
+
+  const invoiceForPdfExport = (inv) => invoiceForDisplay(invoiceWithDraftShipping(inv));
 
   const requestInvoiceBookedChange = (id) => {
     if (!canMarkAccounting(currentUser)) {
@@ -1677,7 +1675,7 @@ function InvoiceModule({
   const resolveInvForPayment = (inv) => {
     if (!inv || !activeViewInv || String(activeViewInv.id) !== String(inv.id)) return inv;
     if (!["pending", "overdue"].includes(getInvoiceStatus(inv))) return inv;
-    return commitInvoiceShipping(inv, shippingDraft, { silent: true });
+    return commitInvoiceShipping(activeViewInv, shippingDraft, { silent: true });
   };
 
   const stripBlankItems = (items) => items.filter(
@@ -2098,7 +2096,7 @@ function InvoiceModule({
             />
           </Card>
         ) : invoicePage.paginatedItems.map(inv => {
-          const invAmounts = calcInvoiceAmounts(inv);
+          const invAmounts = calcInvoiceAmounts(invoiceWithDraftShipping(inv));
           const status = getInvoiceStatus(inv);
           const isMarking = markingPaidId === inv.id;
           return (
@@ -2512,10 +2510,8 @@ function InvoiceModule({
         {activeViewInv && (() => {
           const canEditDiscount = ["pending", "overdue"].includes(getInvoiceStatus(activeViewInv));
           const canEditFees = canEditDiscount && canEditRecords(currentUser);
-          const draftShipping = shippingDraft === "" ? 0 : (+shippingDraft || 0);
-          const viewAmounts = calcInvoiceAmounts(
-            canEditFees ? { ...activeViewInv, shipping: draftShipping } : activeViewInv,
-          );
+          const draftInv = invoiceWithDraftShipping(activeViewInv);
+          const viewAmounts = calcInvoiceAmounts(canEditFees ? draftInv : activeViewInv);
           const docInv = invoiceForPdfExport(activeViewInv);
           const isMarkingView = String(markingPaidId) === String(activeViewInv.id);
           const isCancellingView = String(cancellingId) === String(activeViewInv.id);
@@ -2646,7 +2642,7 @@ function InvoiceModule({
               </Card>
             )}
             <div className="no-print rounded-xl border border-slate-600 bg-[#d4d4d4] p-2 sm:p-6 min-w-0 max-w-full overflow-x-hidden overflow-y-auto max-h-[min(65vh,920px)] relative z-0 isolate">
-              <InvoicePreviewFrame resetKey={`${activeViewInv?.id || ''}-${activeViewInv?.status || ''}-${activeViewInv?.updatedAt || ''}-${draftShipping}`}>
+              <InvoicePreviewFrame resetKey={`${activeViewInv?.id || ''}-${activeViewInv?.status || ''}-${activeViewInv?.updatedAt || ''}-${shippingDraft}`}>
                 <InvoiceDocument invoice={docInv} preview className="shadow-2xl" />
               </InvoicePreviewFrame>
             </div>

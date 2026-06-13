@@ -133,7 +133,7 @@ fi
 if repo_has 'Marugen Fish Farm' "$ROOT/src/data/constants.js" \
   && repo_has '53280735M' "$ROOT/src/data/constants.js" \
   && repo_has 'shipping' "$ROOT/src/lib/database.js" \
-  && repo_has 'invoiceForPdfExport' "$ROOT/src/App.jsx"; then
+  && repo_has 'invoiceWithDraftShipping' "$ROOT/src/App.jsx"; then
   pass "#5b Invoice branding, UEN, shipping + PDF draft export"
 else
   fail "#5b Invoice branding/UEN/shipping wiring incomplete"
