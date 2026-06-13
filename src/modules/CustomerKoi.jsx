@@ -303,6 +303,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
     if (saving) return
     const sizeCm = normalizeCustomerKoiSizeField(form.size)
     const id = genId('CKOI')
+    const snapshot = records
     try {
       setSaving(true)
       const photo = await uploadInlinePhotoIfNeeded(
@@ -324,11 +325,12 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       const nextList = [...records, rec]
       await persistCustomerKoiList(nextList)
       setRecords(nextList)
-      onRecordsSaved?.(nextList)
+      await onRecordsSaved?.(nextList)
       addNotification({ type: 'success', title: 'Record Added', message: `${displayFishName(rec)} added for ${customer.name}` })
       setShowAdd(false)
       setForm(emptyRecord())
     } catch (err) {
+      setRecords(snapshot)
       notifyImageError(err?.message || 'Could not save record with photo.')
     } finally {
       setSaving(false)
@@ -382,6 +384,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       updated.collectedDate = null
     }
     if (saving) return
+    const snapshot = records
     try {
       setSaving(true)
       const photo = await uploadInlinePhotoIfNeeded(
@@ -392,10 +395,11 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       const nextList = records.map((r) => (sameRecordId(r.id, editRec.id) ? updated : r))
       await persistCustomerKoiList(nextList)
       setRecords(nextList)
-      onRecordsSaved?.(nextList)
+      await onRecordsSaved?.(nextList)
       addNotification({ type: 'success', title: 'Updated', message: `${displayFishName(updated)} — ${formatCustomerKoiStatus(updated.status)}` })
       setEditRec(null)
     } catch (err) {
+      setRecords(snapshot)
       notifyImageError(err?.message || 'Could not save record photo.')
     } finally {
       setSaving(false)
@@ -423,14 +427,16 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
         ? buildCollectedCustomerKoiPatch(r, collectDate)
         : r
     ))
+    const snapshot = records
     try {
       setSaving(true)
       await persistCustomerKoiList(nextList)
       setRecords(nextList)
-      onRecordsSaved?.(nextList)
+      await onRecordsSaved?.(nextList)
       addNotification({ type: 'success', title: 'Marked Taken Away', message: `${displayFishName(collectRec)} — customer collected on ${collectDate}` })
       setCollectRec(null)
     } catch (err) {
+      setRecords(snapshot)
       addNotification({ type: 'error', title: 'Save Failed', message: err?.message || 'Could not save taken away status.' })
     } finally {
       setSaving(false)
@@ -449,6 +455,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       return
     }
     if (saving) return
+    const snapshot = records
     try {
       setSaving(true)
       const deathPhoto = await uploadInlinePhotoIfNeeded(
@@ -459,10 +466,11 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       const nextList = records.map((r) => (sameRecordId(r.id, deathRec.id) ? patch : r))
       await persistCustomerKoiList(nextList)
       setRecords(nextList)
-      onRecordsSaved?.(nextList)
+      await onRecordsSaved?.(nextList)
       addNotification({ type: 'warning', title: 'Death Recorded', message: `${displayFishName(deathRec)} (${deathRec.customerName}) recorded deceased` })
       setDeathRec(null)
     } catch (err) {
+      setRecords(snapshot)
       notifyImageError(err?.message || 'Could not save death photo.')
     } finally {
       setSaving(false)

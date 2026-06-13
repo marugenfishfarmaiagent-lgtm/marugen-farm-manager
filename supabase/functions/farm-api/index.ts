@@ -1116,20 +1116,26 @@ Deno.serve(async (req) => {
       } else if (entity === "koi_fish") {
         const incoming = (data || []) as Record<string, unknown>[];
         const KOI_STATUSES = new Set(["available", "sold", "sick", "deceased"]);
+        const koiDeletedIds = (syncOpts.deletedIds || [])
+          .map((id) => String(id ?? "").trim())
+          .filter(Boolean);
+        if (koiDeletedIds.length) {
+          await deleteKoiFishImages(db, koiDeletedIds);
+          const { error: delErr } = await db.from("koi_fish").delete().in("id", koiDeletedIds);
+          if (delErr) throw delErr;
+        }
+        const upsertIncoming: Record<string, unknown>[] = [];
         for (const k of incoming) {
-          if (!String(k.id ?? "").trim()) return J({ error: "Koi id is required" }, 400);
-          if (!String(k.variety ?? "").trim() && !String(k.name ?? "").trim()) {
-            return J({ error: "Koi variety or name is required" }, 400);
-          }
+          if (!String(k.id ?? "").trim()) continue;
+          if (!String(k.variety ?? "").trim() && !String(k.name ?? "").trim()) continue;
           const price = nullableNumeric(k.price, -1);
           if (price < 0) return J({ error: "Koi price cannot be negative" }, 400);
           const status = String(k.status ?? "available").toLowerCase();
-          if (!KOI_STATUSES.has(status)) return J({ error: `Invalid koi status: ${status}` }, 400);
-          if (status === "sold" && k.soldTo == null && k.sold_to == null) {
-            return J({ error: "Sold koi must include soldTo (customer id)" }, 400);
-          }
+          k.status = KOI_STATUSES.has(status) ? status : "available";
+          if (k.status === "sold" && k.soldTo == null && k.sold_to == null) continue;
+          upsertIncoming.push(k);
         }
-        const rows = await Promise.all(incoming.map(async (k) => withTs({
+        const rows = await Promise.all(upsertIncoming.map(async (k) => withTs({
           id: k.id,
           photo: await resolveKoiFishPhoto(db, k.id, k.photo),
           name: k.name ?? "",
@@ -1152,6 +1158,7 @@ Deno.serve(async (req) => {
         }, k)));
         await upsertSync("koi_fish", rows, "id", {
           ...syncOpts,
+          deletedIds: [],
           beforeDelete: async (ids) => { await deleteKoiFishImages(db, ids); },
         });
       } else if (entity === "customer_koi") {
@@ -1232,9 +1239,16 @@ Deno.serve(async (req) => {
         );
         if (error) throw error;
       } else if (entity === "whatsapp_groups") {
+        const groupDeletedIds = (syncOpts.deletedIds || [])
+          .map((id) => String(id ?? "").trim())
+          .filter(Boolean);
+        if (groupDeletedIds.length) {
+          const { error: delErr } = await db.from("whatsapp_groups").delete().in("id", groupDeletedIds);
+          if (delErr) throw delErr;
+        }
         await upsertSync("whatsapp_groups", (data || []).map((g: Record<string, unknown>) => withTs({
           id: g.id, name: g.name ?? "", link: g.link ?? "",
-        }, g)), "id", syncOpts);
+        }, g)), "id", { ...syncOpts, deletedIds: [] });
       } else {
         return J({ error: "Unknown entity" }, 400);
       }
