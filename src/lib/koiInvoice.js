@@ -96,6 +96,31 @@ export async function applyInvoiceKoiSales({
   return { ok: true }
 }
 
+export function previewApplyInvoiceKoiSales({ items, koiList, customerId, customers, soldDate }) {
+  const koiItems = (items || []).filter((it) => it.koiId && !it.koiAlreadySold)
+  if (!koiItems.length) {
+    return { ok: true, hasKoiLines: false, nextKoiList: koiList }
+  }
+
+  const check = validateInvoiceKoiSales({ items: koiItems, koiList, customerId, customers })
+  if (!check.ok) return { ...check, hasKoiLines: true, nextKoiList: koiList }
+
+  const soldIds = new Set(koiItems.map((it) => String(it.koiId)))
+  const nextKoiList = koiList.map((k) => {
+    const it = koiItems.find((i) => sameKoiId(i.koiId, k.id))
+    if (!it || !soldIds.has(String(k.id))) return k
+    return buildSoldKoiPatch(k, {
+      customerId,
+      soldPrice: Number(it.price) || k.price,
+      soldDate,
+      disposition: it.koiDisposition || 'taken',
+      keepPondName: it.keepPondName,
+    })
+  })
+
+  return { ok: true, hasKoiLines: true, nextKoiList }
+}
+
 export function previewRestoreInvoiceKoiSales(items, koiList, customerKoiList) {
   const koiItems = (items || []).filter((it) => it.koiId && !it.koiAlreadySold)
   if (!koiItems.length) {

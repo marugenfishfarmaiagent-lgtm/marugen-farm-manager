@@ -109,7 +109,7 @@ function KoiPhoto({ src, alt, className = '', recordId, field = 'photo', onRefre
 
 export default function KoiFish({
   koiList, setKoiList, customers, invoices = [], customerKoiList = [],
-  onKoiSold, onKoiRefund, onCreateInvoiceFromSale, addNotification,
+  onKoiSold, onKoiRefund, onCreateInvoiceFromSale, onSyncKoiFish, addNotification,
   registeredPondNames = [], canEdit = false, canRefund = false,
 }) {
   const refreshKoiImage = useCallback(async ({ entity, id, field }) => {
@@ -433,6 +433,7 @@ export default function KoiFish({
       setSellKoi(null)
       if (isSupabaseConfigured) {
         await persistKoiFishList(nextList)
+        await onSyncKoiFish?.(nextList)
       }
     } catch (err) {
       addNotification({

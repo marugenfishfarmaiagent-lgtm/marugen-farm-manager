@@ -1202,7 +1202,9 @@ export function executeAiAction(name, args, ctx) {
         const ev = findCalendarEvent(ctx, a)
         if (!ev) return { success: false, error: 'Event not found' }
         markDeleted('events', ev.id)
-        ctx.setEvents((prev) => prev.filter((e) => !sameEventId(e.id, ev.id)))
+        const nextEvents = ctx.events.filter((e) => !sameEventId(e.id, ev.id))
+        ctx.setEvents(nextEvents)
+        void ctx.onPersistEvents?.(nextEvents)?.catch?.(() => {})
         addNotification?.({ type: 'info', title: 'Event Deleted (AI)', message: ev.title })
         onNavigate?.('calendar')
         return { success: true, message: `Deleted event "${ev.title}" on ${ev.date}` }
