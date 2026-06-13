@@ -306,8 +306,8 @@ function Modal({ open, onClose, title, children, size = "md", priority = false, 
   const panelHeightClass = isCompact
     ? "h-auto max-h-[92dvh]"
     : "h-[92dvh] sm:h-auto max-h-[92dvh] sm:max-h-[90vh]";
-  const zClass = priority ? "z-[60]" : "z-50";
-  const guardZClass = priority ? "z-[70]" : "z-[55]";
+  const zClass = priority ? "z-[90]" : "z-[80]";
+  const guardZClass = priority ? "z-[95]" : "z-[85]";
 
   const handleBackdropMouseDown = (e) => {
     backdropDownRef.current = e.target === e.currentTarget;
@@ -343,7 +343,7 @@ function Modal({ open, onClose, title, children, size = "md", priority = false, 
             </div>
             <div className={`overflow-y-auto overscroll-contain min-w-0 p-4 sm:p-5 ${footer ? "flex-none" : "flex-1 min-h-0"}`}>{children}</div>
             {footer && (
-              <div className="sticky bottom-0 z-10 shrink-0 border-t border-slate-700 bg-slate-800/95 backdrop-blur-sm p-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))]">
+              <div className="relative z-20 sticky bottom-0 shrink-0 border-t border-slate-700 bg-slate-800/95 backdrop-blur-sm p-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))]">
                 {footer}
               </div>
             )}
@@ -410,8 +410,12 @@ function Btn({ children, onClick, variant = "primary", size = "md", className = 
     e.stopPropagation();
     onClick(e);
   };
+  const handlePointerDown = (e) => {
+    if (disabled) return;
+    e.stopPropagation();
+  };
   return (
-    <button type={type} onClick={handleClick} disabled={disabled}
+    <button type={type} onClick={handleClick} onPointerDown={handlePointerDown} disabled={disabled}
       className={`rounded-lg transition-all flex items-center gap-1.5 touch-manipulation ${variants[variant]} ${sizes[size]} ${disabled ? "opacity-50 cursor-not-allowed" : ""} ${className}`}>
       {children}
     </button>
@@ -1558,6 +1562,17 @@ function InvoiceModule({
 
   const closeViewInvoice = () => {
     if (cancelConfirm || blockViewDismiss) return;
+    if (
+      activeViewInv
+      && canEditRecords(currentUser)
+      && ["pending", "overdue"].includes(getInvoiceStatus(activeViewInv))
+    ) {
+      const draftShipping = shippingDraft === "" ? 0 : (+shippingDraft || 0);
+      const prevShipping = Number(activeViewInv.shipping) || 0;
+      if (draftShipping !== prevShipping) {
+        commitInvoiceShipping(activeViewInv, shippingDraft, { silent: true });
+      }
+    }
     setViewInv(null);
     setShowWhatsappInput(false);
     setShippingDraft("");
@@ -1606,8 +1621,10 @@ function InvoiceModule({
     }
     const apply = (i) => {
       if (i.id !== id) return i;
-      let merged = touchUpdatedAt(db.sanitizeInvoiceForSync({ ...i, ...normalized }));
-      if ("discountType" in normalized || "discountValue" in normalized || "shipping" in normalized) {
+      const needsAmountRecalc = "discountType" in normalized || "discountValue" in normalized || "shipping" in normalized;
+      const base = needsAmountRecalc ? invoiceWithDraftShipping(i) : i;
+      let merged = touchUpdatedAt(db.sanitizeInvoiceForSync({ ...base, ...normalized }));
+      if (needsAmountRecalc) {
         merged = { ...merged, total: calcInvoiceAmounts(merged).total };
       }
       return merged;
@@ -1630,7 +1647,7 @@ function InvoiceModule({
       return false;
     }
     const discountValue = discountType === "none" ? 0 : +discountValueRaw || 0;
-    const amounts = calcInvoiceAmounts({ ...inv, discountType, discountValue });
+    const amounts = calcInvoiceAmounts({ ...invoiceWithDraftShipping(inv), discountType, discountValue });
     patchInvoice(inv.id, { discountType, discountValue, total: amounts.total });
     addNotification({ type: "success", title: "Discount Updated", message: `Total is now ${formatSGD(amounts.total)}` });
     return true;
@@ -3026,6 +3043,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
   const [showOlderExpenses, setShowOlderExpenses] = useState(false);
   const [bookedConfirm, setBookedConfirm] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [deletingExpense, setDeletingExpense] = useState(false);
   const [uploadPreview, setUploadPreview] = useState(null);
   const [uploadName, setUploadName] = useState("");
   const [uploadNote, setUploadNote] = useState("");
@@ -3187,22 +3205,31 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
       notifyPermissionDenied(addNotification, "delete");
       return;
     }
+    setViewExpenseId((prev) => (sameExpenseId(prev, expense.id) ? null : prev));
     setDeleteConfirm(expense);
   };
 
   const confirmDeleteExpense = async () => {
-    if (!deleteConfirm) return;
+    if (!deleteConfirm || deletingExpense) return;
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
       return;
     }
     const expense = deleteConfirm;
-    const saved = await commitExpenseList((prev) => prev.filter((e) => !sameExpenseId(e.id, expense.id)));
-    if (!saved) return;
-    markDeleted("expenses", expense.id);
-    setViewExpenseId((prev) => (sameExpenseId(prev, expense.id) ? null : prev));
-    addNotification({ type: "info", title: "Receipt Deleted", message: "Expense receipt removed." });
-    setDeleteConfirm(null);
+    setDeletingExpense(true);
+    try {
+      const saved = await commitExpenseList((prev) => prev.filter((e) => !sameExpenseId(e.id, expense.id)));
+      if (!saved) {
+        addNotification({ type: "error", title: "Delete Failed", message: "Could not remove receipt. Try again." });
+        return;
+      }
+      markDeleted("expenses", expense.id);
+      setViewExpenseId((prev) => (sameExpenseId(prev, expense.id) ? null : prev));
+      addNotification({ type: "info", title: "Receipt Deleted", message: "Expense receipt removed." });
+      setDeleteConfirm(null);
+    } finally {
+      setDeletingExpense(false);
+    }
   };
 
   const updateExpenseDate = async (id, date) => {
@@ -3391,14 +3418,16 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
                       {e.amount > 0 && <span className="text-red-400 mt-1">{formatSGD(e.amount)}</span>}
                     </div>
                   )}
-                  <div className="absolute top-2 right-2 flex items-center gap-1">
+                  <div className="absolute top-2 right-2 z-10 flex items-center gap-1">
                     <BookedBadge booked={e.booked} bookedBy={e.bookedBy} />
                     {canDelete && (
                       <button
                         type="button"
+                        onPointerDown={(ev) => ev.stopPropagation()}
                         onClick={(ev) => { ev.stopPropagation(); requestDeleteExpense(e); }}
-                        className="p-1.5 rounded-lg bg-slate-900/80 text-red-400 hover:text-red-300 hover:bg-slate-800 touch-manipulation"
+                        className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg bg-slate-900/80 text-red-400 hover:text-red-300 hover:bg-slate-800 touch-manipulation"
                         title="Delete receipt"
+                        aria-label="Delete receipt"
                       >
                         <Trash2 size={14} />
                       </button>
@@ -3609,12 +3638,16 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
 
       <Modal
         open={!!deleteConfirm}
-        onClose={() => setDeleteConfirm(null)}
+        onClose={() => { if (!deletingExpense) setDeleteConfirm(null); }}
         title="Delete Receipt"
         size="sm"
+        priority
+        backdropClose={!deletingExpense}
         footer={deleteConfirm && (
-          <ConfirmModalFooter onCancel={() => setDeleteConfirm(null)}>
-            <Btn variant="danger" onClick={confirmDeleteExpense} className="w-full sm:w-auto justify-center"><Trash2 size={14} />Delete</Btn>
+          <ConfirmModalFooter onCancel={() => setDeleteConfirm(null)} cancelDisabled={deletingExpense}>
+            <Btn variant="danger" onClick={confirmDeleteExpense} disabled={deletingExpense} className="w-full sm:w-auto justify-center">
+              {deletingExpense ? <><Loader2 size={14} className="animate-spin" />Deleting...</> : <><Trash2 size={14} />Delete</>}
+            </Btn>
           </ConfirmModalFooter>
         )}
       >
