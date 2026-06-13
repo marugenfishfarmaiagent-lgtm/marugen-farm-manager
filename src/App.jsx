@@ -2173,7 +2173,7 @@ function InvoiceModule({
               </td></tr>
             ) :
               invoicePage.paginatedItems.map(inv => {
-                const invAmounts = calcInvoiceAmounts(inv);
+                const invAmounts = calcInvoiceAmounts(invoiceWithDraftShipping(inv));
                 return (
                 <tr key={inv.id} data-invoice-id={inv.id} className={`text-slate-300 hover:bg-slate-700/20 ${highlightInvId === inv.id ? "bg-cyan-500/10 ring-1 ring-inset ring-cyan-500/40" : ""}`}>
                   <td className="p-3 font-mono text-cyan-400 font-bold text-xs">{inv.id}</td>
@@ -4319,7 +4319,7 @@ function DeliveryModule({
               { value: "", label: "-- No invoice --" },
               ...linkableInvoices.map((inv) => ({
                 value: inv.id,
-                label: `${inv.id} — ${inv.customerName} (${formatSGD(inv.total)})`,
+                label: `${inv.id} — ${inv.customerName} (${formatSGD(calcInvoiceAmounts(inv).total)})`,
               })),
             ]}
           />
