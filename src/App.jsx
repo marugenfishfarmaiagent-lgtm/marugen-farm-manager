@@ -1498,6 +1498,7 @@ function InvoiceModule({
   const [whatsappDraft, setWhatsappDraft] = useState("");
   const [shippingDraft, setShippingDraft] = useState("");
   const [form, setForm] = useState(() => (openDraft ? buildFormFromDraft(openDraft) : emptyForm()));
+  const openedFromNavRef = useRef(null);
 
   const resetShippingDraft = useCallback((inv) => {
     const saved = Number(inv?.shipping) || 0;
@@ -1520,17 +1521,25 @@ function InvoiceModule({
   }, [openDraft, onDraftApplied, buildFormFromDraft]);
 
   useEffect(() => {
-    if (!openViewId) return;
+    if (!openViewId) {
+      openedFromNavRef.current = null;
+      return;
+    }
+    if (openedFromNavRef.current === openViewId) return;
     const inv = invoices.find((i) => String(i.id) === String(openViewId));
+    if (!inv) return;
+
+    let cancelled = false;
     queueMicrotask(() => {
-      if (inv) {
-        openViewInvoiceFromNav(inv);
-        setHighlightInvId(inv.id);
-        setShowNew(false);
-        setFormError("");
-      }
+      if (cancelled || openedFromNavRef.current === openViewId) return;
+      openedFromNavRef.current = openViewId;
+      openViewInvoiceFromNav(inv);
+      setHighlightInvId(inv.id);
+      setShowNew(false);
+      setFormError("");
       onViewOpened?.();
     });
+    return () => { cancelled = true; };
   }, [openViewId, invoices, onViewOpened, openViewInvoiceFromNav]);
 
   const filtered = useMemo(() => sortInvoices(invoices.filter((i) => {
@@ -1562,13 +1571,6 @@ function InvoiceModule({
     window.setTimeout(() => setBlockViewDismiss(false), 400);
   };
 
-  const closeViewInvoice = () => {
-    if (cancelConfirm || blockViewDismiss) return;
-    persistShippingDraftIfDirty(activeViewInv);
-    setViewInv(null);
-    setShowWhatsappInput(false);
-    setShippingDraft("");
-  };
   const canCancelInvoice = (inv) => ["pending", "overdue"].includes(getInvoiceStatus(inv));
   const canMarkPaid = (inv) => ["pending", "overdue"].includes(getInvoiceStatus(inv));
 
@@ -1663,13 +1665,14 @@ function InvoiceModule({
       setShippingDraft(shipping > 0 ? String(shipping) : "");
       return inv;
     }
-    const amounts = calcInvoiceAmounts({ ...inv, shipping });
+    const latest = invoices.find((i) => String(i.id) === String(inv.id)) || inv;
+    const amounts = calcInvoiceAmounts({ ...latest, shipping });
     patchInvoice(inv.id, { shipping, total: amounts.total });
     setShippingDraft(shipping > 0 ? String(shipping) : "");
     if (!silent) {
       addNotification({ type: "success", title: "Shipping Updated", message: `Total is now ${formatSGD(amounts.total)}` });
     }
-    return { ...inv, shipping, total: amounts.total };
+    return { ...latest, shipping, total: amounts.total };
   };
 
   const applyInvoiceShipping = (inv, shippingRaw) => {
@@ -1704,6 +1707,14 @@ function InvoiceModule({
       resetShippingDraft(inv);
     }
     setViewInv(inv);
+  };
+
+  const closeViewInvoice = () => {
+    if (cancelConfirm || blockViewDismiss) return;
+    persistShippingDraftIfDirty(activeViewInv);
+    setViewInv(null);
+    setShowWhatsappInput(false);
+    setShippingDraft("");
   };
 
   const shippingDraftRef = useRef(shippingDraft);
