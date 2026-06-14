@@ -1550,7 +1550,7 @@ function InvoiceModule({
   koiFishList, setKoiFishList, onKoiSold, setCustomerKoiList, customerKoiList = [],
   addNotification, currentUser, openDraft, onDraftApplied, openViewId, onViewOpened,
   onMarkInvoicePaid, onCancelInvoiceCloud, onCreateInvoiceCloud, onInventorySideEffect,
-  onSyncKoiFishToCloud, onSyncInventoryToCloud, onSyncCustomerKoiToCloud,
+  onSyncKoiFishToCloud, onSyncInventoryToCloud, onSyncCustomerKoiToCloud, onBookedChange,
 }) {
   const emptyItem = useCallback(() => ({ name: "", qty: 1, price: "", productId: "", manual: true }), []);
   const buildFormFromDraft = useCallback((draft) => ({
@@ -1684,14 +1684,28 @@ function InvoiceModule({
     setBookedConfirm({ id, label: inv.id, currentlyBooked: !!inv.booked });
   };
 
-  const applyInvoiceBookedConfirm = () => {
+  const applyInvoiceBookedConfirm = async () => {
     if (!bookedConfirm) return;
     const { id, currentlyBooked } = bookedConfirm;
     const patch = makeBookedPatch(!currentlyBooked, currentUser.name);
-    const apply = (row) => (row.id === id ? touchUpdatedAt({ ...row, ...patch }) : row);
-    setInvoices((prev) => sortInvoices(prev.map(apply)));
-    setViewInv((prev) => (prev?.id === id ? apply(prev) : prev));
     setBookedConfirm(null);
+    let nextInvoices = null;
+    const apply = (row) => (row.id === id ? touchUpdatedAt({ ...row, ...patch }) : row);
+    setInvoices((prev) => {
+      nextInvoices = sortInvoices(prev.map(apply));
+      return nextInvoices;
+    });
+    setViewInv((prev) => (prev?.id === id ? apply(prev) : prev));
+    if (!onBookedChange) return;
+    try {
+      await onBookedChange(nextInvoices);
+    } catch (err) {
+      addNotification({
+        type: "error",
+        title: "Accounts Mark Not Saved",
+        message: err?.message || "Could not sync accounts mark to cloud. Try again.",
+      });
+    }
   };
 
   const patchInvoice = (id, patch) => {
@@ -6598,7 +6612,7 @@ export default function App() {
   const lastUserActivityAt = useRef(0);
   const syncTimersRef = useRef({});
   const syncInFlightRef = useRef(0);
-  const explicitFlushAtRef = useRef({ expenses: 0, calendar: 0, customerkoi: 0, koifish: 0 });
+  const explicitFlushAtRef = useRef({ expenses: 0, invoices: 0, calendar: 0, customerkoi: 0, koifish: 0 });
   const pondSyncChainRef = useRef(Promise.resolve());
   const syncStateRef = useRef({});
   const inventorySyncPendingRef = useRef(false);
@@ -7358,6 +7372,44 @@ export default function App() {
       resetSyncHealth();
       touchLastSync();
       explicitFlushAtRef.current.calendar = Date.now();
+    } catch (err) {
+      handleSyncFailure(err);
+      throw err;
+    } finally {
+      syncInFlightRef.current -= 1;
+    }
+  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
+
+  const flushInvoicesSync = useCallback(async (invoicesOverride) => {
+    if (!isSupabaseConfigured) return;
+    if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
+      throw new Error("Cloud sync is not ready.");
+    }
+    if (!hasPermission(currentUser, "invoices")) {
+      throw new Error("Permission denied (invoices).");
+    }
+    const syncKey = "invoices:Invoices";
+    if (syncTimersRef.current[syncKey]) {
+      clearTimeout(syncTimersRef.current[syncKey]);
+      delete syncTimersRef.current[syncKey];
+    }
+    let waited = 0;
+    while (syncInFlightRef.current > 0 && waited < 3000) {
+      await new Promise((r) => setTimeout(r, 100));
+      waited += 100;
+    }
+    if (!(await ensureCloudSyncReady())) {
+      throw new Error("Session needs refresh. Log out and log in again.");
+    }
+    const raw = invoicesOverride ?? syncStateRef.current.invoices ?? [];
+    const payload = sortInvoices(raw.map((inv) => db.sanitizeInvoiceForSync(inv)));
+    syncStateRef.current = { ...syncStateRef.current, invoices: payload };
+    syncInFlightRef.current += 1;
+    try {
+      await db.syncInvoices(payload);
+      resetSyncHealth();
+      touchLastSync();
+      explicitFlushAtRef.current.invoices = Date.now();
     } catch (err) {
       handleSyncFailure(err);
       throw err;
@@ -8689,7 +8741,7 @@ export default function App() {
       case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} customerKoiList={customerKoiList} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} onSyncKoiFish={flushKoiFishSync} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} onRecordsSaved={flushCustomerKoiSync} />);
       case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondDataWithRef} addNotification={addNotification} currentUser={currentUser} users={users} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} onPersistPondData={syncPondDataNow} onSyncReminderCalendar={syncReminderCalendar} />);
-      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} stockLog={stockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} openViewId={invoiceViewRequest?.id} onViewOpened={() => setInvoiceViewRequest(null)} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} onSyncKoiFishToCloud={flushKoiFishSync} onSyncInventoryToCloud={flushInventorySync} onSyncCustomerKoiToCloud={flushCustomerKoiSync} />);
+      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} stockLog={stockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} openViewId={invoiceViewRequest?.id} onViewOpened={() => setInvoiceViewRequest(null)} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} onSyncKoiFishToCloud={flushKoiFishSync} onSyncInventoryToCloud={flushInventorySync} onSyncCustomerKoiToCloud={flushCustomerKoiSync} onBookedChange={flushInvoicesSync} />);
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} invoices={invoices} setInvoices={setInvoices} deliveries={deliveries} setDeliveries={setDeliveries} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} onCustomersSaved={flushCustomersSync} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpensesWithRef} addNotification={addNotification} currentUser={currentUser} onPersistExpenses={flushExpenseSync} />);
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} users={users} onPersistDeliveries={flushDeliveriesSync} onPersistWhatsappGroups={flushWhatsappGroupsSync} />);

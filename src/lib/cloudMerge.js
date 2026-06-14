@@ -43,8 +43,31 @@ export function resolveInvoiceConflict(local, remote) {
   const rs = remote?.status || 'pending'
   if (isTerminalInvoiceStatus(ls) && !isTerminalInvoiceStatus(rs)) return local
   if (isTerminalInvoiceStatus(rs) && !isTerminalInvoiceStatus(ls)) return remote
-  if (lt !== rt) return lt > rt ? local : remote
-  return local
+
+  const base = lt !== rt ? (lt > rt ? local : remote) : local
+
+  // Merge accounts mark across devices without discarding newer line-item edits.
+  if (Boolean(remote?.booked) !== Boolean(local?.booked)) {
+    if (remote?.booked) {
+      return {
+        ...base,
+        booked: true,
+        bookedAt: remote.bookedAt ?? null,
+        bookedBy: remote.bookedBy ?? '',
+      }
+    }
+    if (rt >= lt) {
+      return { ...base, booked: false, bookedAt: null, bookedBy: '' }
+    }
+    return {
+      ...base,
+      booked: true,
+      bookedAt: local.bookedAt ?? null,
+      bookedBy: local.bookedBy ?? '',
+    }
+  }
+
+  return base
 }
 
 /** Merge remote cloud rows into local state; newer updatedAt wins per id. */
