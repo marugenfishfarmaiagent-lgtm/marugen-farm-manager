@@ -140,8 +140,8 @@ export default function ProductSearchPicker({ products, onSelect, className = ''
   const showDropdown = open && (q.length > 0 || hasResults)
 
   return (
-    <div ref={wrapRef} className={`relative flex-1 min-w-[200px] ${className}`}>
-      <div className="relative">
+    <div ref={wrapRef} className={`relative w-full max-w-full min-w-0 sm:flex-1 ${className}`}>
+      <div className="relative min-w-0">
         <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
         <input
           type="search"
@@ -153,7 +153,7 @@ export default function ProductSearchPicker({ products, onSelect, className = ''
           onFocus={() => setOpen(true)}
           placeholder="Search product name or SKU…"
           aria-label="Search products to add to invoice"
-          className="w-full bg-slate-900/50 border border-slate-600 rounded-lg pl-9 pr-3 py-2.5 text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+          className="w-full max-w-full min-w-0 box-border bg-slate-900/50 border border-slate-600 rounded-lg pl-9 pr-3 py-2.5 text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
         />
       </div>
       {showDropdown && dropdownStyle && createPortal(

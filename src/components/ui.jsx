@@ -88,7 +88,7 @@ export function Modal({
                 <button type="button" onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white p-2 -mr-1 rounded-lg hover:bg-slate-700 transition-colors touch-manipulation min-h-[44px] min-w-[44px] flex items-center justify-center"><X size={18} /></button>
               )}
             </div>
-            <div className={`overflow-y-auto overscroll-contain p-4 sm:p-5 ${footer ? 'flex-none' : 'flex-1 min-h-0'}`}>{children}</div>
+            <div className="overflow-y-auto overflow-x-hidden overscroll-contain min-w-0 flex-1 min-h-0 p-4 sm:p-5">{children}</div>
             {footer && (
               <div className="relative z-20 sticky bottom-0 shrink-0 border-t border-slate-700 bg-slate-800/95 backdrop-blur-sm p-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))]">
                 {footer}

@@ -344,7 +344,7 @@ function Modal({ open, onClose, title, children, size = "md", priority = false, 
                 <button type="button" onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white p-2 -mr-1 rounded-lg hover:bg-slate-700 transition-colors touch-manipulation shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center"><X size={20} /></button>
               )}
             </div>
-            <div className={`overflow-y-auto overscroll-contain min-w-0 p-4 sm:p-5 ${footer ? "flex-none" : "flex-1 min-h-0"}`}>{children}</div>
+            <div className="overflow-y-auto overflow-x-hidden overscroll-contain min-w-0 flex-1 min-h-0 p-4 sm:p-5">{children}</div>
             {footer && (
               <div className="relative z-20 sticky bottom-0 shrink-0 border-t border-slate-700 bg-slate-800/95 backdrop-blur-sm p-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))]">
                 {footer}
@@ -2440,8 +2440,8 @@ function InvoiceModule({
           </div>
         )}
       >
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-4 min-w-0 max-w-full">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 min-w-0">
             <div>
               <Select label="Customer" value={form.manualCustomer ? "manual" : form.customerId}
                 onChange={e => {
@@ -2476,7 +2476,7 @@ function InvoiceModule({
               <p className="text-xs text-slate-500">Pick from fish stock or inventory, or add a <span className="text-slate-400">Manual item</span> for other charges.</p>
             </div>
 
-            <div className="flex flex-col sm:flex-row gap-2 mb-3 flex-wrap">
+            <div className="flex flex-col sm:flex-row gap-2 mb-3 w-full min-w-0 max-w-full">
               {(() => {
                 const hasFishStock = koiFishList.some(
                   (k) => [KOI_STATUS.AVAILABLE, KOI_STATUS.SICK].includes(k.status),
@@ -2486,7 +2486,7 @@ function InvoiceModule({
                 const stockKoi = availableKoiForInvoice(koiFishList, usedKoiIds);
                 return (
                   <select
-                    className={`flex-1 min-w-[200px] bg-slate-900/50 border rounded-lg px-3 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50 ${stockKoi.length ? "border-emerald-600/40" : "border-slate-600 opacity-60 cursor-not-allowed"}`}
+                    className={`w-full max-w-full min-w-0 box-border sm:flex-1 bg-slate-900/50 border rounded-lg px-3 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50 ${stockKoi.length ? "border-emerald-600/40" : "border-slate-600 opacity-60 cursor-not-allowed"}`}
                     defaultValue=""
                     disabled={!stockKoi.length}
                     onChange={e => {
