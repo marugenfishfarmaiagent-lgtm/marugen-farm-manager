@@ -109,6 +109,7 @@ import {
 } from "./data/constants";
 import logo from "./assets/logo.png";
 import Fab from "./components/Fab";
+import MobileBottomNav from "./components/MobileBottomNav";
 import ProductSearchPicker from "./components/ProductSearchPicker";
 import ToastStack from "./components/ToastStack";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -8702,7 +8703,7 @@ export default function App() {
   const activeNav = navItems.find((item) => item.id === effectiveTab);
 
   return (
-    <div className="min-h-screen min-h-[100dvh] bg-slate-950 text-white flex" style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif" }}>
+    <div className="h-[100dvh] max-h-[100dvh] overflow-hidden bg-slate-950 text-white flex" style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif" }}>
       {isMobile && sidebarOpen && (
         <button
           type="button"
@@ -8779,7 +8780,7 @@ export default function App() {
         </div>
       </div>
 
-      <div className="flex-1 flex flex-col min-w-0 w-full">
+      <div className="flex-1 flex flex-col min-w-0 w-full min-h-0 overflow-hidden">
         <header className="safe-header bg-slate-900/90 backdrop-blur border-b border-slate-800 flex items-center gap-2 sm:gap-3 px-3 sm:px-4 flex-shrink-0 sticky top-0 z-30">
           <button
             onClick={() => setSidebarOpen(o => !o)}
@@ -8871,7 +8872,7 @@ export default function App() {
           <PushNotificationPrompt addNotification={addNotification} />
         )}
 
-        <main className={`flex-1 min-h-0 ${
+        <main className={`flex-1 min-h-0 overscroll-y-contain ${
           isMobile && effectiveTab === "chat"
             ? "flex flex-col overflow-hidden p-0 pb-[calc(3.75rem+env(safe-area-inset-bottom))]"
             : `overflow-y-auto overflow-x-hidden p-4 sm:p-6 ${isMobile ? "pb-[calc(4.5rem+env(safe-area-inset-bottom))]" : ""}`
@@ -8892,20 +8893,7 @@ export default function App() {
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
 
       {isMobile && (
-        <nav className="fixed bottom-0 left-0 right-0 z-30 bg-slate-900/95 backdrop-blur border-t border-slate-800 safe-bottom-nav lg:hidden">
-          <div className="flex overflow-x-auto scrollbar-hide gap-0.5 px-1 py-1.5">
-            {navItems.map(item => (
-              <button
-                key={item.id}
-                onClick={() => goToTab(item.id)}
-                className={`flex flex-col items-center justify-center min-w-[4.25rem] px-2 py-2 rounded-xl transition-all touch-manipulation shrink-0 ${effectiveTab === item.id ? "text-cyan-400 bg-cyan-500/10" : "text-slate-500"}`}
-              >
-                <item.icon size={20} strokeWidth={effectiveTab === item.id ? 2.5 : 2} />
-                <span className="text-[10px] font-bold mt-1 truncate max-w-[4rem]">{item.label.split(" ")[0]}</span>
-              </button>
-            ))}
-          </div>
-        </nav>
+        <MobileBottomNav items={navItems} activeTab={effectiveTab} onSelect={goToTab} />
       )}
     </div>
   );
