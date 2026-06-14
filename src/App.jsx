@@ -1687,18 +1687,11 @@ function InvoiceModule({
   const applyInvoiceBookedConfirm = async () => {
     if (!bookedConfirm) return;
     const { id, currentlyBooked } = bookedConfirm;
-    const patch = makeBookedPatch(!currentlyBooked, currentUser.name);
+    const inv = invoices.find((i) => String(i.id) === String(id));
     setBookedConfirm(null);
-    const apply = (row) => (row.id === id ? touchUpdatedAt({ ...row, ...patch }) : row);
-    setInvoices((prev) => {
-      const nextInvoices = sortInvoices(prev.map(apply));
-      syncStateRef.current = { ...syncStateRef.current, invoices: nextInvoices };
-      return nextInvoices;
-    });
-    setViewInv((prev) => (prev?.id === id ? apply(prev) : prev));
-    if (!onBookedChange) return;
+    if (!inv || !onBookedChange) return;
     try {
-      await onBookedChange();
+      await onBookedChange(inv, { booked: !currentlyBooked, bookedBy: currentUser.name });
     } catch (err) {
       addNotification({
         type: "error",
@@ -6614,7 +6607,7 @@ export default function App() {
   const syncInFlightRef = useRef(0);
   const explicitFlushAtRef = useRef({ expenses: 0, invoices: 0, calendar: 0, customerkoi: 0, koifish: 0 });
   const pondSyncChainRef = useRef(Promise.resolve());
-  const invoiceFlushChainRef = useRef(Promise.resolve());
+  const invoiceBookedChainRef = useRef(Promise.resolve());
   const syncStateRef = useRef({});
   const inventorySyncPendingRef = useRef(false);
   const handleKoiSoldRef = useRef(() => {});
@@ -7381,38 +7374,73 @@ export default function App() {
     }
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
-  const flushInvoicesSync = useCallback(async () => {
-    if (!isSupabaseConfigured) return;
-    if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
-      throw new Error("Cloud sync is not ready.");
-    }
-    if (!hasPermission(currentUser, "invoices")) {
-      throw new Error("Permission denied (invoices).");
-    }
+  const markInvoiceBookedCloud = useCallback(async (inv, { booked, bookedBy } = {}) => {
+    const invId = String(inv.id);
+    const patch = makeBookedPatch(booked, bookedBy || currentUser?.name || "Staff");
 
     const execute = async () => {
-      const syncKey = "invoices:Invoices";
-      if (syncTimersRef.current[syncKey]) {
-        clearTimeout(syncTimersRef.current[syncKey]);
-        delete syncTimersRef.current[syncKey];
+      const timerKey = "invoices:Invoices";
+      if (syncTimersRef.current[timerKey]) {
+        clearTimeout(syncTimersRef.current[timerKey]);
+        delete syncTimersRef.current[timerKey];
       }
+
       let waited = 0;
-      while (syncInFlightRef.current > 0 && waited < 3000) {
+      while (syncInFlightRef.current > 0 && waited < 5000) {
         await new Promise((r) => setTimeout(r, 100));
         waited += 100;
       }
+
+      const revertOptimistic = () => {
+        const revertedInvoices = sortInvoices(
+          syncStateRef.current.invoices.map((i) => (
+            String(i.id) === invId ? touchUpdatedAt(db.sanitizeInvoiceForSync(inv)) : i
+          )),
+        );
+        syncStateRef.current = { ...syncStateRef.current, invoices: revertedInvoices };
+        setInvoices(applyInvoicePins(revertedInvoices));
+      };
+
+      const latestInv = syncStateRef.current.invoices.find((i) => String(i.id) === invId) || inv;
+      const optimisticFromLatest = touchUpdatedAt(db.sanitizeInvoiceForSync({ ...latestInv, ...patch }));
+      const nextInvoices = sortInvoices(
+        syncStateRef.current.invoices.map((i) => (String(i.id) === invId ? optimisticFromLatest : i)),
+      );
+      syncStateRef.current = { ...syncStateRef.current, invoices: nextInvoices };
+      setInvoices(applyInvoicePins(nextInvoices));
+
+      if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) {
+        revertOptimistic();
+        throw new Error("Cloud sync is not ready.");
+      }
+      if (!canMarkAccounting(currentUser)) {
+        revertOptimistic();
+        throw new Error("Permission denied (accounting).");
+      }
       if (!(await ensureCloudSyncReady())) {
+        revertOptimistic();
         throw new Error("Session needs refresh. Log out and log in again.");
       }
-      const raw = sortInvoices((syncStateRef.current.invoices ?? []).map((inv) => db.sanitizeInvoiceForSync(inv)));
-      syncStateRef.current = { ...syncStateRef.current, invoices: raw };
+
       syncInFlightRef.current += 1;
       try {
-        await db.syncInvoices(raw);
+        const confirmed = await db.markInvoiceBookedCloud(invId, {
+          booked,
+          bookedBy: patch.bookedBy,
+        });
+        const confirmedRow = touchUpdatedAt(db.sanitizeInvoiceForSync(confirmed));
+        const localRow = syncStateRef.current.invoices.find((i) => String(i.id) === invId);
+        const mergedRow = localRow ? resolveInvoiceConflict(localRow, confirmedRow) : confirmedRow;
+        const finalInvoices = sortInvoices(
+          syncStateRef.current.invoices.map((i) => (String(i.id) === invId ? mergedRow : i)),
+        );
+        syncStateRef.current = { ...syncStateRef.current, invoices: finalInvoices };
+        setInvoices(applyInvoicePins(finalInvoices));
+        explicitFlushAtRef.current.invoices = Date.now();
         resetSyncHealth();
         touchLastSync();
-        explicitFlushAtRef.current.invoices = Date.now();
       } catch (err) {
+        revertOptimistic();
         handleSyncFailure(err);
         throw err;
       } finally {
@@ -7420,10 +7448,13 @@ export default function App() {
       }
     };
 
-    const chained = invoiceFlushChainRef.current.then(execute);
-    invoiceFlushChainRef.current = chained.catch(() => {});
+    const chained = invoiceBookedChainRef.current.then(execute);
+    invoiceBookedChainRef.current = chained.catch(() => {});
     return chained;
-  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
+  }, [
+    currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth,
+    setInvoices,
+  ]);
 
   const flushExpenseSync = useCallback(async (expensesOverride) => {
     if (!isSupabaseConfigured) return;
@@ -8748,7 +8779,7 @@ export default function App() {
       case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} customerKoiList={customerKoiList} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} onSyncKoiFish={flushKoiFishSync} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} onRecordsSaved={flushCustomerKoiSync} />);
       case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondDataWithRef} addNotification={addNotification} currentUser={currentUser} users={users} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} onPersistPondData={syncPondDataNow} onSyncReminderCalendar={syncReminderCalendar} />);
-      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} stockLog={stockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} openViewId={invoiceViewRequest?.id} onViewOpened={() => setInvoiceViewRequest(null)} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} onSyncKoiFishToCloud={flushKoiFishSync} onSyncInventoryToCloud={flushInventorySync} onSyncCustomerKoiToCloud={flushCustomerKoiSync} onBookedChange={flushInvoicesSync} />);
+      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} stockLog={stockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} openViewId={invoiceViewRequest?.id} onViewOpened={() => setInvoiceViewRequest(null)} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} onSyncKoiFishToCloud={flushKoiFishSync} onSyncInventoryToCloud={flushInventorySync} onSyncCustomerKoiToCloud={flushCustomerKoiSync} onBookedChange={markInvoiceBookedCloud} />);
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} invoices={invoices} setInvoices={setInvoices} deliveries={deliveries} setDeliveries={setDeliveries} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} onCustomersSaved={flushCustomersSync} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpensesWithRef} addNotification={addNotification} currentUser={currentUser} onPersistExpenses={flushExpenseSync} />);
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} users={users} onPersistDeliveries={flushDeliveriesSync} onPersistWhatsappGroups={flushWhatsappGroupsSync} />);

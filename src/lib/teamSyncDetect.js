@@ -8,6 +8,29 @@ function recordTs(record) {
   return Number.isFinite(t) ? t : 0
 }
 
+/** Invoice accounts marks can diverge even when local updatedAt is newer (e.g. discount edit). */
+function countInvoiceBookedDivergences(localList, remoteList, pendingDeleteIds) {
+  const delSet = new Set((pendingDeleteIds || []).map(String))
+  const localMap = new Map((localList || []).map((r) => [String(r.id), r]))
+  let count = 0
+
+  for (const remote of remoteList || []) {
+    const id = String(remote.id)
+    if (delSet.has(id)) continue
+    const local = localMap.get(id)
+    if (!local) continue
+    if (Boolean(remote.booked) !== Boolean(local.booked)) {
+      count += 1
+      continue
+    }
+    const rbt = remote.bookedAt ? String(remote.bookedAt) : ''
+    const lbt = local.bookedAt ? String(local.bookedAt) : ''
+    if (rbt && rbt !== lbt) count += 1
+  }
+
+  return count
+}
+
 /** Count remote rows newer than local (another device likely saved). */
 function countRemoteNewerRows(localList, remoteList, pendingDeleteIds) {
   const delSet = new Set((pendingDeleteIds || []).map(String))
@@ -66,6 +89,7 @@ export function countIncomingTeamChanges(localState, fetchedData, peekDeletionsF
   total += countRemoteNewerRows(localState.customers, cleaned.customers, peek('customers'))
   total += countRemoteNewerRows(localState.products, cleaned.products, peek('products'))
   total += countRemoteNewerRows(localState.invoices, cleaned.invoices, peek('invoices'))
+  total += countInvoiceBookedDivergences(localState.invoices, cleaned.invoices, peek('invoices'))
   total += countRemoteNewerRows(localState.expenses, cleaned.expenses, peek('expenses'))
   total += countRemoteNewerRows(localState.deliveries, cleaned.deliveries, peek('deliveries'))
   total += countRemoteNewerRows(localState.events, cleaned.events, peek('events'))

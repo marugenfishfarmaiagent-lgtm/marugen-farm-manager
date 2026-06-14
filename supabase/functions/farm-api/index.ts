@@ -767,6 +767,36 @@ Deno.serve(async (req) => {
       return J({ ok: true, invoice: data });
     }
 
+    if (body.action === "mark_invoice_booked") {
+      if (!hasPermission(user, "accounting")) {
+        return J({ error: "Permission denied (accounting)" }, 403);
+      }
+      const id = String(body.id || "").trim();
+      if (!id) return J({ error: "Invoice id required" }, 400);
+      const booked = Boolean(body.booked);
+      const bookedBy = String(body.bookedBy ?? body.booked_by ?? user.name ?? "").trim();
+
+      const { data: existing, error: fetchErr } = await db.from("invoices").select("*").eq("id", id).maybeSingle();
+      if (fetchErr) throw fetchErr;
+      if (!existing) return J({ error: "Invoice not found" }, 404);
+      if (existing.status === "cancelled") {
+        return J({ error: "Cancelled invoices cannot be marked in accounts" }, 400);
+      }
+
+      const now = new Date().toISOString();
+      const patch = booked
+        ? { booked: true, booked_at: now, booked_by: bookedBy, updated_at: now }
+        : { booked: false, booked_at: null, booked_by: "", updated_at: now };
+
+      const { data, error } = await db.from("invoices")
+        .update(patch)
+        .eq("id", id)
+        .select("*")
+        .single();
+      if (error) throw error;
+      return J({ ok: true, invoice: data });
+    }
+
     if (body.action === "upsert_invoice") {
       if (!hasPermission(user, "invoices")) {
         return J({ error: "Permission denied (invoices)" }, 403);

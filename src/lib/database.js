@@ -452,6 +452,18 @@ export async function cancelInvoiceCloud(id) {
   return mapInvoice(data.invoice)
 }
 
+/** Atomically mark one invoice in/out of accounts (avoids full-list sync timestamp races). */
+export async function markInvoiceBookedCloud(id, { booked, bookedBy } = {}) {
+  if (!isSupabaseConfigured) throw new Error('Cloud sync is not configured')
+  const data = await apiCall({
+    action: 'mark_invoice_booked',
+    id: String(id),
+    booked: Boolean(booked),
+    bookedBy: bookedBy || '',
+  })
+  return mapInvoice(data.invoice)
+}
+
 /** Upsert a single invoice on the server (avoids full-list sync timestamp races on create). */
 export async function upsertInvoiceCloud(invoice) {
   if (!isSupabaseConfigured) throw new Error('Cloud sync is not configured')
