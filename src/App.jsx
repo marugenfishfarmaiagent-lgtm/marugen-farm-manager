@@ -1689,16 +1689,16 @@ function InvoiceModule({
     const { id, currentlyBooked } = bookedConfirm;
     const patch = makeBookedPatch(!currentlyBooked, currentUser.name);
     setBookedConfirm(null);
-    let nextInvoices = null;
     const apply = (row) => (row.id === id ? touchUpdatedAt({ ...row, ...patch }) : row);
     setInvoices((prev) => {
-      nextInvoices = sortInvoices(prev.map(apply));
+      const nextInvoices = sortInvoices(prev.map(apply));
+      syncStateRef.current = { ...syncStateRef.current, invoices: nextInvoices };
       return nextInvoices;
     });
     setViewInv((prev) => (prev?.id === id ? apply(prev) : prev));
     if (!onBookedChange) return;
     try {
-      await onBookedChange(nextInvoices);
+      await onBookedChange();
     } catch (err) {
       addNotification({
         type: "error",
@@ -6614,6 +6614,7 @@ export default function App() {
   const syncInFlightRef = useRef(0);
   const explicitFlushAtRef = useRef({ expenses: 0, invoices: 0, calendar: 0, customerkoi: 0, koifish: 0 });
   const pondSyncChainRef = useRef(Promise.resolve());
+  const invoiceFlushChainRef = useRef(Promise.resolve());
   const syncStateRef = useRef({});
   const inventorySyncPendingRef = useRef(false);
   const handleKoiSoldRef = useRef(() => {});
@@ -7380,7 +7381,7 @@ export default function App() {
     }
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
-  const flushInvoicesSync = useCallback(async (invoicesOverride) => {
+  const flushInvoicesSync = useCallback(async () => {
     if (!isSupabaseConfigured) return;
     if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
       throw new Error("Cloud sync is not ready.");
@@ -7388,34 +7389,40 @@ export default function App() {
     if (!hasPermission(currentUser, "invoices")) {
       throw new Error("Permission denied (invoices).");
     }
-    const syncKey = "invoices:Invoices";
-    if (syncTimersRef.current[syncKey]) {
-      clearTimeout(syncTimersRef.current[syncKey]);
-      delete syncTimersRef.current[syncKey];
-    }
-    let waited = 0;
-    while (syncInFlightRef.current > 0 && waited < 3000) {
-      await new Promise((r) => setTimeout(r, 100));
-      waited += 100;
-    }
-    if (!(await ensureCloudSyncReady())) {
-      throw new Error("Session needs refresh. Log out and log in again.");
-    }
-    const raw = invoicesOverride ?? syncStateRef.current.invoices ?? [];
-    const payload = sortInvoices(raw.map((inv) => db.sanitizeInvoiceForSync(inv)));
-    syncStateRef.current = { ...syncStateRef.current, invoices: payload };
-    syncInFlightRef.current += 1;
-    try {
-      await db.syncInvoices(payload);
-      resetSyncHealth();
-      touchLastSync();
-      explicitFlushAtRef.current.invoices = Date.now();
-    } catch (err) {
-      handleSyncFailure(err);
-      throw err;
-    } finally {
-      syncInFlightRef.current -= 1;
-    }
+
+    const execute = async () => {
+      const syncKey = "invoices:Invoices";
+      if (syncTimersRef.current[syncKey]) {
+        clearTimeout(syncTimersRef.current[syncKey]);
+        delete syncTimersRef.current[syncKey];
+      }
+      let waited = 0;
+      while (syncInFlightRef.current > 0 && waited < 3000) {
+        await new Promise((r) => setTimeout(r, 100));
+        waited += 100;
+      }
+      if (!(await ensureCloudSyncReady())) {
+        throw new Error("Session needs refresh. Log out and log in again.");
+      }
+      const raw = sortInvoices((syncStateRef.current.invoices ?? []).map((inv) => db.sanitizeInvoiceForSync(inv)));
+      syncStateRef.current = { ...syncStateRef.current, invoices: raw };
+      syncInFlightRef.current += 1;
+      try {
+        await db.syncInvoices(raw);
+        resetSyncHealth();
+        touchLastSync();
+        explicitFlushAtRef.current.invoices = Date.now();
+      } catch (err) {
+        handleSyncFailure(err);
+        throw err;
+      } finally {
+        syncInFlightRef.current -= 1;
+      }
+    };
+
+    const chained = invoiceFlushChainRef.current.then(execute);
+    invoiceFlushChainRef.current = chained.catch(() => {});
+    return chained;
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
   const flushExpenseSync = useCallback(async (expensesOverride) => {

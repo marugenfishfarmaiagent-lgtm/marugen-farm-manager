@@ -35,6 +35,11 @@ export function resolveExpenseConflict(local, remote) {
   return local
 }
 
+function bookedTs(record) {
+  if (!record?.bookedAt) return 0
+  return ts({ updatedAt: record.bookedAt })
+}
+
 /** Prefer paid/cancelled when timestamps tie — avoids cloud pull reverting a just-marked invoice. */
 export function resolveInvoiceConflict(local, remote) {
   const lt = ts(local)
@@ -46,19 +51,29 @@ export function resolveInvoiceConflict(local, remote) {
 
   const base = lt !== rt ? (lt > rt ? local : remote) : local
 
-  // Merge accounts mark across devices without discarding newer line-item edits.
-  if (Boolean(remote?.booked) !== Boolean(local?.booked)) {
-    if (remote?.booked) {
-      return {
-        ...base,
-        booked: true,
-        bookedAt: remote.bookedAt ?? null,
-        bookedBy: remote.bookedBy ?? '',
-      }
+  if (Boolean(remote?.booked) === Boolean(local?.booked)) return base
+
+  const lbt = bookedTs(local)
+  const rbt = bookedTs(remote)
+  if (lbt !== rbt) {
+    const bookedSource = lbt > rbt ? local : remote
+    return {
+      ...base,
+      booked: !!bookedSource.booked,
+      bookedAt: bookedSource.bookedAt ?? null,
+      bookedBy: bookedSource.bookedBy ?? '',
     }
-    if (rt >= lt) {
-      return { ...base, booked: false, bookedAt: null, bookedBy: '' }
+  }
+
+  if (remote?.booked) {
+    return {
+      ...base,
+      booked: true,
+      bookedAt: remote.bookedAt ?? null,
+      bookedBy: remote.bookedBy ?? '',
     }
+  }
+  if (local?.booked) {
     return {
       ...base,
       booked: true,
@@ -66,7 +81,9 @@ export function resolveInvoiceConflict(local, remote) {
       bookedBy: local.bookedBy ?? '',
     }
   }
-
+  if (rt >= lt) {
+    return { ...base, booked: false, bookedAt: null, bookedBy: '' }
+  }
   return base
 }
 
