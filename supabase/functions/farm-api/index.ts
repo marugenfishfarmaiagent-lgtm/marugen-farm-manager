@@ -144,12 +144,12 @@ async function applyInvoiceKoiSalesOnServer(
     const soldPrice = nullableNumeric(it.price);
     const { data: existing } = await db.from("koi_fish").select("id, status, pond_name").eq("id", koiId).maybeSingle();
     if (!existing || existing.status === "deceased") continue;
-    if (existing.status === "sold" && disposition !== "keep") continue;
+    if (existing.status === "sold" && existing.sold_to) continue;
 
     if (disposition === "keep") {
       const keepPond = String(it.keepPondName ?? existing.pond_name ?? "").trim();
       const { error } = await db.from("koi_fish").update({
-        status: "available",
+        status: "sold",
         sold_to: customerId,
         sold_date: invoiceDate || nullableDate(now),
         sold_price: soldPrice,

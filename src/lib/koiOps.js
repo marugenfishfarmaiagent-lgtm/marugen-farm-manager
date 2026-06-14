@@ -66,7 +66,7 @@ export function validateKoiSaleForm({ customerId, disposition, keepPondName, sol
     return { ok: false, message: `${koi?.id || 'This fish'} cannot be sold (status: ${koi?.status || 'unknown'}).` }
   }
   if (hasActiveKeepAtFarmSale(koi)) {
-    return { ok: false, message: `${koi?.id || 'This fish'} has an active keep-at-farm sale. Use Reverse keep first.` }
+    return { ok: false, message: `${koi?.id || 'This fish'} is already sold (keep at farm). Refund the sale first.` }
   }
   const price = parseKoiPrice(soldPrice, koi?.price ?? 0)
   if (price == null) {
@@ -87,7 +87,7 @@ export function buildSoldKoiPatch(koi, { customerId, soldPrice, soldDate, dispos
   const pond = keep ? (keepPondName?.trim() || koi.pondName || '') : koi.pondName
   return touchUpdatedAt({
     ...koi,
-    status: keep ? KOI_STATUS.AVAILABLE : KOI_STATUS.SOLD,
+    status: KOI_STATUS.SOLD,
     pondName: pond,
     soldTo,
     soldPrice: Number(soldPrice) || Number(koi.price) || 0,
@@ -97,27 +97,8 @@ export function buildSoldKoiPatch(koi, { customerId, soldPrice, soldDate, dispos
   })
 }
 
-/** Clear keep-at-farm sale metadata while fish stays in farm stock. */
-export function buildKeepAtFarmReversePatch(koi, reason = '') {
-  const refundNote = reason.trim()
-    ? `Keep-at-farm reversed ${today()}: ${reason.trim()}`
-    : `Keep-at-farm reversed ${today()}`
-  return touchUpdatedAt({
-    ...koi,
-    status: KOI_STATUS.AVAILABLE,
-    soldTo: null,
-    soldPrice: null,
-    soldDate: null,
-    sellDisposition: null,
-    keepPondName: null,
-    notes: koi.notes ? `${koi.notes}\n${refundNote}` : refundNote,
-  })
-}
-
 export function hasActiveKeepAtFarmSale(koi) {
-  if (!koi?.soldTo) return false
-  if (koi.sellDisposition === 'keep') return true
-  return koi.status === KOI_STATUS.AVAILABLE
+  return koi?.status === KOI_STATUS.SOLD && koi.sellDisposition === 'keep' && Boolean(koi?.soldTo)
 }
 
 export function buildDeceasedKoiPatch(koi, { deathDate, deathCause, deathPhoto, notes }) {

@@ -18,8 +18,9 @@ import { isStockTracked, priceListProducts, stockProducts } from "./lib/productC
 import {
   applyInvoiceKoiSales, restoreInvoiceKoiSales, previewRestoreInvoiceKoiSales, previewApplyInvoiceKoiSales, availableKoiForInvoice, reconcileKoiSoldFromInvoices,
   formatKoiInvoiceLineName, validateInvoiceKoiSales, findLinkedKoiInvoices, buildKoiRefundUpdate,
+  isRefundCreditNoteInvoice,
 } from "./lib/koiInvoice";
-import { buildKeepAtFarmReversePatch, sameKoiId } from "./lib/koiOps";
+import { sameKoiId } from "./lib/koiOps";
 import { PondNameInput } from "./components/ui";
 import BackupExportPanel from "./components/BackupExportPanel";
 import { backupBaseName, downloadFile, expensesToCsv, invoicesToCsv } from "./lib/backupExport";
@@ -1631,7 +1632,9 @@ function InvoiceModule({
 
   const filtered = useMemo(() => sortInvoices(invoices.filter((i) => {
     if (!showOlderInvoices && !isAppVisibleInvoice(i)) return false;
-    if (filter !== "all" && getInvoiceStatus(i) !== filter) return false;
+    if (filter === "refunds") {
+      if (!isRefundCreditNoteInvoice(i)) return false;
+    } else if (filter !== "all" && getInvoiceStatus(i) !== filter) return false;
     if (bookedFilter === "booked" && !i.booked) return false;
     if (bookedFilter === "unbooked" && i.booked) return false;
     return true;
@@ -2273,9 +2276,9 @@ function InvoiceModule({
       <Fab onClick={() => setShowNew(true)} label="New Invoice" hidden={showNew || !!viewInv} />
 
       <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
-        {["all", "pending", "paid", "overdue", "cancelled"].map(s => (
+        {["all", "pending", "paid", "overdue", "cancelled", "refunds"].map(s => (
           <button key={s} onClick={() => setFilter(s)}
-            className={`px-3 py-2 rounded-lg text-xs font-bold capitalize transition-all shrink-0 touch-manipulation ${filter === s ? "bg-cyan-500 text-slate-900" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>{s}</button>
+            className={`px-3 py-2 rounded-lg text-xs font-bold capitalize transition-all shrink-0 touch-manipulation ${filter === s ? "bg-cyan-500 text-slate-900" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>{s === "refunds" ? "Refunds" : s}</button>
         ))}
       </div>
       <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
@@ -8500,8 +8503,8 @@ export default function App() {
     const linkedCustomerKoi = customerKoiList.filter(
       (r) => sameKoiId(r.koiId, koi.id) && r.status !== CUSTOMER_KOI_STATUS.DECEASED,
     );
-    const isSold = koi?.status === KOI_STATUS.SOLD;
-    if (!koi || (!isSold && !linkedCustomerKoi.length)) return;
+    const isSold = koi?.status === KOI_STATUS.SOLD || Boolean(koi?.soldTo);
+    if (!koi || !isSold) return;
 
     const removedIds = new Set(linkedCustomerKoi.map((r) => String(r.id)));
     const snapshotCustomerKoi = customerKoiList;
@@ -8509,16 +8512,9 @@ export default function App() {
     linkedCustomerKoi.forEach((r) => markDeleted("customer_koi", r.id));
     const nextCustomerKoi = customerKoiList.filter((r) => !removedIds.has(String(r.id)));
 
-    let nextKoiList = koiFishList;
-    if (isSold) {
-      nextKoiList = koiFishList.map((k) => (
-        sameKoiId(k.id, koi.id) ? buildKoiRefundUpdate(k, reason) : k
-      ));
-    } else if (linkedCustomerKoi.length) {
-      nextKoiList = koiFishList.map((k) => (
-        sameKoiId(k.id, koi.id) ? buildKeepAtFarmReversePatch(k, reason) : k
-      ));
-    }
+    const nextKoiList = koiFishList.map((k) => (
+      sameKoiId(k.id, koi.id) ? buildKoiRefundUpdate(k, reason) : k
+    ));
 
     const linkedInvoices = findLinkedKoiInvoices(invoices, koi.id).filter(
       (inv) => getInvoiceStatus(inv) !== "cancelled",
@@ -8586,10 +8582,8 @@ export default function App() {
 
     addNotification({
       type: "success",
-      title: isSold ? "Refund Complete" : "Keep-at-farm Sale Reversed",
-      message: isSold
-        ? `${koi.name || koi.variety} (${koi.id}) returned to stock.`
-        : `Removed Customer Koi record for ${koi.name || koi.variety} (${koi.id}). Fish stays in farm stock.`,
+      title: "Refund Complete",
+      message: `${koi.name || koi.variety} (${koi.id}) returned to available stock.`,
     });
     if (cancelledInvoiceIds.length) {
       addNotification({

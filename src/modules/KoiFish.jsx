@@ -21,7 +21,6 @@ import {
   buildDeceasedKoiPatch, buildSoldKoiPatch, normalizeKoiSizeField,
   sameKoiId, validateKoiFormFields, validateKoiSaleForm,
 } from '../lib/koiOps'
-import { hasLinkedCustomerKoiForRefund } from '../lib/customerKoiOps'
 import { isAppVisibleKoiFarm } from '../lib/retention'
 import { uploadInlinePhotoIfNeeded } from '../lib/farmImage'
 import { persistKoiFishList } from '../lib/imageUploadOps'
@@ -672,11 +671,11 @@ export default function KoiFish({
                 <p className="text-slate-500 text-[10px]">Added {k.dateAdded}</p>
                 <div className="flex flex-wrap gap-2 pt-2">
                   <Btn variant="ghost" size="sm" onClick={() => setViewKoi(k)}><Eye size={12} />View</Btn>
-                  {k.status === KOI_STATUS.SOLD || hasLinkedCustomerKoiForRefund(customerKoiList, k.id) ? (
+                  {k.status === KOI_STATUS.SOLD ? (
                     canRefund && (
                       <Btn variant="secondary" size="sm" onClick={() => openRefund(k)}>
                         <Undo2 size={12} />
-                        {k.status === KOI_STATUS.SOLD ? 'Refund' : 'Reverse keep'}
+                        Refund
                       </Btn>
                     )
                   ) : (
@@ -905,10 +904,9 @@ export default function KoiFish({
               </div>
             </div>
             <p className="text-slate-400 text-sm">
-              {refundKoi.status === KOI_STATUS.SOLD ? (
-                <>This returns the fish to <span className="text-cyan-300">available</span> stock, removes any linked Customer Koi record, and logs the refund in notes.</>
-              ) : (
-                <>This removes the linked <span className="text-cyan-300">Customer Koi</span> record for this keep-at-farm sale. The fish stays in farm stock.</>
+              This returns the fish to <span className="text-cyan-300">available</span> stock, removes any linked Customer Koi record, and logs the refund in notes.
+              {refundKoi.sellDisposition === 'keep' && (
+                <> Keep-at-farm pond: <span className="text-cyan-300">{refundKoi.keepPondName || refundKoi.pondName || '—'}</span>.</>
               )}
             </p>
             {refundLinkedInvoices.length > 0 && (

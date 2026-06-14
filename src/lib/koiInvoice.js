@@ -34,7 +34,7 @@ export function validateInvoiceKoiSales({ items, koiList, customerId, customers 
       return { ok: false, message: `${koi.id} is not available (${koi.status}).` }
     }
     if (hasActiveKeepAtFarmSale(koi)) {
-      return { ok: false, message: `${koi.id} has an active keep-at-farm sale. Reverse keep or cancel the invoice first.` }
+      return { ok: false, message: `${koi.id} is already sold (keep at farm). Refund the sale first.` }
     }
     if ((it.koiDisposition || 'taken') === 'keep' && !(it.keepPondName?.trim())) {
       return { ok: false, message: `Select a pond for ${formatKoiInvoiceLineName(koi)} (keep at farm).` }
@@ -195,9 +195,26 @@ export function findLinkedKoiInvoices(invoices, koiId) {
   )
 }
 
-/** Ensure fish on active invoices show as sold/keep-at-farm after cloud pull or cross-device sync. */
+export function isRefundCreditNoteInvoice(inv) {
+  return getInvoiceStatus(inv) === 'cancelled' && /credit note/i.test(String(inv.notes || ''))
+}
+
+/** Fish with sale metadata must stay in sold status (fixes legacy keep-at-farm rows). */
+export function normalizeSoldKoiRecords(koiList) {
+  if (!Array.isArray(koiList)) return koiList
+  return koiList.map((k) => {
+    if (k.status === KOI_STATUS.DECEASED) return k
+    if (k.soldTo && k.status !== KOI_STATUS.SOLD) {
+      return touchUpdatedAt({ ...k, status: KOI_STATUS.SOLD })
+    }
+    return k
+  })
+}
+
+/** Ensure fish on active invoices show as sold after cloud pull or cross-device sync. */
 export function reconcileKoiSoldFromInvoices(koiList, invoices) {
-  if (!Array.isArray(koiList) || !Array.isArray(invoices) || !invoices.length) return koiList
+  const normalized = normalizeSoldKoiRecords(koiList)
+  if (!Array.isArray(normalized) || !Array.isArray(invoices) || !invoices.length) return normalized
 
   const saleByKoiId = new Map()
   for (const inv of invoices) {
@@ -217,15 +234,13 @@ export function reconcileKoiSoldFromInvoices(koiList, invoices) {
       })
     }
   }
-  if (!saleByKoiId.size) return koiList
+  if (!saleByKoiId.size) return normalized
 
-  return koiList.map((k) => {
+  return normalized.map((k) => {
     const sale = saleByKoiId.get(String(k.id))
     if (!sale) return k
     if (k.status === KOI_STATUS.DECEASED) return k
-    const keep = sale.disposition === 'keep'
-    if (keep && k.soldTo && k.sellDisposition === 'keep') return k
-    if (!keep && k.status === KOI_STATUS.SOLD && k.soldTo) return k
+    if (k.status === KOI_STATUS.SOLD && k.soldTo) return k
     return buildSoldKoiPatch(k, sale)
   })
 }
