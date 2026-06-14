@@ -18,7 +18,7 @@ import { isStockTracked, priceListProducts, stockProducts } from "./lib/productC
 import {
   applyInvoiceKoiSales, restoreInvoiceKoiSales, previewRestoreInvoiceKoiSales, previewApplyInvoiceKoiSales, availableKoiForInvoice, reconcileKoiSoldFromInvoices,
   formatKoiInvoiceLineName, validateInvoiceKoiSales, findLinkedKoiInvoices, buildKoiRefundUpdate,
-  isRefundCreditNoteInvoice,
+  isRefundCreditNoteInvoice, buildInvoiceFromKoiSaleDraft, hasActiveInvoiceForKoi,
 } from "./lib/koiInvoice";
 import { sameKoiId } from "./lib/koiOps";
 import { PondNameInput } from "./components/ui";
@@ -1553,6 +1553,7 @@ function InvoiceModule({
   addNotification, currentUser, openDraft, onDraftApplied, openViewId, onViewOpened,
   onMarkInvoicePaid, onCancelInvoiceCloud, onCreateInvoiceCloud, onInventorySideEffect,
   onSyncKoiFishToCloud, onSyncInventoryToCloud, onSyncCustomerKoiToCloud, onBookedChange,
+  draftSignal = 0,
 }) {
   const emptyItem = useCallback(() => ({ name: "", qty: 1, price: "", productId: "", manual: true }), []);
   const buildFormFromDraft = useCallback((draft) => ({
@@ -1599,14 +1600,14 @@ function InvoiceModule({
   const openViewInvoiceRef = useRef(null);
 
   useEffect(() => {
-    if (!openDraft) return;
+    if (!openDraft || !draftSignal) return;
     queueMicrotask(() => {
       setForm(buildFormFromDraft(openDraft));
       setShowNew(true);
       setFormError("");
       onDraftApplied?.();
     });
-  }, [openDraft, onDraftApplied, buildFormFromDraft]);
+  }, [draftSignal, openDraft, onDraftApplied, buildFormFromDraft]);
 
   useEffect(() => {
     if (!openViewId) {
@@ -8601,24 +8602,66 @@ export default function App() {
 
   const clearInvoiceOpenDraft = useCallback(() => setInvoiceOpenDraft(null), []);
 
-  const handleCreateInvoiceFromKoiSale = useCallback((draft) => {
+  const handleCreateInvoiceFromKoiSale = useCallback(async (draft) => {
     if (!currentUser || !hasPermission(currentUser, "invoices")) {
       addNotification({
         type: "warning",
         title: "Invoice Access Required",
-        message: "Sale saved. You do not have permission to open Invoices.",
+        message: "Sale saved. You do not have permission to create invoices.",
       });
       return;
     }
-    setInvoiceOpenDraft(draft);
-    setActiveTab("invoices");
-    setInvoiceDraftSignal((n) => n + 1);
-    addNotification({
-      type: "info",
-      title: "Create Invoice",
-      message: "Sale confirmed — review and save the invoice.",
-    });
-  }, [currentUser, addNotification]);
+
+    const koiIds = (draft?.items || []).map((it) => it.koiId).filter(Boolean);
+    let existing = null;
+    for (const koiId of koiIds) {
+      if (!hasActiveInvoiceForKoi(invoices, koiId)) continue;
+      existing = findLinkedKoiInvoices(invoices, koiId).find(
+        (inv) => getInvoiceStatus(inv) !== "cancelled",
+      );
+      if (existing) break;
+    }
+    if (existing) {
+      setActiveTab("invoices");
+      setInvoiceViewRequest({ id: String(existing.id) });
+      addNotification({
+        type: "info",
+        title: "Invoice Already Exists",
+        message: `${existing.id} is already linked to this koi sale.`,
+      });
+      return;
+    }
+
+    const inv = touchUpdatedAt(db.sanitizeInvoiceForSync(
+      buildInvoiceFromKoiSaleDraft(draft, {
+        invoices,
+        customers,
+        createdBy: currentUser.name,
+      }),
+    ));
+
+    try {
+      await createInvoiceCloud(inv);
+      setActiveTab("invoices");
+      setInvoiceViewRequest({ id: String(inv.id) });
+      addNotification({
+        type: "success",
+        title: "Invoice Created",
+        message: `${inv.id} created for koi sale — ${formatSGD(inv.total)}.`,
+      });
+    } catch (err) {
+      setInvoiceOpenDraft(draft);
+      setActiveTab("invoices");
+      setInvoiceDraftSignal((n) => n + 1);
+      addNotification({
+        type: "warning",
+        title: "Invoice Not Saved",
+        message: err?.message || "Review the draft and save manually.",
+      });
+    }
+  }, [
+    currentUser, addNotification, invoices, customers, createInvoiceCloud,
+  ]);
 
   const visibleNotifications = useMemo(
     () => filterNotificationsForUser(notifications, {
@@ -8879,7 +8922,7 @@ export default function App() {
       case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} customerKoiList={customerKoiList} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} onSyncKoiFish={flushKoiFishSync} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} onRecordsSaved={flushCustomerKoiSync} />);
       case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondDataWithRef} addNotification={addNotification} currentUser={currentUser} users={users} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} onPersistPondData={syncPondDataNow} onSyncReminderCalendar={syncReminderCalendar} />);
-      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} stockLog={stockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} onDraftApplied={clearInvoiceOpenDraft} openViewId={invoiceViewRequest?.id} onViewOpened={() => setInvoiceViewRequest(null)} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} onSyncKoiFishToCloud={flushKoiFishSync} onSyncInventoryToCloud={flushInventorySync} onSyncCustomerKoiToCloud={flushCustomerKoiSync} onBookedChange={markInvoiceBookedCloud} />);
+      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} stockLog={stockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} draftSignal={invoiceDraftSignal} onDraftApplied={clearInvoiceOpenDraft} openViewId={invoiceViewRequest?.id} onViewOpened={() => setInvoiceViewRequest(null)} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} onSyncKoiFishToCloud={flushKoiFishSync} onSyncInventoryToCloud={flushInventorySync} onSyncCustomerKoiToCloud={flushCustomerKoiSync} onBookedChange={markInvoiceBookedCloud} />);
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} invoices={invoices} setInvoices={setInvoices} deliveries={deliveries} setDeliveries={setDeliveries} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} onCustomersSaved={flushCustomersSync} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpensesWithRef} addNotification={addNotification} currentUser={currentUser} onPersistExpenses={flushExpenseSync} />);
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} users={users} onPersistDeliveries={flushDeliveriesSync} onPersistWhatsappGroups={flushWhatsappGroupsSync} />);

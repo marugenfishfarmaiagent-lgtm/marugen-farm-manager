@@ -1,7 +1,10 @@
-import { KOI_STATUS, formatKoiSize, getInvoiceStatus, today } from '../data/constants'
+import { KOI_STATUS, formatKoiSize, genInvoiceId, getInvoiceStatus, today } from '../data/constants'
 import { buildSoldKoiPatch, canSellKoiStatus, hasActiveKeepAtFarmSale, sameKoiId } from './koiOps'
 import { touchUpdatedAt } from './syncMeta'
 import { markDeleted } from './syncDeletions'
+import { serializeInvoiceItem } from './inventoryStock'
+import { calcInvoiceAmounts } from './invoiceDesign'
+import { findCustomerRecord, formatCustomerAddress, resolveInvoiceCustomer } from './invoiceWhatsApp'
 
 export function formatKoiInvoiceLineName(koi) {
   const label = koi.name?.trim() || koi.variety
@@ -193,6 +196,57 @@ export function findLinkedKoiInvoices(invoices, koiId) {
   return (invoices || []).filter((inv) =>
     (inv.items || []).some((it) => sameKoiId(it.koiId, koiId)),
   )
+}
+
+export function hasActiveInvoiceForKoi(invoices, koiId) {
+  return findLinkedKoiInvoices(invoices, koiId).some(
+    (inv) => getInvoiceStatus(inv) !== 'cancelled',
+  )
+}
+
+/** Build a pending invoice row from a koi sale draft (fish already marked sold). */
+export function buildInvoiceFromKoiSaleDraft(draft, { invoices, customers, createdBy }) {
+  const issueDate = String(draft?.due || '').trim() || today()
+  const invoiceItems = (draft?.items || []).map(serializeInvoiceItem)
+  const discountType = draft?.discountType || 'none'
+  const discountValue = discountType === 'none' ? 0 : +draft.discountValue || 0
+  const shipping = +(draft?.shipping ?? 0) || 0
+  const { total } = calcInvoiceAmounts({
+    items: invoiceItems.map((it) => ({
+      name: it.name,
+      qty: +it.qty || 0,
+      price: +it.price || 0,
+    })),
+    discountType,
+    discountValue,
+    shipping,
+  })
+  const customerDetails = resolveInvoiceCustomer(
+    { customerId: draft?.customerId, customerName: draft?.customerName },
+    customers,
+  )
+  const customerRecord = findCustomerRecord(customers, draft?.customerId, draft?.customerName)
+  return {
+    id: genInvoiceId(invoices, issueDate),
+    customerId: draft?.manualCustomer || !draft?.customerId ? null : draft.customerId,
+    customerName: draft?.customerName || customerDetails.name,
+    customerWhatsapp: customerDetails.phone,
+    customerPhone: customerDetails.phone,
+    customerAddress: customerDetails.address || formatCustomerAddress(customerRecord),
+    items: invoiceItems,
+    discountType,
+    discountValue,
+    shipping,
+    total,
+    status: 'pending',
+    date: issueDate,
+    due: issueDate,
+    notes: draft?.notes || '',
+    createdBy: createdBy || 'Staff',
+    booked: false,
+    bookedAt: null,
+    bookedBy: '',
+  }
 }
 
 export function isRefundCreditNoteInvoice(inv) {

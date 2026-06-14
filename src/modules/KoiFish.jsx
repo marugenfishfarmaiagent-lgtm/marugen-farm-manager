@@ -474,7 +474,7 @@ export default function KoiFish({
         message: `${currentKoi.id} sold to ${customer?.name || 'customer'} for ${formatSGD(soldPrice)} (${dispositionNote})`,
       })
       if (sellForm.createInvoice) {
-        onCreateInvoiceFromSale?.({
+        await onCreateInvoiceFromSale?.({
           customerId: String(customer.id),
           customerName: customer.name,
           manualCustomer: false,
@@ -860,7 +860,7 @@ export default function KoiFish({
             </label>
             <p className="text-xs text-slate-500 mt-1 ml-6">
               {sellForm.createInvoice
-                ? 'After confirm, Invoices opens with this fish pre-filled.'
+                ? 'After confirm, a pending invoice is created automatically.'
                 : 'Invoice will not be created — only the sale is recorded.'}
             </p>
             <div className="modal-actions mt-4 flex justify-end gap-2">
