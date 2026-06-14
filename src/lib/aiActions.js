@@ -6,7 +6,7 @@ import { calcInvoiceAmounts } from './invoiceDesign'
 import { writeCloudFirst, writeInventoryCloudFirst, writeListCloudFirst } from './cloudWrite.js'
 import { touchUpdatedAt } from './syncMeta'
 import { formatCustomerAddress, resolveInvoiceCustomer } from './invoiceWhatsApp'
-import { deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem, previewDeductStockForInvoice, previewRestoreStockForInvoice, validateStockForItems } from './inventoryStock'
+import { applyStockPreview, deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem, previewDeductStockForInvoice, previewRestoreStockForInvoice, validateStockForItems } from './inventoryStock'
 import { adjustProductStockInList, buildStockLogEntry } from './inventoryOps'
 import {
   formatKoiInvoiceLineName, restoreInvoiceKoiSales, previewApplyInvoiceKoiSales,
@@ -679,17 +679,8 @@ export async function executeAiAction(name, args, ctx) {
           customers: ctx.customers,
         })
         if (!koiValidate.ok) return { success: false, error: koiValidate.message }
-        const stockValidate = validateStockForItems(ctx.products, invoiceItems)
-        if (!stockValidate.ok) return { success: false, error: stockValidate.message }
-
-        const stockCheck = deductStockForInvoice(
-          ctx.setProducts,
-          ctx.setStockLog,
-          ctx.products,
-          invoiceItems,
-          stockSideEffectMeta,
-        )
-        if (!stockCheck.ok) return { success: false, error: stockCheck.message }
+        if (!stockPreview.ok) return { success: false, error: stockPreview.message }
+        applyStockPreview(ctx.setProducts, ctx.setStockLog, stockPreview)
 
         const koiSalePreview = previewApplyInvoiceKoiSales({
           items,

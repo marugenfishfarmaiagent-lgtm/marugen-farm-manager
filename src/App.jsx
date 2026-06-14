@@ -9,7 +9,7 @@ import { loadProducts, saveProducts, loadStockLog, saveStockLog } from "./lib/fa
 import {
   clearLocalOnlyStorage, emptyPondData, resolveCloudKoiPayload, resolveCloudWhatsappGroups,
 } from "./lib/cloudData";
-import { deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem, validateStockForItems, previewDeductStockForInvoice, previewRestoreStockForInvoice } from "./lib/inventoryStock";
+import { applyStockPreview, deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem, validateStockForItems, previewDeductStockForInvoice, previewRestoreStockForInvoice } from "./lib/inventoryStock";
 import {
   adjustProductStockInList, buildStockLogEntry, getLowStockProducts, isProductOnActiveInvoice,
   normalizeProductRecord, parseStockQty, sameProductId, validateProductFields,
@@ -1982,18 +1982,12 @@ function InvoiceModule({
       addNotification({ type: "error", title: "Fish Stock", message: koiValidate.message });
       return;
     }
-    const stockValidate = validateStockForItems(products, invoiceItems);
-    if (!stockValidate.ok) {
-      setFormError(stockValidate.message);
-      addNotification({ type: "error", title: "Insufficient Stock", message: stockValidate.message });
+    if (!stockPreview.ok) {
+      setFormError(stockPreview.message);
+      addNotification({ type: "error", title: "Insufficient Stock", message: stockPreview.message });
       return;
     }
-    const stockCheck = deductStockForInvoice(setProducts, setStockLog, products, invoiceItems, stockSideEffectMeta);
-    if (!stockCheck.ok) {
-      setFormError(stockCheck.message);
-      addNotification({ type: "error", title: "Insufficient Stock", message: stockCheck.message });
-      return;
-    }
+    applyStockPreview(setProducts, setStockLog, stockPreview);
     onInventorySideEffect?.();
     const koiSalePreview = previewApplyInvoiceKoiSales({
       items: activeItems,
@@ -7820,7 +7814,7 @@ export default function App() {
     const hasStockLines = stockRestorePreview.hasStockLines;
 
     const applyCancelSideEffects = () => {
-      restoreStockForInvoice(setProducts, setStockLog, products, inv.items || [], stockSideEffectMeta);
+      applyStockPreview(setProducts, setStockLog, stockRestorePreview);
       if (!skipKoiRestore) {
         removedCustomerKoiIds = restoreInvoiceKoiSales(
           inv.items || [],

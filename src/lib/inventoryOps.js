@@ -7,6 +7,18 @@ export function genStockLogId() {
   return Date.now() + Math.floor(Math.random() * 10000)
 }
 
+/** Stable id for invoice-linked stock lines so preview + cloud flush share one row. */
+export function genInvoiceStockLogId(invoiceId, productId, kind = 'sell') {
+  const raw = `${invoiceId}|${productId}|${kind}`
+  let hash = 0
+  for (let i = 0; i < raw.length; i++) {
+    hash = Math.imul(31, hash) + raw.charCodeAt(i) | 0
+  }
+  const base = Math.abs(hash >>> 0)
+  const suffix = Math.abs(Number(productId) || 0) % 99999
+  return base * 100000 + suffix + 1
+}
+
 export function sameProductId(a, b) {
   if (a == null || b == null || a === '' || b === '') return false
   return String(a) === String(b)

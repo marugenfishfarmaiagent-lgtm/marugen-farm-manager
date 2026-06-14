@@ -1,6 +1,6 @@
 import { today } from '../data/constants'
 import { isStockTracked } from './productCatalog'
-import { genStockLogId, sameProductId } from './inventoryOps'
+import { genInvoiceStockLogId, genStockLogId, sameProductId } from './inventoryOps'
 import { touchUpdatedAt } from './syncMeta'
 
 export function serializeInvoiceItem(it) {
@@ -88,7 +88,9 @@ function buildLogEntries(items, products, { invoiceId, by, restore }) {
       const line = (items || []).find((it) => sameProductId(normalizeInvoiceItemRef(it).productId, productId))
       const price = +line?.price || Number(p?.price) || 0
       return touchUpdatedAt({
-        id: genStockLogId(),
+        id: invoiceId
+          ? genInvoiceStockLogId(invoiceId, productId, restore ? 'restock' : 'sell')
+          : genStockLogId(),
         productId: p?.id ?? productId,
         productName: line?.name || p?.name || 'Product',
         type: restore ? 'restock' : 'sell',
@@ -137,6 +139,16 @@ export function previewRestoreStockForInvoice(products, stockLog, items, { invoi
   const entries = buildLogEntries(linked, products, { invoiceId, by, restore: true })
   const nextStockLog = entries.length ? [...entries, ...stockLog] : stockLog
   return { ok: true, hasStockLines: true, nextProducts, nextStockLog }
+}
+
+/** Apply a stock preview without regenerating log entry ids. */
+export function applyStockPreview(setProducts, setStockLog, preview) {
+  if (!preview?.ok) return preview
+  if (preview.hasStockLines) {
+    setProducts(preview.nextProducts)
+    setStockLog(preview.nextStockLog)
+  }
+  return { ok: true }
 }
 
 /** Deduct inventory when an invoice with linked products is created. */
