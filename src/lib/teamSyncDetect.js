@@ -1,6 +1,7 @@
 import { applyCloudRetention } from './retention'
 import { resolveCloudKoiPayload, resolveCloudWhatsappGroups } from './cloudData'
 import { sanitizeInvoiceForSync } from './database'
+import { countTombstoneDivergences } from './tombstones'
 
 function recordTs(record) {
   if (!record?.updatedAt) return 0
@@ -133,6 +134,7 @@ function prepareCleanedCloudData(data) {
   return {
     ...cleaned,
     whatsappGroups: cleaned.whatsappGroups || whatsapp.groups,
+    syncTombstones: fetchedData.syncTombstones || [],
   }
 }
 
@@ -146,8 +148,19 @@ export function countIncomingTeamChanges(localState, fetchedData, peekDeletionsF
   if (!cleaned) return 0
 
   const peek = peekDeletionsFn || (() => [])
+  const tombstones = cleaned.syncTombstones || []
 
   let total = 0
+  total += countTombstoneDivergences(localState.invoices, tombstones, 'invoices')
+  total += countTombstoneDivergences(localState.koiFishList, tombstones, 'koi_fish')
+  total += countTombstoneDivergences(localState.customerKoiList, tombstones, 'customer_koi')
+  total += countTombstoneDivergences(localState.expenses, tombstones, 'expenses')
+  total += countTombstoneDivergences(localState.deliveries, tombstones, 'deliveries')
+  total += countTombstoneDivergences(localState.customers, tombstones, 'customers')
+  total += countTombstoneDivergences(localState.products, tombstones, 'products')
+  total += countTombstoneDivergences(localState.events, tombstones, 'events')
+  total += countTombstoneDivergences(localState.stockLog, tombstones, 'stock_activity')
+  total += countTombstoneDivergences(localState.whatsappGroups, tombstones, 'whatsapp_groups')
   total += countRemoteNewerRows(localState.customers, cleaned.customers, peek('customers'))
   total += countRemoteNewerRows(localState.products, cleaned.products, peek('products'))
   total += countRemoteNewerRows(localState.invoices, cleaned.invoices, peek('invoices'))

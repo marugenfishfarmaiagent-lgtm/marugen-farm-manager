@@ -324,7 +324,11 @@ async function apiCall(body) {
 
 async function syncCall(entity, data, { prune = false, force = false } = {}) {
   const deletedIds = peekDeletions(entity)
-  const payload = stampOutgoing(data)
+  const deletedSet = new Set(deletedIds.map(String))
+  const filtered = Array.isArray(data)
+    ? data.filter((row) => row?.id != null && !deletedSet.has(String(row.id)))
+    : data
+  const payload = stampOutgoing(filtered)
   const result = await apiCall({
     action: 'sync',
     entity,
@@ -384,6 +388,7 @@ export async function fetchAllData() {
     pondData: mapPondData(data.pondData, data.pondUpdatedAt),
     teamNotifications: data.teamNotifications || [],
     whatsappGroups: (data.whatsappGroups || []).map(mapWhatsappGroup),
+    syncTombstones: data.syncTombstones || [],
   }
 }
 

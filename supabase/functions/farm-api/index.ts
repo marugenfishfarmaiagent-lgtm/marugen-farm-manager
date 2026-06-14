@@ -41,6 +41,13 @@ import {
   rowsSemanticallyEqual,
 } from "../_shared/recordMerge.ts";
 import {
+  fetchSyncTombstones,
+  isBlockedByTombstone,
+  loadTombstoneMap,
+  purgeExpiredTombstones,
+  tableEntityName,
+} from "../_shared/tombstones.ts";
+import {
   adminClient,
   hasPermission,
   sessionTokenFrom,
@@ -282,10 +289,18 @@ async function upsertSync(
   const existingMap = new Map(
     (existingRows || []).map((r) => [normId(r[idField]), r as Record<string, unknown>]),
   );
+  const entity = tableEntityName(table);
+  const tombstoneMap = await loadTombstoneMap(db, entity, ids.map((id) => normId(id)));
 
   const toUpsert: Record<string, unknown>[] = [];
   for (const row of rows) {
     const id = normId(row[idField]);
+    const tombDeletedAt = tombstoneMap.get(id);
+    const clientRawForTomb = row.updated_at ?? row.updatedAt;
+    if (tombDeletedAt && isBlockedByTombstone(tombDeletedAt, clientRawForTomb)) {
+      continue;
+    }
+
     const existing = existingMap.get(id);
     let next = row;
     if (existing && mergeWithExisting) {
@@ -508,6 +523,7 @@ Deno.serve(async (req) => {
 
     if (body.action === "fetch") {
       await purgeExpiredCloudData(db);
+      await purgeExpiredTombstones(db);
 
       const teamNotifSince = new Date();
       teamNotifSince.setDate(teamNotifSince.getDate() - 30);
@@ -555,6 +571,7 @@ Deno.serve(async (req) => {
       const expenseRows = permittedRows(user, "expenses", expenses.data || []);
       const koiFishRows = permittedRows(user, "koifish", koiFish.data || []);
       const customerKoiRows = permittedRows(user, "customerkoi", customerKoi.data || []);
+      const syncTombstones = await fetchSyncTombstones(db);
 
       return J({
         users: mapUsers(usersPayload),
@@ -590,6 +607,7 @@ Deno.serve(async (req) => {
         pondUpdatedAt: hasPermission(user, "ponds") ? (pondRow.data as { updated_at?: string } | null)?.updated_at ?? null : null,
         whatsappGroups: permittedRows(user, "deliveries", whatsappGroups.data || []),
         teamNotifications: teamNotificationsRows.filter((row) => isTeamNotificationForUser(row, user)),
+        syncTombstones,
       });
     }
 

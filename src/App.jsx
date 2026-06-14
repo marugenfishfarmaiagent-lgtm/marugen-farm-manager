@@ -71,6 +71,7 @@ import {
 import { isSupabaseConfigured } from "./lib/supabase";
 import * as auth from "./lib/auth";
 import { markDeleted, clearAllDeletions, peekDeletions, unmarkDeleted } from "./lib/syncDeletions";
+import { applyServerTombstones, stripTombstonedRows } from "./lib/tombstones";
 import { writeCloudFirst, writeInventoryCloudFirst } from "./lib/cloudWrite";
 import { mergeRecords, mergePondData, mergeInvoices, mergeProducts, mergeKoiFish, mergeCustomerKoi, resolveInvoiceConflict, resolveExpenseConflict, resolveEventConflict } from "./lib/cloudMerge";
 import {
@@ -6826,6 +6827,19 @@ export default function App() {
       whatsappGroups: whatsapp.groups,
     });
 
+    const syncTombstones = data.syncTombstones || [];
+    applyServerTombstones(syncTombstones);
+    cleaned.invoices = stripTombstonedRows(cleaned.invoices, "invoices", syncTombstones);
+    cleaned.customers = stripTombstonedRows(cleaned.customers, "customers", syncTombstones);
+    cleaned.products = stripTombstonedRows(cleaned.products, "products", syncTombstones);
+    cleaned.expenses = stripTombstonedRows(cleaned.expenses, "expenses", syncTombstones);
+    cleaned.deliveries = stripTombstonedRows(cleaned.deliveries, "deliveries", syncTombstones);
+    cleaned.events = stripTombstonedRows(cleaned.events, "events", syncTombstones);
+    cleaned.stockLog = stripTombstonedRows(cleaned.stockLog, "stock_activity", syncTombstones);
+    cleaned.koiFishList = stripTombstonedRows(cleaned.koiFishList, "koi_fish", syncTombstones);
+    cleaned.customerKoiList = stripTombstonedRows(cleaned.customerKoiList, "customer_koi", syncTombstones);
+    cleaned.whatsappGroups = stripTombstonedRows(cleaned.whatsappGroups, "whatsapp_groups", syncTombstones);
+
     const merge = mode === "merge";
     const cloudUsers = cleaned.users || data.users || [];
     setUsers(cloudUsers);
@@ -6864,7 +6878,7 @@ export default function App() {
       setCustomers((prev) => mergeRecords(prev, cleaned.customers, peekDeletions("customers")));
       setProducts((prev) => mergeProducts(prev, cleaned.products, peekDeletions("products")));
       const mergedInvoices = applyInvoicePins(mergeInvoices(
-        syncStateRef.current.invoices ?? [],
+        stripTombstonedRows(syncStateRef.current.invoices ?? [], "invoices", syncTombstones),
         cleaned.invoices,
         peekDeletions("invoices"),
       ));
@@ -6892,7 +6906,11 @@ export default function App() {
       }
       setStockLog((prev) => mergeRecords(prev, cleaned.stockLog, peekDeletions("stock_activity")));
       setKoiFishList(reconcileKoiSoldFromInvoices(
-        mergeKoiFish(syncStateRef.current.koiFishList ?? [], cleaned.koiFishList, peekDeletions("koi_fish")),
+        mergeKoiFish(
+          stripTombstonedRows(syncStateRef.current.koiFishList ?? [], "koi_fish", syncTombstones),
+          stripTombstonedRows(cleaned.koiFishList, "koi_fish", syncTombstones),
+          peekDeletions("koi_fish"),
+        ),
         mergedInvoices,
       ));
       setCustomerKoiList((prev) => mergeCustomerKoi(prev, cleaned.customerKoiList, peekDeletions("customer_koi")));
