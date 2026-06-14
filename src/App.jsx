@@ -7749,9 +7749,21 @@ export default function App() {
     }
   }, [currentUser, handleSyncFailure, touchLastSync, ensureCloudSyncReady, resetSyncHealth]);
 
-  const cancelInvoiceCloud = useCallback(async (inv) => {
+  const cancelInvoiceCloud = useCallback(async (inv, options = {}) => {
+    const { skipKoiRestore = false, fromRefund = false, refundReason = "" } = options;
     const invId = String(inv.id);
-    const optimistic = touchUpdatedAt(db.sanitizeInvoiceForSync({ ...inv, status: "cancelled" }));
+    const wasPaid = getInvoiceStatus(inv) === "paid";
+    const creditNote = fromRefund
+      ? `\nCredit note / koi refund (${today()}): ${refundReason?.trim() || "Koi sale refunded"}`
+      : "";
+    const optimistic = touchUpdatedAt(db.sanitizeInvoiceForSync({
+      ...inv,
+      status: "cancelled",
+      notes: `${inv.notes || ""}${creditNote}`.trim(),
+      booked: false,
+      bookedAt: null,
+      bookedBy: "",
+    }));
 
     const timerKey = "invoices:Invoices";
     if (syncTimersRef.current[timerKey]) {
@@ -7778,7 +7790,7 @@ export default function App() {
       koiFishList,
       customerKoiList,
     );
-    const hasKoiCancelLines = (inv.items || []).some((it) => it.koiId && !it.koiAlreadySold);
+    const hasKoiCancelLines = !skipKoiRestore && (inv.items || []).some((it) => it.koiId && !it.koiAlreadySold);
     const stockSideEffectMeta = { invoiceId: invId, by: currentUser?.name || "Staff" };
     const stockRestorePreview = previewRestoreStockForInvoice(
       products,
@@ -7790,12 +7802,14 @@ export default function App() {
 
     const applyCancelSideEffects = () => {
       restoreStockForInvoice(setProducts, setStockLog, products, inv.items || [], stockSideEffectMeta);
-      removedCustomerKoiIds = restoreInvoiceKoiSales(
-        inv.items || [],
-        setKoiFishList,
-        setCustomerKoiList,
-        { koiList: koiFishList, customerKoiList },
-      );
+      if (!skipKoiRestore) {
+        removedCustomerKoiIds = restoreInvoiceKoiSales(
+          inv.items || [],
+          setKoiFishList,
+          setCustomerKoiList,
+          { koiList: koiFishList, customerKoiList },
+        );
+      }
       setDeliveries((prev) => prev.map((d) => {
         if (String(d.invoiceId || "") !== invId) return d;
         if (!["scheduled", "transit"].includes(d.status)) return d;
@@ -7868,6 +7882,9 @@ export default function App() {
     applyCancelSideEffects();
 
     if (!isSupabaseConfigured) {
+      if (fromRefund && wasPaid && inv.customerId != null && inv.customerId !== "") {
+        setCustomers((prev) => applyCustomerPaidDelta(prev, inv.customerId, -(Number(inv.total) || 0)));
+      }
       return;
     }
     if (!auth.hasCloudSession() || !currentUser) {
@@ -7875,10 +7892,21 @@ export default function App() {
       revertCancelOptimistic();
       throw new Error("Cloud sync is not ready.");
     }
-    if (!hasPermission(currentUser, "invoices") || !hasPermission(currentUser, "delete")) {
+    if (!hasPermission(currentUser, "invoices")) {
       await revertCancelSideEffects();
       revertCancelOptimistic();
-      throw new Error("Permission denied.");
+      throw new Error("Permission denied (invoices).");
+    }
+    if (fromRefund) {
+      if (!canRefundSales(currentUser)) {
+        await revertCancelSideEffects();
+        revertCancelOptimistic();
+        throw new Error("Permission denied (refund).");
+      }
+    } else if (!hasPermission(currentUser, "delete")) {
+      await revertCancelSideEffects();
+      revertCancelOptimistic();
+      throw new Error("Permission denied (delete).");
     }
     if (!(await ensureCloudSyncReady())) {
       await revertCancelSideEffects();
@@ -7911,7 +7939,11 @@ export default function App() {
           await flushCustomerKoiSync(koiRestorePreview.nextCustomerKoiList);
         }
       }
-      const confirmed = await db.cancelInvoiceCloud(invId);
+      const { invoice: confirmed, customer: confirmedCustomer } = await db.cancelInvoiceCloud(invId, {
+        refund: fromRefund,
+        skipKoiRestore,
+        refundReason,
+      });
       const confirmedRow = touchUpdatedAt(db.sanitizeInvoiceForSync(confirmed));
       const localRow = syncStateRef.current.invoices.find((i) => String(i.id) === invId);
       const mergedRow = localRow ? resolveInvoiceConflict(localRow, confirmedRow) : confirmedRow;
@@ -7921,6 +7953,13 @@ export default function App() {
       syncStateRef.current = { ...syncStateRef.current, invoices: finalInvoices };
       releaseInvoicePinAfterConfirm(invId, confirmedRow);
       setInvoices(applyInvoicePins(finalInvoices));
+      if (confirmedCustomer) {
+        setCustomers((prev) => prev.map((c) => (
+          String(c.id) === String(confirmedCustomer.id) ? confirmedCustomer : c
+        )));
+      } else if (fromRefund && wasPaid && inv.customerId != null && inv.customerId !== "") {
+        setCustomers((prev) => applyCustomerPaidDelta(prev, inv.customerId, -(Number(inv.total) || 0)));
+      }
       const nextDeliveries = (syncStateRef.current.deliveries ?? []).map((d) => {
         if (String(d.invoiceId || "") !== invId) return d;
         if (!["scheduled", "transit"].includes(d.status)) return d;
@@ -8465,10 +8504,11 @@ export default function App() {
     }
 
     const linkedInvoices = findLinkedKoiInvoices(invoices, koi.id).filter(
-      (inv) => !["cancelled", "paid"].includes(getInvoiceStatus(inv)),
+      (inv) => getInvoiceStatus(inv) !== "cancelled",
     );
 
     let koiSynced = false;
+    let cancelledInvoiceIds = [];
     try {
       if (nextKoiList !== koiFishList) {
         await flushKoiFishSync(nextKoiList);
@@ -8479,7 +8519,34 @@ export default function App() {
         setKoiFishList(nextKoiList);
       }
       setCustomerKoiList(nextCustomerKoi);
+
+      for (const inv of linkedInvoices) {
+        await cancelInvoiceCloud(inv, {
+          skipKoiRestore: true,
+          fromRefund: true,
+          refundReason: reason,
+        });
+        cancelledInvoiceIds.push(inv.id);
+      }
     } catch (err) {
+      for (const invId of [...cancelledInvoiceIds].reverse()) {
+        const inv = invoices.find((i) => String(i.id) === String(invId));
+        if (!inv) continue;
+        try {
+          await applyInvoiceKoiSales({
+            items: inv.items || [],
+            koiList: nextKoiList,
+            setKoiList: setKoiFishList,
+            customerId: inv.customerId,
+            customers,
+            soldDate: inv.date || today(),
+            onKoiSold: (...args) => handleKoiSoldRef.current?.(...args),
+            addNotification,
+          });
+        } catch {
+          /* best-effort */
+        }
+      }
       linkedCustomerKoi.forEach((r) => unmarkDeleted("customer_koi", r.id));
       setCustomerKoiList(snapshotCustomerKoi);
       if (nextKoiList !== koiFishList) {
@@ -8507,16 +8574,16 @@ export default function App() {
         ? `${koi.name || koi.variety} (${koi.id}) returned to stock.`
         : `Removed Customer Koi record for ${koi.name || koi.variety} (${koi.id}). Fish stays in farm stock.`,
     });
-    if (linkedInvoices.length) {
+    if (cancelledInvoiceIds.length) {
       addNotification({
-        type: "warning",
-        title: "Check Linked Invoices",
-        message: `Cancel or adjust: ${linkedInvoices.map((inv) => inv.id).join(", ")}`,
+        type: "info",
+        title: "Linked Invoices Cancelled",
+        message: `Credit note applied — cancelled: ${cancelledInvoiceIds.join(", ")}`,
       });
     }
   }, [
-    invoices, addNotification, currentUser, customerKoiList, koiFishList,
-    flushCustomerKoiSync, flushKoiFishSync,
+    invoices, addNotification, currentUser, customerKoiList, koiFishList, customers,
+    flushCustomerKoiSync, flushKoiFishSync, cancelInvoiceCloud,
   ]);
 
   const clearInvoiceOpenDraft = useCallback(() => setInvoiceOpenDraft(null), []);

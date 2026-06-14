@@ -446,10 +446,19 @@ export async function markInvoicePaidCloud(id) {
 }
 
 /** Atomically cancel one invoice on the server (avoids full-list sync timestamp races). */
-export async function cancelInvoiceCloud(id) {
+export async function cancelInvoiceCloud(id, options = {}) {
   if (!isSupabaseConfigured) throw new Error('Cloud sync is not configured')
-  const data = await apiCall({ action: 'cancel_invoice', id: String(id) })
-  return mapInvoice(data.invoice)
+  const data = await apiCall({
+    action: 'cancel_invoice',
+    id: String(id),
+    refund: Boolean(options.refund),
+    skipKoiRestore: Boolean(options.skipKoiRestore),
+    refundReason: options.refundReason || '',
+  })
+  return {
+    invoice: mapInvoice(data.invoice),
+    customer: data.customer ? mapCustomer(data.customer) : null,
+  }
 }
 
 /** Atomically mark one invoice in/out of accounts (avoids full-list sync timestamp races). */

@@ -813,10 +813,17 @@ Deno.serve(async (req) => {
     }
 
     if (body.action === "cancel_invoice") {
+      const refundCancel = Boolean(body.refund);
+      const skipKoiRestore = Boolean(body.skipKoiRestore);
+      const refundReason = String(body.refundReason ?? body.refund_reason ?? "").trim();
       if (!hasPermission(user, "invoices")) {
         return J({ error: "Permission denied (invoices)" }, 403);
       }
-      if (!hasPermission(user, "delete")) {
+      if (refundCancel) {
+        if (!hasPermission(user, "refund")) {
+          return J({ error: "Permission denied (refund)" }, 403);
+        }
+      } else if (!hasPermission(user, "delete")) {
         return J({ error: "Permission denied (delete)" }, 403);
       }
       const id = String(body.id || "").trim();
@@ -825,20 +832,58 @@ Deno.serve(async (req) => {
       const { data: existing, error: fetchErr } = await db.from("invoices").select("*").eq("id", id).maybeSingle();
       if (fetchErr) throw fetchErr;
       if (!existing) return J({ error: "Invoice not found" }, 404);
-      if (existing.status === "cancelled") return J({ ok: true, invoice: existing });
-      if (existing.status === "paid") {
+      if (existing.status === "cancelled") return J({ ok: true, invoice: existing, customer: null });
+      if (existing.status === "paid" && !refundCancel) {
         return J({ error: "Paid invoices cannot be cancelled" }, 400);
       }
 
       const now = new Date().toISOString();
+      const creditNote = refundCancel
+        ? `\nCredit note / koi refund (${nullableDate(now) || now.slice(0, 10)}): ${refundReason || "Koi sale refunded"}`
+        : "";
+      const nextNotes = `${String(existing.notes || "").trim()}${creditNote}`.trim();
       const { data, error } = await db.from("invoices")
-        .update({ status: "cancelled", updated_at: now })
+        .update({
+          status: "cancelled",
+          notes: nextNotes,
+          booked: false,
+          booked_at: null,
+          booked_by: "",
+          updated_at: now,
+        })
         .eq("id", id)
         .select("*")
         .single();
       if (error) throw error;
-      await restoreInvoiceKoiSalesOnServer(db, existing.items || [], now);
-      return J({ ok: true, invoice: data });
+
+      let customerRow: Record<string, unknown> | null = null;
+      if (existing.status === "paid" && existing.customer_id != null) {
+        const { data: cust, error: custErr } = await db.from("customers")
+          .select("*")
+          .eq("id", existing.customer_id)
+          .maybeSingle();
+        if (custErr) throw custErr;
+        if (cust) {
+          const paidTotal = Number(existing.total) || 0;
+          const totalSpent = Math.max(0, (Number(cust.total_spent) || 0) - paidTotal);
+          const { data: updatedCust, error: updErr } = await db.from("customers")
+            .update({
+              total_spent: totalSpent,
+              tier: calcCustomerTier(totalSpent),
+              updated_at: now,
+            })
+            .eq("id", existing.customer_id)
+            .select("*")
+            .single();
+          if (updErr) throw updErr;
+          customerRow = updatedCust;
+        }
+      }
+
+      if (!skipKoiRestore) {
+        await restoreInvoiceKoiSalesOnServer(db, existing.items || [], now);
+      }
+      return J({ ok: true, invoice: data, customer: customerRow });
     }
 
     if (body.action === "mark_invoice_booked") {

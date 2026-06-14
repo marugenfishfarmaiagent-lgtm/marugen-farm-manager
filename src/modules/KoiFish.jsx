@@ -207,7 +207,7 @@ export default function KoiFish({
 
   const refundLinkedInvoices = refundKoi
     ? findLinkedKoiInvoices(invoices, refundKoi.id).filter(
-      (inv) => !['cancelled', 'paid'].includes(getInvoiceStatus(inv)),
+      (inv) => getInvoiceStatus(inv) !== 'cancelled',
     )
     : []
 
@@ -913,9 +913,9 @@ export default function KoiFish({
             </p>
             {refundLinkedInvoices.length > 0 && (
               <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-amber-200 text-sm">
-                <p className="font-semibold mb-1">Linked invoices still open</p>
+                <p className="font-semibold mb-1">Linked invoices will be cancelled</p>
                 <p className="text-xs text-amber-200/90">
-                  Cancel or adjust manually: {refundLinkedInvoices.map((inv) => inv.id).join(', ')}
+                  Credit note — these invoices will be voided and inventory restored: {refundLinkedInvoices.map((inv) => inv.id).join(', ')}
                 </p>
               </div>
             )}

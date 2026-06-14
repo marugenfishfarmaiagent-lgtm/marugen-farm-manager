@@ -24,14 +24,14 @@ export function customerSpentForDashboard(customer, invoices = []) {
   return Number(customer?.totalSpent) || 0
 }
 
-/** Apply paid-invoice total to a registered customer's totalSpent + tier. */
+/** Apply paid-invoice total delta to a registered customer's totalSpent + tier (negative = credit note). */
 export function applyCustomerPaidDelta(customers, customerId, paidTotal) {
   if (customerId == null || customerId === '') return customers
   const delta = Number(paidTotal) || 0
-  if (delta <= 0) return customers
+  if (delta === 0) return customers
   return customers.map((c) => {
     if (!sameCustomerId(c.id, customerId)) return c
-    const totalSpent = (Number(c.totalSpent) || 0) + delta
+    const totalSpent = Math.max(0, (Number(c.totalSpent) || 0) + delta)
     return touchUpdatedAt({ ...c, totalSpent, tier: calcCustomerTier(totalSpent) })
   })
 }
