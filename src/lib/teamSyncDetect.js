@@ -8,6 +8,11 @@ function recordTs(record) {
   return Number.isFinite(t) ? t : 0
 }
 
+function isTerminalInvoiceStatus(status) {
+  const s = String(status || 'pending').toLowerCase()
+  return s === 'paid' || s === 'cancelled'
+}
+
 /** Invoice accounts marks can diverge even when local updatedAt is newer (e.g. discount edit). */
 function countInvoiceBookedDivergences(localList, remoteList, pendingDeleteIds) {
   const delSet = new Set((pendingDeleteIds || []).map(String))
@@ -26,6 +31,63 @@ function countInvoiceBookedDivergences(localList, remoteList, pendingDeleteIds) 
     const rbt = remote.bookedAt ? String(remote.bookedAt) : ''
     const lbt = local.bookedAt ? String(local.bookedAt) : ''
     if (rbt && rbt !== lbt) count += 1
+  }
+
+  return count
+}
+
+/** Paid/cancelled on server but stale pending on device — pull even if local updatedAt looks newer. */
+function countInvoiceStatusDivergences(localList, remoteList, pendingDeleteIds) {
+  const delSet = new Set((pendingDeleteIds || []).map(String))
+  const localMap = new Map((localList || []).map((r) => [String(r.id), r]))
+  let count = 0
+
+  for (const remote of remoteList || []) {
+    const id = String(remote.id)
+    if (delSet.has(id)) continue
+    const local = localMap.get(id)
+    if (!local) continue
+    const rs = String(remote.status || 'pending').toLowerCase()
+    const ls = String(local.status || 'pending').toLowerCase()
+    if (rs === ls) continue
+    if (isTerminalInvoiceStatus(rs) || isTerminalInvoiceStatus(ls)) count += 1
+  }
+
+  return count
+}
+
+function countExpenseBookedDivergences(localList, remoteList, pendingDeleteIds) {
+  const delSet = new Set((pendingDeleteIds || []).map(String))
+  const localMap = new Map((localList || []).map((r) => [String(r.id), r]))
+  let count = 0
+
+  for (const remote of remoteList || []) {
+    const id = String(remote.id)
+    if (delSet.has(id)) continue
+    const local = localMap.get(id)
+    if (!local) continue
+    if (Boolean(remote.booked) !== Boolean(local.booked)) count += 1
+  }
+
+  return count
+}
+
+const TERMINAL_KOI_STATUSES = new Set(['sold', 'deceased'])
+
+function countKoiStatusDivergences(localList, remoteList, pendingDeleteIds) {
+  const delSet = new Set((pendingDeleteIds || []).map(String))
+  const localMap = new Map((localList || []).map((r) => [String(r.id), r]))
+  let count = 0
+
+  for (const remote of remoteList || []) {
+    const id = String(remote.id)
+    if (delSet.has(id)) continue
+    const local = localMap.get(id)
+    if (!local) continue
+    const rs = String(remote.status || 'available').toLowerCase()
+    const ls = String(local.status || 'available').toLowerCase()
+    if (rs === ls) continue
+    if (TERMINAL_KOI_STATUSES.has(rs) || TERMINAL_KOI_STATUSES.has(ls)) count += 1
   }
 
   return count
@@ -90,11 +152,14 @@ export function countIncomingTeamChanges(localState, fetchedData, peekDeletionsF
   total += countRemoteNewerRows(localState.products, cleaned.products, peek('products'))
   total += countRemoteNewerRows(localState.invoices, cleaned.invoices, peek('invoices'))
   total += countInvoiceBookedDivergences(localState.invoices, cleaned.invoices, peek('invoices'))
+  total += countInvoiceStatusDivergences(localState.invoices, cleaned.invoices, peek('invoices'))
   total += countRemoteNewerRows(localState.expenses, cleaned.expenses, peek('expenses'))
+  total += countExpenseBookedDivergences(localState.expenses, cleaned.expenses, peek('expenses'))
   total += countRemoteNewerRows(localState.deliveries, cleaned.deliveries, peek('deliveries'))
   total += countRemoteNewerRows(localState.events, cleaned.events, peek('events'))
   total += countRemoteNewerRows(localState.stockLog, cleaned.stockLog, peek('stock_activity'))
   total += countRemoteNewerRows(localState.koiFishList, cleaned.koiFishList, peek('koi_fish'))
+  total += countKoiStatusDivergences(localState.koiFishList, cleaned.koiFishList, peek('koi_fish'))
   total += countRemoteNewerRows(localState.customerKoiList, cleaned.customerKoiList, peek('customer_koi'))
   total += countRemoteNewerRows(localState.whatsappGroups, cleaned.whatsappGroups, peek('whatsapp_groups'))
 

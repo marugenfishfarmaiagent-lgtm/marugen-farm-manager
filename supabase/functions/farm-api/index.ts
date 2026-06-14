@@ -35,6 +35,12 @@ import { deleteInvoicePdfs } from "../_shared/invoiceStorage.ts";
 import { hashPin, verifyPin } from "../_shared/pin.ts";
 import { purgeExpiredCloudData } from "../_shared/retention.ts";
 import {
+  mergeExpenseDbRow,
+  mergeInvoiceDbRow,
+  mergeKoiDbRow,
+  rowsSemanticallyEqual,
+} from "../_shared/recordMerge.ts";
+import {
   adminClient,
   hasPermission,
   sessionTokenFrom,
@@ -245,11 +251,13 @@ async function upsertSync(
     deletedIds?: unknown[];
     beforeDelete?: (ids: unknown[]) => Promise<void>;
     force?: boolean;
+    mergeWithExisting?: (existing: Record<string, unknown>, incoming: Record<string, unknown>) => Record<string, unknown>;
+    mergeCompareKeys?: string[];
   } = {},
 ) {
   const db = adminClient();
   const now = new Date().toISOString();
-  const { prune = false, deletedIds = [], beforeDelete, force = false } = options;
+  const { prune = false, deletedIds = [], beforeDelete, force = false, mergeWithExisting, mergeCompareKeys } = options;
 
   if (deletedIds.length) {
     if (beforeDelete) await beforeDelete(deletedIds);
@@ -267,27 +275,55 @@ async function upsertSync(
   }
 
   const ids = rows.map((r) => r[idField]).filter((id) => id != null);
+  const selectFields = mergeWithExisting ? "*" : `${idField}, updated_at`;
   const { data: existingRows } = ids.length
-    ? await db.from(table).select(`${idField}, updated_at`).in(idField, ids)
+    ? await db.from(table).select(selectFields).in(idField, ids)
     : { data: [] as Record<string, unknown>[] };
   const existingMap = new Map(
-    (existingRows || []).map((r) => [normId(r[idField]), r.updated_at as string | null]),
+    (existingRows || []).map((r) => [normId(r[idField]), r as Record<string, unknown>]),
   );
 
-  const toUpsert = rows.filter((row) => {
-    if (force) return true;
-    const serverTs = existingMap.get(normId(row[idField]));
-    if (!serverTs) return true;
-    const clientRaw = row.updated_at ?? row.updatedAt;
-    if (!clientRaw) return false;
-    const clientTs = new Date(String(clientRaw)).getTime();
-    const serverTime = new Date(String(serverTs)).getTime();
-    return Number.isFinite(clientTs) && clientTs >= serverTime;
-  }).map((row) => {
-    const next = { ...row, updated_at: now };
-    delete next.updatedAt;
-    return next;
-  });
+  const toUpsert: Record<string, unknown>[] = [];
+  for (const row of rows) {
+    const id = normId(row[idField]);
+    const existing = existingMap.get(id);
+    let next = row;
+    if (existing && mergeWithExisting) {
+      next = mergeWithExisting(existing, row);
+    }
+
+    if (force || !existing) {
+      const merged = { ...next, updated_at: now };
+      delete merged.updatedAt;
+      toUpsert.push(merged);
+      continue;
+    }
+
+    const serverTs = existing.updated_at as string | null;
+    const clientRaw = next.updated_at ?? next.updatedAt;
+    const clientTs = clientRaw ? new Date(String(clientRaw)).getTime() : NaN;
+    const serverTime = serverTs ? new Date(String(serverTs)).getTime() : 0;
+
+    if (mergeWithExisting) {
+      const compareKeys = mergeCompareKeys || [];
+      const unchanged = compareKeys.length
+        ? rowsSemanticallyEqual(existing, next, compareKeys)
+        : false;
+      if (unchanged) continue;
+      if (!Number.isFinite(clientTs) && serverTs) continue;
+      const mergedRow = { ...next, updated_at: now };
+      delete mergedRow.updatedAt;
+      toUpsert.push(mergedRow);
+      continue;
+    }
+
+    if (!clientRaw) continue;
+    if (Number.isFinite(clientTs) && clientTs >= serverTime) {
+      const merged = { ...next, updated_at: now };
+      delete merged.updatedAt;
+      toUpsert.push(merged);
+    }
+  }
 
   if (toUpsert.length) {
     const { error } = await db.from(table).upsert(toUpsert, { onConflict: idField });
@@ -1115,6 +1151,11 @@ Deno.serve(async (req) => {
           created_by: i.createdBy ?? "",
         }, i)), "id", {
           ...syncOpts,
+          mergeWithExisting: mergeInvoiceDbRow,
+          mergeCompareKeys: [
+            "status", "booked", "booked_at", "booked_by", "total", "customer_id",
+            "customer_name", "notes", "discount_type", "discount_value", "shipping",
+          ],
           beforeDelete: async (ids) => { await deleteInvoicePdfs(db, ids); },
         });
       } else if (entity === "expenses") {
@@ -1168,6 +1209,8 @@ Deno.serve(async (req) => {
         await upsertSync("expenses", rows, "id", {
           ...syncOpts,
           deletedIds: [],
+          mergeWithExisting: mergeExpenseDbRow,
+          mergeCompareKeys: ["booked", "booked_at", "booked_by", "amount", "category", "date", "note"],
           beforeDelete: async (ids) => { await deleteExpenseReceiptImages(db, ids); },
         });
       } else if (entity === "deliveries") {
@@ -1309,6 +1352,11 @@ Deno.serve(async (req) => {
         await upsertSync("koi_fish", rows, "id", {
           ...syncOpts,
           deletedIds: [],
+          mergeWithExisting: mergeKoiDbRow,
+          mergeCompareKeys: [
+            "status", "sold_to", "sold_date", "sold_price", "sell_disposition", "keep_pond_name",
+            "pond_name", "price", "name", "variety",
+          ],
           beforeDelete: async (ids) => { await deleteKoiFishImages(db, ids); },
         });
       } else if (entity === "customer_koi") {

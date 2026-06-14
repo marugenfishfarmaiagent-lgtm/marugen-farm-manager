@@ -7740,6 +7740,7 @@ export default function App() {
       }
       resetSyncHealth();
       touchLastSync();
+      explicitFlushAtRef.current.invoices = Date.now();
     } catch (err) {
       revertPaidOptimistic();
       handleSyncFailure(err);
@@ -7977,6 +7978,8 @@ export default function App() {
       }
       resetSyncHealth();
       touchLastSync();
+      explicitFlushAtRef.current.invoices = Date.now();
+      if (hasKoiCancelLines) explicitFlushAtRef.current.koifish = Date.now();
     } catch (err) {
       revertCancelOptimistic();
       await revertCancelSideEffects();
@@ -8077,6 +8080,8 @@ export default function App() {
       }
       resetSyncHealth();
       touchLastSync();
+      explicitFlushAtRef.current.invoices = Date.now();
+      if (koiPayload) explicitFlushAtRef.current.koifish = Date.now();
     } catch (err) {
       revertCreateOptimistic();
       try {
@@ -8114,7 +8119,7 @@ export default function App() {
     syncTimersRef.current[key] = setTimeout(() => {
       delete syncTimersRef.current[key];
       const flushKey = perm === "calendar" ? "calendar" : perm;
-      if (Date.now() - (explicitFlushAtRef.current[flushKey] || 0) < 3000) return;
+      if (Date.now() - (explicitFlushAtRef.current[flushKey] || 0) < 12000) return;
       syncInFlightRef.current += 1;
       (async () => {
         const ready = await ensureCloudSyncReady();
@@ -8580,7 +8585,9 @@ export default function App() {
         title: "Linked Invoices Cancelled",
         message: `Credit note applied — cancelled: ${cancelledInvoiceIds.join(", ")}`,
       });
+      explicitFlushAtRef.current.invoices = Date.now();
     }
+    explicitFlushAtRef.current.koifish = Date.now();
   }, [
     invoices, addNotification, currentUser, customerKoiList, koiFishList, customers,
     flushCustomerKoiSync, flushKoiFishSync, cancelInvoiceCloud,
