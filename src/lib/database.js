@@ -552,7 +552,8 @@ export async function syncKoiFish(list, options) {
   if (!isSupabaseConfigured) return
   const payload = (list || []).map((k) => {
     const status = String(k.status || 'available').toLowerCase()
-    const soldTo = normalizeBigintId(k.soldTo)
+    const rawSoldTo = k.soldTo ?? k.sold_to
+    const soldTo = normalizeBigintId(rawSoldTo) ?? normalizeBigintId(k.soldTo)
     return {
       ...k,
       status,

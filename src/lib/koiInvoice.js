@@ -1,4 +1,4 @@
-import { KOI_STATUS, formatKoiSize, today } from '../data/constants'
+import { KOI_STATUS, formatKoiSize, getInvoiceStatus, today } from '../data/constants'
 import { buildSoldKoiPatch, canSellKoiStatus, hasActiveKeepAtFarmSale, sameKoiId } from './koiOps'
 import { touchUpdatedAt } from './syncMeta'
 import { markDeleted } from './syncDeletions'
@@ -193,6 +193,41 @@ export function findLinkedKoiInvoices(invoices, koiId) {
   return (invoices || []).filter((inv) =>
     (inv.items || []).some((it) => sameKoiId(it.koiId, koiId)),
   )
+}
+
+/** Ensure fish on active invoices show as sold/keep-at-farm after cloud pull or cross-device sync. */
+export function reconcileKoiSoldFromInvoices(koiList, invoices) {
+  if (!Array.isArray(koiList) || !Array.isArray(invoices) || !invoices.length) return koiList
+
+  const saleByKoiId = new Map()
+  for (const inv of invoices) {
+    if (getInvoiceStatus(inv) === 'cancelled') continue
+    const customerId = inv.customerId
+    if (customerId == null || customerId === '') continue
+    for (const raw of inv.items || []) {
+      if (!raw || typeof raw !== 'object') continue
+      const koiId = raw.koiId ?? raw.koi_id
+      if (!koiId || raw.koiAlreadySold) continue
+      saleByKoiId.set(String(koiId), {
+        customerId,
+        soldPrice: Number(raw.price) || 0,
+        soldDate: inv.date || today(),
+        disposition: raw.koiDisposition || 'taken',
+        keepPondName: raw.keepPondName,
+      })
+    }
+  }
+  if (!saleByKoiId.size) return koiList
+
+  return koiList.map((k) => {
+    const sale = saleByKoiId.get(String(k.id))
+    if (!sale) return k
+    if (k.status === KOI_STATUS.DECEASED) return k
+    const keep = sale.disposition === 'keep'
+    if (keep && k.soldTo && k.sellDisposition === 'keep') return k
+    if (!keep && k.status === KOI_STATUS.SOLD && k.soldTo) return k
+    return buildSoldKoiPatch(k, sale)
+  })
 }
 
 export function buildKoiRefundUpdate(koi, reason = '') {

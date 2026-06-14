@@ -114,6 +114,79 @@ function sanitizeInvoiceItems(items: unknown): unknown[] {
   });
 }
 
+async function applyInvoiceKoiSalesOnServer(
+  db: ReturnType<typeof adminClient>,
+  items: unknown[],
+  customerId: number | null,
+  invoiceDate: string | null,
+  now: string,
+) {
+  if (!customerId) return;
+  for (const raw of sanitizeInvoiceItems(items)) {
+    if (!raw || typeof raw !== "object") continue;
+    const it = raw as Record<string, unknown>;
+    const koiId = String(it.koiId ?? "").trim();
+    if (!koiId || it.koiAlreadySold) continue;
+    const disposition = String(it.koiDisposition ?? "taken").toLowerCase();
+    const soldPrice = nullableNumeric(it.price);
+    const { data: existing } = await db.from("koi_fish").select("id, status, pond_name").eq("id", koiId).maybeSingle();
+    if (!existing || existing.status === "deceased") continue;
+    if (existing.status === "sold" && disposition !== "keep") continue;
+
+    if (disposition === "keep") {
+      const keepPond = String(it.keepPondName ?? existing.pond_name ?? "").trim();
+      const { error } = await db.from("koi_fish").update({
+        status: "available",
+        sold_to: customerId,
+        sold_date: invoiceDate || nullableDate(now),
+        sold_price: soldPrice,
+        sell_disposition: "keep",
+        keep_pond_name: keepPond || existing.pond_name,
+        pond_name: keepPond || existing.pond_name,
+        updated_at: now,
+      }).eq("id", koiId);
+      if (error) throw error;
+      continue;
+    }
+
+    const { error } = await db.from("koi_fish").update({
+      status: "sold",
+      sold_to: customerId,
+      sold_date: invoiceDate || nullableDate(now),
+      sold_price: soldPrice,
+      sell_disposition: "taken",
+      keep_pond_name: null,
+      updated_at: now,
+    }).eq("id", koiId);
+    if (error) throw error;
+  }
+}
+
+async function restoreInvoiceKoiSalesOnServer(
+  db: ReturnType<typeof adminClient>,
+  items: unknown[],
+  now: string,
+) {
+  for (const raw of sanitizeInvoiceItems(items)) {
+    if (!raw || typeof raw !== "object") continue;
+    const it = raw as Record<string, unknown>;
+    const koiId = String(it.koiId ?? "").trim();
+    if (!koiId || it.koiAlreadySold) continue;
+    const { data: existing } = await db.from("koi_fish").select("id, status").eq("id", koiId).maybeSingle();
+    if (!existing || existing.status === "deceased") continue;
+    const { error } = await db.from("koi_fish").update({
+      status: "available",
+      sold_to: null,
+      sold_date: null,
+      sold_price: null,
+      sell_disposition: null,
+      keep_pond_name: null,
+      updated_at: now,
+    }).eq("id", koiId);
+    if (error) throw error;
+  }
+}
+
 const ENTITY_PERMS: Record<string, string> = {
   users: "users",
   customers: "customers",
@@ -764,6 +837,7 @@ Deno.serve(async (req) => {
         .select("*")
         .single();
       if (error) throw error;
+      await restoreInvoiceKoiSalesOnServer(db, existing.items || [], now);
       return J({ ok: true, invoice: data });
     }
 
@@ -843,6 +917,7 @@ Deno.serve(async (req) => {
 
       const { data, error } = await db.from("invoices").upsert(row, { onConflict: "id" }).select("*").single();
       if (error) throw error;
+      await applyInvoiceKoiSalesOnServer(db, items, invoiceCustomerId(incoming), nullableDate(row.date), now);
       return J({ ok: true, invoice: data });
     }
 

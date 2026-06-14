@@ -16,7 +16,7 @@ import {
 } from "./lib/inventoryOps";
 import { isStockTracked, priceListProducts, stockProducts } from "./lib/productCatalog";
 import {
-  applyInvoiceKoiSales, restoreInvoiceKoiSales, previewRestoreInvoiceKoiSales, previewApplyInvoiceKoiSales, availableKoiForInvoice,
+  applyInvoiceKoiSales, restoreInvoiceKoiSales, previewRestoreInvoiceKoiSales, previewApplyInvoiceKoiSales, availableKoiForInvoice, reconcileKoiSoldFromInvoices,
   formatKoiInvoiceLineName, validateInvoiceKoiSales, findLinkedKoiInvoices, buildKoiRefundUpdate,
 } from "./lib/koiInvoice";
 import { buildKeepAtFarmReversePatch, sameKoiId } from "./lib/koiOps";
@@ -6863,7 +6863,12 @@ export default function App() {
     if (merge) {
       setCustomers((prev) => mergeRecords(prev, cleaned.customers, peekDeletions("customers")));
       setProducts((prev) => mergeProducts(prev, cleaned.products, peekDeletions("products")));
-      setInvoices((prev) => applyInvoicePins(mergeInvoices(prev, cleaned.invoices, peekDeletions("invoices"))));
+      const mergedInvoices = applyInvoicePins(mergeInvoices(
+        syncStateRef.current.invoices ?? [],
+        cleaned.invoices,
+        peekDeletions("invoices"),
+      ));
+      setInvoices(mergedInvoices);
       setExpenses((prev) => mergeRecords(prev, cleaned.expenses, peekDeletions("expenses"), resolveExpenseConflict));
       setDeliveries((prev) => mergeRecords(prev, cleaned.deliveries, peekDeletions("deliveries")));
       const mergedPond = mergePondData(syncStateRef.current.pondData || emptyPondData(), cleaned.pondData);
@@ -6886,13 +6891,17 @@ export default function App() {
         setEventsWithRef(mergedEvents);
       }
       setStockLog((prev) => mergeRecords(prev, cleaned.stockLog, peekDeletions("stock_activity")));
-      setKoiFishList((prev) => mergeKoiFish(prev, cleaned.koiFishList, peekDeletions("koi_fish")));
+      setKoiFishList(reconcileKoiSoldFromInvoices(
+        mergeKoiFish(syncStateRef.current.koiFishList ?? [], cleaned.koiFishList, peekDeletions("koi_fish")),
+        mergedInvoices,
+      ));
       setCustomerKoiList((prev) => mergeCustomerKoi(prev, cleaned.customerKoiList, peekDeletions("customer_koi")));
       setWhatsappGroups((prev) => mergeRecords(prev, cleaned.whatsappGroups || whatsapp.groups, peekDeletions("whatsapp_groups")));
     } else {
       setCustomers(cleaned.customers);
       setProducts(cleaned.products);
-      setInvoices(sortInvoices(applyInvoicePins(cleaned.invoices)));
+      const loadedInvoices = sortInvoices(applyInvoicePins(cleaned.invoices));
+      setInvoices(loadedInvoices);
       setExpenses(cleaned.expenses);
       setDeliveries(cleaned.deliveries);
       const syncedOnLoad = syncPondCalendarAssignees(
@@ -6909,7 +6918,7 @@ export default function App() {
       }));
       setEventsWithRef(syncedOnLoad.events);
       setStockLog(cleaned.stockLog);
-      setKoiFishList(cleaned.koiFishList);
+      setKoiFishList(reconcileKoiSoldFromInvoices(cleaned.koiFishList, loadedInvoices));
       setCustomerKoiList(cleaned.customerKoiList);
       setWhatsappGroups(cleaned.whatsappGroups || whatsapp.groups);
     }
@@ -8001,10 +8010,12 @@ export default function App() {
         await flushInventorySync(nextProducts, nextStockLog);
         inventoryFlushed = true;
       }
-      if (koiPayload && hasPermission(currentUser, "koifish")) {
+      if (koiPayload) {
         syncStateRef.current = { ...syncStateRef.current, koiFishList: koiPayload };
-        await flushKoiFishSync(koiPayload);
-        koiFlushed = true;
+        if (hasPermission(currentUser, "koifish")) {
+          await flushKoiFishSync(koiPayload);
+          koiFlushed = true;
+        }
       }
       const confirmed = await db.upsertInvoiceCloud(optimistic);
       const confirmedRow = touchUpdatedAt(db.sanitizeInvoiceForSync(confirmed));
@@ -8016,6 +8027,15 @@ export default function App() {
       syncStateRef.current = { ...syncStateRef.current, invoices: finalInvoices };
       releaseInvoicePinAfterConfirm(invId, confirmedRow);
       setInvoices(applyInvoicePins(finalInvoices));
+      if (koiPayload) {
+        const reconciledKoi = reconcileKoiSoldFromInvoices(koiPayload, finalInvoices);
+        setKoiFishList(reconciledKoi);
+        syncStateRef.current = { ...syncStateRef.current, koiFishList: reconciledKoi };
+      }
+      if (nextProducts && hasPermission(currentUser, "inventory")) {
+        setProducts(nextProducts);
+        setStockLog(nextStockLog ?? syncStateRef.current.stockLog ?? []);
+      }
       resetSyncHealth();
       touchLastSync();
     } catch (err) {
@@ -8040,7 +8060,7 @@ export default function App() {
     }
   }, [
     currentUser, handleSyncFailure, touchLastSync, ensureCloudSyncReady, resetSyncHealth,
-    flushKoiFishSync, flushInventorySync, flushCustomerKoiSync,
+    flushKoiFishSync, flushInventorySync, flushCustomerKoiSync, setKoiFishList, setProducts, setStockLog,
   ]);
 
   const requestInventorySideEffect = useCallback(() => {
