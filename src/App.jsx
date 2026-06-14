@@ -8767,13 +8767,13 @@ export default function App() {
 
       {/* Sidebar — drawer on phone, rail on desktop */}
       <div
-        className={`bg-slate-900 border-r border-slate-800 flex flex-col z-50
+        className={`bg-slate-900 border-r border-slate-800 flex flex-col min-h-0 z-50
           ${isMobile
-            ? `fixed left-0 top-0 bottom-0 w-[min(18rem,85vw)] transition-transform duration-300 safe-top safe-bottom ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`
+            ? `fixed left-0 top-0 bottom-[calc(4.5rem+env(safe-area-inset-bottom,0px))] w-[min(18rem,85vw)] transition-transform duration-300 safe-top ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`
             : `${sidebarOpen ? "w-56" : "w-16"} flex-shrink-0 relative transition-all duration-300`
           }`}
       >
-        <div className={`p-4 border-b border-slate-800 flex items-center gap-3 ${isMobile ? "" : "safe-top"}`}>
+        <div className={`p-4 border-b border-slate-800 flex items-center gap-3 shrink-0 ${isMobile ? "" : "safe-top"}`}>
           <AppLogo size="sm" className="ring-1 ring-slate-700" />
           {(sidebarOpen || isMobile) && (
             <div className="overflow-hidden flex-1 min-w-0">
@@ -8798,7 +8798,7 @@ export default function App() {
           ))}
         </nav>
 
-        <div className="p-3 border-t border-slate-800 safe-bottom">
+        <div className={`p-3 border-t border-slate-800 shrink-0 ${isMobile ? "" : "safe-bottom"}`}>
           {(sidebarOpen || isMobile) ? (
             <div>
               <div className="flex items-center gap-2">
