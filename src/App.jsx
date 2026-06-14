@@ -1631,6 +1631,11 @@ function InvoiceModule({
     return () => { cancelled = true; };
   }, [openViewId, invoices, onViewOpened]);
 
+  const refundInvoiceCount = useMemo(
+    () => invoices.filter((i) => isAppVisibleInvoice(i) && isRefundCreditNoteInvoice(i)).length,
+    [invoices],
+  );
+
   const filtered = useMemo(() => sortInvoices(invoices.filter((i) => {
     if (!showOlderInvoices && !isAppVisibleInvoice(i)) return false;
     if (filter === "refunds") {
@@ -2276,11 +2281,34 @@ function InvoiceModule({
       </div>
       <Fab onClick={() => setShowNew(true)} label="New Invoice" hidden={showNew || !!viewInv} />
 
-      <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
-        {["all", "pending", "paid", "overdue", "cancelled", "refunds"].map(s => (
-          <button key={s} onClick={() => setFilter(s)}
-            className={`px-3 py-2 rounded-lg text-xs font-bold capitalize transition-all shrink-0 touch-manipulation ${filter === s ? "bg-cyan-500 text-slate-900" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>{s === "refunds" ? "Refunds" : s}</button>
-        ))}
+      <div className="space-y-2">
+        <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
+          {["all", "pending", "paid", "overdue"].map((s) => (
+            <button key={s} type="button" onClick={() => setFilter(s)}
+              className={`px-3 py-2 rounded-lg text-xs font-bold capitalize transition-all shrink-0 touch-manipulation ${filter === s ? "bg-cyan-500 text-slate-900" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>{s}</button>
+          ))}
+        </div>
+        <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
+          <button
+            type="button"
+            onClick={() => setFilter("refunds")}
+            className={`px-3 py-2 rounded-lg text-xs font-bold transition-all shrink-0 touch-manipulation inline-flex items-center gap-1.5 ${filter === "refunds" ? "bg-amber-500 text-slate-900" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}
+          >
+            Refunds
+            {refundInvoiceCount > 0 && (
+              <span className={`min-w-[1.25rem] px-1 py-0.5 rounded-full text-[10px] font-black leading-none ${filter === "refunds" ? "bg-slate-900 text-amber-300" : "bg-amber-500/20 text-amber-300"}`}>
+                {refundInvoiceCount}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setFilter("cancelled")}
+            className={`px-3 py-2 rounded-lg text-xs font-bold capitalize transition-all shrink-0 touch-manipulation ${filter === "cancelled" ? "bg-cyan-500 text-slate-900" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}
+          >
+            Cancelled
+          </button>
+        </div>
       </div>
       <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1 -mx-1 px-1">
         {[
@@ -2307,8 +2335,20 @@ function InvoiceModule({
           <Card>
             <EmptyState
               emoji="🧾"
-              title={invoices.length === 0 ? "No invoices yet" : "No invoices match your filters"}
-              hint={invoices.length === 0 ? "Tap New Invoice to create one" : "Try a different status filter"}
+              title={
+                invoices.length === 0
+                  ? "No invoices yet"
+                  : filter === "refunds"
+                    ? "No refunds yet"
+                    : "No invoices match your filters"
+              }
+              hint={
+                invoices.length === 0
+                  ? "Tap New Invoice to create one"
+                  : filter === "refunds"
+                    ? "Paid invoices voided via Koi refund appear here as credit notes."
+                    : "Try a different status filter"
+              }
             />
           </Card>
         ) : invoicePage.paginatedItems.map(inv => {
@@ -2324,7 +2364,9 @@ function InvoiceModule({
                 <p className="text-slate-500 text-xs mt-0.5">{inv.date}</p>
               </div>
               <div className="flex flex-col items-end gap-1 shrink-0 max-w-[45%]">
-                <Badge className={statusColor[status]}>{status}</Badge>
+                <Badge className={isRefundCreditNoteInvoice(inv) ? "bg-amber-500/20 text-amber-300" : statusColor[status]}>
+                  {isRefundCreditNoteInvoice(inv) ? "refund" : status}
+                </Badge>
                 <BookedBadge booked={inv.booked} bookedBy={inv.bookedBy} />
               </div>
             </div>
@@ -2383,7 +2425,18 @@ function InvoiceModule({
               <tr><td colSpan={6} className="p-0">
                 <EmptyState
                   emoji="🧾"
-                  title={invoices.length === 0 ? "No invoices yet" : "No invoices match your filters"}
+                  title={
+                    invoices.length === 0
+                      ? "No invoices yet"
+                      : filter === "refunds"
+                        ? "No refunds yet"
+                        : "No invoices match your filters"
+                  }
+                  hint={
+                    filter === "refunds"
+                      ? "Paid invoices voided via Koi refund appear here as credit notes."
+                      : undefined
+                  }
                   className="py-10"
                 />
               </td></tr>
@@ -2403,7 +2456,9 @@ function InvoiceModule({
                   </td>
                   <td className="p-3 text-center">
                     <div className="flex flex-col items-center gap-1">
-                      <Badge className={statusColor[getInvoiceStatus(inv)]}>{getInvoiceStatus(inv)}</Badge>
+                      <Badge className={isRefundCreditNoteInvoice(inv) ? "bg-amber-500/20 text-amber-300" : statusColor[getInvoiceStatus(inv)]}>
+                        {isRefundCreditNoteInvoice(inv) ? "refund" : getInvoiceStatus(inv)}
+                      </Badge>
                       <BookedBadge booked={inv.booked} bookedBy={inv.bookedBy} />
                     </div>
                   </td>

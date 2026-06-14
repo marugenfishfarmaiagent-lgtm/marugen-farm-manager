@@ -250,8 +250,13 @@ export function buildInvoiceFromKoiSaleDraft(draft, { invoices, customers, creat
 }
 
 export function isRefundCreditNoteInvoice(inv) {
-  return getInvoiceStatus(inv) === 'cancelled' && /credit note/i.test(String(inv.notes || ''))
+  if (getInvoiceStatus(inv) !== 'cancelled') return false
+  const notes = String(inv.notes || '')
+  return /credit note|koi refund|refund:/i.test(notes)
 }
+
+/** Alias used by invoice filters and dashboards. */
+export const isRefundInvoice = isRefundCreditNoteInvoice
 
 /** Fish with sale metadata must stay in sold status (fixes legacy keep-at-farm rows). */
 export function normalizeSoldKoiRecords(koiList) {
