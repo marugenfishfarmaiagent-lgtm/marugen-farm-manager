@@ -8823,9 +8823,7 @@ export default function App() {
         type: "warning",
         title: "Low Stock Alert",
         message: `${lowStock.length} product(s) need restocking: ${lowStock.map(p => p.name).join(", ")}`,
-        actor: "System",
-        actorRole: "system",
-        team: true,
+        team: false,
       });
     }
     if (lowStock.length === 0) lowStockNotified.current = false;

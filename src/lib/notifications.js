@@ -12,7 +12,6 @@ const TEAM_NOTIFICATION_TITLES = new Set([
   'Product Deleted',
   'Sale Recorded',
   'Restocked',
-  'Low Stock Alert',
   'Customer Added',
   'Customer Deleted',
   'Receipt Saved',
