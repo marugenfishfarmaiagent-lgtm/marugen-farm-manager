@@ -1125,10 +1125,6 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   };
 
   const confirmUseStock = async (product) => {
-    if (!canEdit) {
-      notifyPermissionDenied(addNotification, "edit");
-      return;
-    }
     const qty = parseStockQty(useQty);
     const available = Number(product.stock) || 0;
     if (qty <= 0) {
@@ -1165,10 +1161,6 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   };
 
   const sellStock = async (product) => {
-    if (!canEdit) {
-      notifyPermissionDenied(addNotification, "edit");
-      return;
-    }
     const qty = parseStockQty(sellQty);
     const available = Number(product.stock) || 0;
     if (qty <= 0) {
@@ -1212,10 +1204,6 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   };
 
   const restock = async (product, qty) => {
-    if (!canEdit) {
-      notifyPermissionDenied(addNotification, "edit");
-      return;
-    }
     const amount = parseStockQty(qty);
     if (amount <= 0) {
       addNotification({ type: "error", title: "Invalid Quantity", message: "Enter a quantity of at least 1." });
@@ -1343,7 +1331,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
                       <div className="h-1.5 bg-slate-700 rounded-full"><div className={`h-full rounded-full ${isLow ? "bg-amber-400" : "bg-emerald-400"}`} style={{ width: `${Math.min((p.stock / (p.minStock * 3)) * 100, 100)}%` }} /></div>
                     </div>
                   )}
-                  {!isCatalog && canEdit && (
+                  {!isCatalog && (
                     <div className="flex gap-2 flex-wrap">
                       <Btn variant="success" size="sm" onClick={() => { setShowSell(p); setSellPrice(p.price.toString()); }}><ShoppingBag size={12} />Sell</Btn>
                       <Btn variant="secondary" size="sm" onClick={() => setShowUse(p)}><Archive size={12} />Use</Btn>
