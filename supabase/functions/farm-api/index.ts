@@ -41,6 +41,7 @@ import {
   rowsSemanticallyEqual,
 } from "../_shared/recordMerge.ts";
 import {
+  clearSyncTombstones,
   fetchSyncTombstones,
   isBlockedByTombstone,
   loadTombstoneMap,
@@ -343,6 +344,7 @@ async function upsertSync(
   if (toUpsert.length) {
     const { error } = await db.from(table).upsert(toUpsert, { onConflict: idField });
     if (error) throw error;
+    await clearSyncTombstones(db, entity, toUpsert.map((row) => normId(row[idField])));
   }
 
   if (!prune) return;
@@ -1016,6 +1018,7 @@ Deno.serve(async (req) => {
 
       const { data, error } = await db.from("invoices").upsert(row, { onConflict: "id" }).select("*").single();
       if (error) throw error;
+      await clearSyncTombstones(db, "invoices", [id]);
       await applyInvoiceKoiSalesOnServer(db, items, invoiceCustomerId(incoming), nullableDate(row.date), now);
       return J({ ok: true, invoice: data });
     }

@@ -1,7 +1,7 @@
 import { KOI_STATUS, formatKoiSize, genInvoiceId, getInvoiceStatus, today } from '../data/constants'
 import { buildSoldKoiPatch, canSellKoiStatus, hasActiveKeepAtFarmSale, sameKoiId } from './koiOps'
 import { touchUpdatedAt } from './syncMeta'
-import { markDeleted } from './syncDeletions'
+import { markDeleted, peekDeletions } from './syncDeletions'
 import { serializeInvoiceItem } from './inventoryStock'
 import { calcInvoiceAmounts } from './invoiceDesign'
 import { findCustomerRecord, formatCustomerAddress, resolveInvoiceCustomer } from './invoiceWhatsApp'
@@ -265,7 +265,7 @@ export function buildInvoiceFromKoiSaleDraft(draft, { invoices, customers, creat
   )
   const customerRecord = findCustomerRecord(customers, draft?.customerId, draft?.customerName)
   return {
-    id: genInvoiceId(invoices, issueDate),
+    id: genInvoiceId(invoices, issueDate, { reservedIds: peekDeletions('invoices') }),
     customerId: draft?.manualCustomer || !draft?.customerId ? null : draft.customerId,
     customerName: draft?.customerName || customerDetails.name,
     customerWhatsapp: customerDetails.phone,

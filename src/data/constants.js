@@ -292,17 +292,25 @@ export function genId(prefix) {
 }
 
 /** Invoice number: INV + issue date (YYYYMMDD) + daily sequence, e.g. INV20260606-01 */
-export function genInvoiceId(invoices = [], issueDate) {
+export function genInvoiceId(invoices = [], issueDate, { reservedIds = [] } = {}) {
   const dateKey = (issueDate || today()).replace(/-/g, '')
   const prefix = `INV${dateKey}-`
+  const reserved = new Set((reservedIds || []).map(String))
   let maxSeq = 0
   for (const inv of invoices) {
     const id = String(inv?.id || '')
     if (!id.startsWith(prefix)) continue
+    reserved.add(id)
     const num = parseInt(id.slice(prefix.length), 10)
     if (!Number.isNaN(num) && num > maxSeq) maxSeq = num
   }
-  return `${prefix}${String(maxSeq + 1).padStart(2, '0')}`
+  let seq = maxSeq + 1
+  let candidate = `${prefix}${String(seq).padStart(2, '0')}`
+  while (reserved.has(candidate)) {
+    seq += 1
+    candidate = `${prefix}${String(seq).padStart(2, '0')}`
+  }
+  return candidate
 }
 
 export function getInvoiceStatus(inv) {

@@ -1979,7 +1979,7 @@ function InvoiceModule({
       setFormError("Due date cannot be before the invoice date.");
       return;
     }
-    const invId = genInvoiceId(invoices, issueDate);
+    const invId = genInvoiceId(invoices, issueDate, { reservedIds: peekDeletions('invoices') });
     const invoiceItems = activeItems.map(serializeInvoiceItem);
     const stockSideEffectMeta = { invoiceId: invId, by: currentUser?.name || "Staff" };
     const stockPreview = previewDeductStockForInvoice(products, stockLog, invoiceItems, stockSideEffectMeta);
@@ -8085,6 +8085,7 @@ export default function App() {
     }
 
     pinInvoice(optimistic);
+    unmarkDeleted("invoices", invId);
     const nextInvoices = sortInvoices([optimistic, ...syncStateRef.current.invoices.filter((i) => String(i.id) !== invId)]);
     syncStateRef.current = { ...syncStateRef.current, invoices: nextInvoices };
     setInvoices(applyInvoicePins(nextInvoices));

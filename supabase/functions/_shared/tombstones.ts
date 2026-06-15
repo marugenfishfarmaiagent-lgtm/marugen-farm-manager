@@ -71,3 +71,14 @@ export async function purgeExpiredTombstones(
   cutoff.setDate(cutoff.getDate() - retentionDays);
   await db.from("sync_tombstones").delete().lt("deleted_at", cutoff.toISOString());
 }
+
+/** Allow intentional re-create of a record id after upsert (e.g. new invoice reusing INV… sequence). */
+export async function clearSyncTombstones(
+  db: ReturnType<typeof import("./supabase.ts").adminClient>,
+  entity: string,
+  recordIds: string[],
+) {
+  const ids = [...new Set(recordIds.map((id) => String(id)).filter(Boolean))];
+  if (!ids.length) return;
+  await db.from("sync_tombstones").delete().eq("entity", entity).in("record_id", ids);
+}
