@@ -4,16 +4,24 @@ export function invoiceIdFromStockLogNote(note) {
   return match ? match[0].toUpperCase() : ''
 }
 
-const STOCK_LOG_TYPE_RANK = { sell: 2, use: 1, restock: 0 }
+function stockLogTime(row) {
+  const raw = row?.updatedAt ?? row?.updated_at
+  if (!raw) return 0
+  const t = new Date(raw).getTime()
+  return Number.isFinite(t) ? t : 0
+}
 
-/** Newest-first: date, invoice id, then sell/use before restock for the same invoice. */
+function stockLogIdNum(row) {
+  const n = Number(row?.id)
+  return Number.isFinite(n) ? n : 0
+}
+
+/** Newest action first — by updatedAt, then numeric id. */
 export function compareStockLogDesc(a, b) {
-  const dateCmp = String(b?.date || '').localeCompare(String(a?.date || ''))
-  if (dateCmp !== 0) return dateCmp
-  const invCmp = invoiceIdFromStockLogNote(b?.note).localeCompare(invoiceIdFromStockLogNote(a?.note))
-  if (invCmp !== 0) return invCmp
-  const typeCmp = (STOCK_LOG_TYPE_RANK[b?.type] ?? 0) - (STOCK_LOG_TYPE_RANK[a?.type] ?? 0)
-  if (typeCmp !== 0) return typeCmp
+  const timeCmp = stockLogTime(b) - stockLogTime(a)
+  if (timeCmp !== 0) return timeCmp
+  const idCmp = stockLogIdNum(b) - stockLogIdNum(a)
+  if (idCmp !== 0) return idCmp
   return String(b?.id || '').localeCompare(String(a?.id || ''))
 }
 
