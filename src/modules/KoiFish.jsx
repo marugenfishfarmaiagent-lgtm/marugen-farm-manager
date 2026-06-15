@@ -109,7 +109,7 @@ function KoiPhoto({ src, alt, className = '', recordId, field = 'photo', onRefre
 
 export default function KoiFish({
   koiList, setKoiList, customers, invoices = [], customerKoiList = [],
-  onKoiSold, onKoiRefund, onCreateInvoiceFromSale, onSyncKoiFish, addNotification,
+  onKoiSold, onKoiRefund, onCreateInvoiceFromSale, onAbortKoiSaleInvoice, onSyncKoiFish, addNotification,
   registeredPondNames = [], canEdit = false, canRefund = false,
 }) {
   const refreshKoiImage = useCallback(async ({ entity, id, field }) => {
@@ -463,10 +463,11 @@ export default function KoiFish({
       discountType: 'none',
       discountValue: '',
     } : null
+    let newInvoiceId = null
     try {
       setSaving(true)
       if (saleDraft) {
-        await onCreateInvoiceFromSale?.(saleDraft)
+        newInvoiceId = await onCreateInvoiceFromSale?.(saleDraft)
       }
       if (sellForm.disposition === 'keep') {
         await onKoiSold?.(currentKoi, customer, soldPrice, soldDate, {
@@ -497,6 +498,13 @@ export default function KoiFish({
       setSellKoi(null)
     } catch (err) {
       setKoiList(snapshotKoi)
+      if (newInvoiceId && onAbortKoiSaleInvoice) {
+        try {
+          await onAbortKoiSaleInvoice(newInvoiceId)
+        } catch {
+          /* best-effort invoice rollback */
+        }
+      }
       if (sellForm.disposition === 'keep' && isSupabaseConfigured) {
         try {
           await onKoiRefund?.(soldPatch, { reason: 'Cloud sync failed' })
