@@ -12,7 +12,7 @@ import {
 import { applyStockPreview, deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem, validateStockForItems, previewDeductStockForInvoice, previewRestoreStockForInvoice } from "./lib/inventoryStock";
 import {
   adjustProductStockInList, buildStockLogEntry, getLowStockProducts, isProductOnActiveInvoice,
-  normalizeProductRecord, parseStockQty, sameProductId, validateProductFields,
+  normalizeProductRecord, parseStockQty, sameProductId, sortStockLog, validateProductFields,
 } from "./lib/inventoryOps";
 import { isStockTracked, priceListProducts, stockProducts } from "./lib/productCatalog";
 import {
@@ -74,7 +74,7 @@ import * as auth from "./lib/auth";
 import { markDeleted, clearAllDeletions, peekDeletions, unmarkDeleted } from "./lib/syncDeletions";
 import { applyServerTombstones, filterMergeDeletions, mergeLiveByEntityWithLocal, pruneLocalOnlyCloudRows, stripTombstonedRows } from "./lib/tombstones";
 import { writeCloudFirst, writeInventoryCloudFirst } from "./lib/cloudWrite";
-import { mergeRecords, mergePondData, mergeInvoices, mergeProducts, mergeKoiFish, mergeCustomerKoi, resolveInvoiceConflict, resolveExpenseConflict, resolveEventConflict } from "./lib/cloudMerge";
+import { mergeRecords, mergePondData, mergeInvoices, mergeStockLog, mergeProducts, mergeKoiFish, mergeCustomerKoi, resolveInvoiceConflict, resolveExpenseConflict, resolveEventConflict } from "./lib/cloudMerge";
 import {
   countIncomingTeamChanges,
   TEAM_SYNC_EVENT_THROTTLE_MS,
@@ -935,7 +935,10 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   const [showOlderStockLog, setShowOlderStockLog] = useState(false);
   const [form, setForm] = useState(EMPTY_PRODUCT_FORM);
 
-  const visibleStockLog = stockLog.filter((l) => showOlderStockLog || isAppVisibleStockLog(l));
+  const visibleStockLog = useMemo(
+    () => sortStockLog(stockLog.filter((l) => showOlderStockLog || isAppVisibleStockLog(l))),
+    [stockLog, showOlderStockLog],
+  );
   const hiddenStockLogCount = stockLog.filter((l) => !isAppVisibleStockLog(l)).length;
 
   const stockItems = useMemo(() => stockProducts(products), [products]);
@@ -6968,7 +6971,7 @@ export default function App() {
         setPondDataWithRef(mergedPond);
         setEventsWithRef(mergedEvents);
       }
-      setStockLog((prev) => mergeRecords(prev, cleaned.stockLog, peekDeletions("stock_activity")));
+      setStockLog((prev) => mergeStockLog(prev, cleaned.stockLog, peekDeletions("stock_activity")));
       const remoteKoi = cleaned.koiFishList
       const localKoi = pruneLocalOnlyCloudRows(
         localSnap.koiFishList ?? [],
@@ -7029,7 +7032,7 @@ export default function App() {
         reminders: syncedOnLoad.reminders,
       }));
       setEventsWithRef(syncedOnLoad.events);
-      setStockLog(cleaned.stockLog);
+      setStockLog(sortStockLog(cleaned.stockLog));
       setKoiFishList(reconcileKoiSoldFromInvoices(cleaned.koiFishList, loadedInvoices));
       setCustomerKoiList(cleaned.customerKoiList);
       setWhatsappGroups(cleaned.whatsappGroups || whatsapp.groups);

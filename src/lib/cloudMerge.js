@@ -1,4 +1,5 @@
 import { sortInvoices } from './invoiceDesign'
+import { sortStockLog } from './stockLogSort'
 import { CUSTOMER_KOI_STATUS } from '../data/constants'
 import { pickPersistedImageRef } from './farmImage'
 import { normalizeReminderRecord } from './pondOps'
@@ -126,6 +127,10 @@ export function mergeRecords(local = [], remote = [], pendingDeleteIds = [], res
 
 export function mergeInvoices(local = [], remote = [], pendingDeleteIds = []) {
   return sortInvoices(mergeRecords(local, remote, pendingDeleteIds, resolveInvoiceConflict))
+}
+
+export function mergeStockLog(local = [], remote = [], pendingDeleteIds = []) {
+  return sortStockLog(mergeRecords(local, remote, pendingDeleteIds))
 }
 
 const PRODUCT_CATALOG_FIELDS = ['name', 'category', 'sku', 'price', 'unit', 'description', 'trackStock', 'minStock']

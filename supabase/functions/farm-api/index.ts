@@ -567,7 +567,7 @@ Deno.serve(async (req) => {
         db.from("expenses").select("*").order("id"),
         db.from("deliveries").select("*").order("schedule"),
         db.from("events").select("*").order("date"),
-        db.from("stock_activity").select("*").order("id", { ascending: false }),
+        db.from("stock_activity").select("*").order("date", { ascending: false }).order("id", { ascending: false }),
         db.from("koi_fish").select("*").order("date_added", { ascending: false }),
         db.from("customer_koi").select("*").order("purchase_date", { ascending: false }),
         db.from("farm_pond_data").select("data, updated_at").eq("id", "default").maybeSingle(),

@@ -1,6 +1,7 @@
 import { today, getInvoiceStatus } from '../data/constants'
 import { isStockTracked } from './productCatalog'
 import { touchUpdatedAt } from './syncMeta'
+export { compareStockLogDesc, invoiceIdFromStockLogNote, sortStockLog } from './stockLogSort'
 
 /** Numeric id for stock_activity (Postgres BIGINT). */
 export function genStockLogId() {
