@@ -8623,6 +8623,16 @@ export default function App() {
     const cancelledInvoiceIds = [];
     const linkedInvoiceSnapshots = linkedInvoices.map((inv) => ({ ...inv }));
     try {
+      syncStateRef.current = {
+        ...syncStateRef.current,
+        koiFishList: nextKoiList,
+        customerKoiList: nextCustomerKoi,
+      };
+      setKoiFishList(nextKoiList);
+      setCustomerKoiList(nextCustomerKoi);
+      explicitFlushAtRef.current.koifish = Date.now();
+      explicitFlushAtRef.current.customerkoi = Date.now();
+
       for (const inv of linkedInvoices) {
         await cancelInvoiceCloud(inv, {
           skipKoiRestore: true,
@@ -8631,14 +8641,6 @@ export default function App() {
         });
         cancelledInvoiceIds.push(inv.id);
       }
-
-      syncStateRef.current = {
-        ...syncStateRef.current,
-        koiFishList: nextKoiList,
-        customerKoiList: nextCustomerKoi,
-      };
-      setKoiFishList(nextKoiList);
-      setCustomerKoiList(nextCustomerKoi);
 
       try {
         await flushKoiFishSync(nextKoiList, { force: true });

@@ -104,7 +104,8 @@ export function mergeKoiDbRow(
 
   let picked: Record<string, unknown>;
   if (TERMINAL_KOI_STATUSES.has(ls) && !TERMINAL_KOI_STATUSES.has(rs)) {
-    picked = { ...existing, ...incoming };
+    // Stale client sold loses to newer server available (refund / invoice cancel restore).
+    picked = rt > lt ? { ...incoming, ...existing } : { ...existing, ...incoming };
   } else if (TERMINAL_KOI_STATUSES.has(rs) && !TERMINAL_KOI_STATUSES.has(ls)) {
     // Refund/restock with a newer client row beats stale sold on server.
     picked = lt >= rt ? { ...existing, ...incoming } : { ...incoming, ...existing };

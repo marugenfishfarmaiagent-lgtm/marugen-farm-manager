@@ -1,7 +1,8 @@
 import { sortInvoices } from './invoiceDesign'
-import { CUSTOMER_KOI_STATUS, KOI_STATUS } from '../data/constants'
+import { CUSTOMER_KOI_STATUS } from '../data/constants'
 import { pickPersistedImageRef } from './farmImage'
 import { normalizeReminderRecord } from './pondOps'
+import { resolveKoiConflict } from './koiConflict'
 
 function ts(record) {
   if (!record?.updatedAt) return 0
@@ -162,22 +163,7 @@ export function mergeProducts(local = [], remote = [], pendingDeleteIds = []) {
   return mergeRecords(local, remote, pendingDeleteIds, resolveProductConflict)
 }
 
-const TERMINAL_KOI_STATUSES = new Set([KOI_STATUS.SOLD, KOI_STATUS.DECEASED])
-
-/** Prefer sold/deceased when timestamps tie — avoids cloud pull reverting a just-marked sale. */
-export function resolveKoiConflict(local, remote) {
-  const lt = ts(local)
-  const rt = ts(remote)
-  const ls = local?.status || KOI_STATUS.AVAILABLE
-  const rs = remote?.status || KOI_STATUS.AVAILABLE
-  if (TERMINAL_KOI_STATUSES.has(ls) && !TERMINAL_KOI_STATUSES.has(rs)) return local
-  if (TERMINAL_KOI_STATUSES.has(rs) && !TERMINAL_KOI_STATUSES.has(ls)) {
-    if (lt >= rt) return local
-    return remote
-  }
-  if (lt !== rt) return lt > rt ? local : remote
-  return local
-}
+export { resolveKoiConflict } from './koiConflict'
 
 function mergeKoiRow(local, remote) {
   const picked = resolveKoiConflict(local, remote)
