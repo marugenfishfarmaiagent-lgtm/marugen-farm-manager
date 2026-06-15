@@ -1485,7 +1485,7 @@ function InvoiceModule({
   invoices, setInvoices, setProducts, setStockLog, stockLog = [], customers, products,
   koiFishList, setKoiFishList, onKoiSold, setCustomerKoiList, customerKoiList = [],
   addNotification, currentUser, openDraft, onDraftApplied, openViewId, onViewOpened,
-  onMarkInvoicePaid, onCancelInvoiceCloud, onCreateInvoiceCloud, onInventorySideEffect,
+  onMarkInvoicePaid, onCancelInvoiceCloud, onCreateInvoiceCloud, onPatchInvoiceCloud, onInventorySideEffect,
   onSyncKoiFishToCloud, onSyncInventoryToCloud, onSyncCustomerKoiToCloud, onBookedChange,
   draftSignal = 0,
 }) {
@@ -1516,6 +1516,7 @@ function InvoiceModule({
   const [markingPaidId, setMarkingPaidId] = useState(null);
   const [cancellingId, setCancellingId] = useState(null);
   const [creatingInvoice, setCreatingInvoice] = useState(false);
+  const [savingInvoiceFeesId, setSavingInvoiceFeesId] = useState(null);
   const [highlightInvId, setHighlightInvId] = useState(null);
   const [blockViewDismiss, setBlockViewDismiss] = useState(false);
   const [pdfLoading, setPdfLoading] = useState(false);
@@ -1525,6 +1526,7 @@ function InvoiceModule({
   const [shippingDraft, setShippingDraft] = useState("");
   const [form, setForm] = useState(() => (openDraft ? buildFormFromDraft(openDraft) : emptyForm()));
   const openedFromNavRef = useRef(null);
+  const creatingInvoiceRef = useRef(false);
 
   const resetShippingDraft = useCallback((inv) => {
     const saved = Number(inv?.shipping) || 0;
@@ -1603,6 +1605,7 @@ function InvoiceModule({
 
   const canCancelInvoice = (inv) => ["pending", "overdue"].includes(getInvoiceStatus(inv));
   const canMarkPaid = (inv) => ["pending", "overdue"].includes(getInvoiceStatus(inv));
+  const canRecordPayment = (inv) => canMarkPaid(inv) && canEditRecords(currentUser);
 
   const invoiceForDisplay = (inv) => enrichInvoiceCustomer(
     { ...inv, status: getInvoiceStatus(inv) },
@@ -1664,7 +1667,7 @@ function InvoiceModule({
     setViewInv((prev) => (prev?.id === id ? apply(prev) : prev));
   };
 
-  const applyInvoiceDiscount = (inv, discountType, discountValueRaw) => {
+  const applyInvoiceDiscount = async (inv, discountType, discountValueRaw) => {
     if (!canEditRecords(currentUser)) {
       notifyPermissionDenied(addNotification, "edit");
       return false;
@@ -1678,13 +1681,37 @@ function InvoiceModule({
       return false;
     }
     const discountValue = discountType === "none" ? 0 : +discountValueRaw || 0;
-    const amounts = calcInvoiceAmounts({ ...invoiceWithDraftShipping(inv), discountType, discountValue });
-    patchInvoice(inv.id, { discountType, discountValue, total: amounts.total });
-    addNotification({ type: "success", title: "Discount Updated", message: `Total is now ${formatSGD(amounts.total)}` });
-    return true;
+    const latest = invoices.find((i) => String(i.id) === String(inv.id)) || inv;
+    const base = invoiceWithDraftShipping(latest);
+    const merged = touchUpdatedAt(db.sanitizeInvoiceForSync({
+      ...base,
+      discountType,
+      discountValue,
+      total: calcInvoiceAmounts({ ...base, discountType, discountValue }).total,
+    }));
+    setSavingInvoiceFeesId(inv.id);
+    try {
+      const saved = await onPatchInvoiceCloud?.(merged);
+      if (saved) setViewInv((prev) => (prev?.id === inv.id ? saved : prev));
+      addNotification({
+        type: "success",
+        title: "Discount Updated",
+        message: `Total is now ${formatSGD((saved || merged).total)}`,
+      });
+      return true;
+    } catch (err) {
+      addNotification({
+        type: "error",
+        title: "Discount Not Saved",
+        message: err?.message || "Could not save discount to cloud. Try again.",
+      });
+      return false;
+    } finally {
+      setSavingInvoiceFeesId(null);
+    }
   };
 
-  const commitInvoiceShipping = (inv, shippingRaw, { silent = false } = {}) => {
+  const commitInvoiceShipping = async (inv, shippingRaw, { silent = false } = {}) => {
     if (!inv) return inv;
     if (!canEditRecords(currentUser)) {
       if (!silent) notifyPermissionDenied(addNotification, "edit");
@@ -1703,31 +1730,51 @@ function InvoiceModule({
       setShippingDraft(shipping > 0 ? String(shipping) : "");
       return latest;
     }
-    const amounts = calcInvoiceAmounts({ ...latest, shipping });
-    patchInvoice(inv.id, { shipping, total: amounts.total });
-    setShippingDraft(shipping > 0 ? String(shipping) : "");
-    if (!silent) {
-      addNotification({ type: "success", title: "Shipping Updated", message: `Total is now ${formatSGD(amounts.total)}` });
+    const merged = touchUpdatedAt(db.sanitizeInvoiceForSync({
+      ...latest,
+      shipping,
+      total: calcInvoiceAmounts({ ...latest, shipping }).total,
+    }));
+    if (!silent) setSavingInvoiceFeesId(inv.id);
+    try {
+      const saved = await onPatchInvoiceCloud?.(merged);
+      const row = saved || merged;
+      setShippingDraft(shipping > 0 ? String(shipping) : "");
+      if (saved) setViewInv((prev) => (prev?.id === inv.id ? saved : prev));
+      if (!silent) {
+        addNotification({ type: "success", title: "Shipping Updated", message: `Total is now ${formatSGD(row.total)}` });
+      }
+      return row;
+    } catch (err) {
+      if (!silent) {
+        addNotification({
+          type: "error",
+          title: "Shipping Not Saved",
+          message: err?.message || "Could not save shipping to cloud. Try again.",
+        });
+      }
+      return latest;
+    } finally {
+      if (!silent) setSavingInvoiceFeesId(null);
     }
-    return { ...latest, shipping, total: amounts.total };
   };
 
-  const applyInvoiceShipping = (inv, shippingRaw) => {
+  const applyInvoiceShipping = async (inv, shippingRaw) => {
     if (!canEditRecords(currentUser)) {
       notifyPermissionDenied(addNotification, "edit");
       return false;
     }
-    commitInvoiceShipping(inv, shippingRaw);
+    await commitInvoiceShipping(inv, shippingRaw);
     return true;
   };
 
-  const resolveInvForPayment = (inv) => {
+  const resolveInvForPayment = async (inv) => {
     if (!inv || !activeViewInv || String(activeViewInv.id) !== String(inv.id)) return inv;
     if (!["pending", "overdue"].includes(getInvoiceStatus(inv))) return inv;
     return commitInvoiceShipping(activeViewInv, shippingDraft, { silent: true });
   };
 
-  const persistShippingDraftIfDirty = (inv, draftRaw = shippingDraft) => {
+  const persistShippingDraftIfDirty = async (inv, draftRaw = shippingDraft) => {
     if (!inv || !canEditRecords(currentUser)) return inv;
     if (!["pending", "overdue"].includes(getInvoiceStatus(inv))) return inv;
     const latest = invoices.find((i) => String(i.id) === String(inv.id)) || inv;
@@ -1737,9 +1784,9 @@ function InvoiceModule({
     return commitInvoiceShipping(latest, draftRaw, { silent: true });
   };
 
-  const openViewInvoice = (inv) => {
+  const openViewInvoice = async (inv) => {
     if (activeViewInv && String(activeViewInv.id) !== String(inv?.id)) {
-      persistShippingDraftIfDirty(activeViewInv);
+      await persistShippingDraftIfDirty(activeViewInv);
       resetShippingDraft(inv);
     } else if (!activeViewInv) {
       resetShippingDraft(inv);
@@ -1747,9 +1794,9 @@ function InvoiceModule({
     setViewInv(inv);
   };
 
-  const closeViewInvoice = () => {
+  const closeViewInvoice = async () => {
     if (cancelConfirm || blockViewDismiss) return;
-    persistShippingDraftIfDirty(activeViewInv);
+    await persistShippingDraftIfDirty(activeViewInv);
     setViewInv(null);
     setShowWhatsappInput(false);
     setShippingDraft("");
@@ -1772,7 +1819,7 @@ function InvoiceModule({
     const id = viewInvRef.current?.id;
     if (!id) return;
     const inv = invoicesRef.current.find((i) => String(i.id) === String(id));
-    if (inv) persistShippingDraftRef.current(inv, shippingDraftRef.current);
+    if (inv) void persistShippingDraftRef.current(inv, shippingDraftRef.current);
   }, []);
 
   const stripBlankItems = (items) => items.filter(
@@ -1851,10 +1898,15 @@ function InvoiceModule({
     ...f,
     items: f.items.map((it, i) => i === idx ? { ...it, koiDisposition: disposition } : it),
   }));
-  const convertToManualItem = (idx) => setForm(f => ({
-    ...f,
-    items: f.items.map((it, i) => i === idx ? { ...it, productId: "", manual: true } : it),
-  }));
+  const convertToManualItem = (idx) => setForm((f) => {
+    const it = f.items[idx];
+    const linked = it?.productId ? products.find((p) => String(p.id) === String(it.productId)) : null;
+    if (linked && isStockTracked(linked)) return f;
+    return {
+      ...f,
+      items: f.items.map((row, i) => i === idx ? { ...row, productId: "", manual: true } : row),
+    };
+  });
 
   const formSubtotal = form.items.reduce((s, it) => s + (+it.qty || 0) * (+it.price || 0), 0);
   const formAmounts = calcInvoiceAmounts({
@@ -1865,7 +1917,7 @@ function InvoiceModule({
   });
 
   const createInvoice = async () => {
-    if (creatingInvoice) return;
+    if (creatingInvoiceRef.current || creatingInvoice) return;
     setFormError("");
     const activeItems = stripBlankItems(form.items);
     if (!activeItems.length) {
@@ -1904,6 +1956,16 @@ function InvoiceModule({
       setFormError("Shipping fee cannot be negative.");
       return;
     }
+    const hasStockTrackedLines = activeItems.some((it) => {
+      if (!it.productId) return false;
+      const p = products.find((x) => String(x.id) === String(it.productId));
+      return p && isStockTracked(p);
+    });
+    if (hasStockTrackedLines && !hasPermission(currentUser, "inventory")) {
+      notifyPermissionDenied(addNotification, "inventory");
+      setFormError("Inventory permission is required to sell stock-tracked products on an invoice.");
+      return;
+    }
     const customerRecord = findCustomerRecord(customers, form.customerId, form.customerName);
     const customerDetails = resolveInvoiceCustomer({ customerId: form.customerId, customerName: form.customerName }, customers);
     const discountValue = form.discountType === "none" ? 0 : +form.discountValue || 0;
@@ -1913,93 +1975,102 @@ function InvoiceModule({
       setFormError("Due date cannot be before the invoice date.");
       return;
     }
-    const invId = genInvoiceId(invoices, issueDate, { reservedIds: peekDeletions('invoices') });
-    const invoiceItems = activeItems.map(serializeInvoiceItem);
-    const stockSideEffectMeta = { invoiceId: invId, by: currentUser?.name || "Staff" };
-    const stockPreview = previewDeductStockForInvoice(products, stockLog, invoiceItems, stockSideEffectMeta);
-    const koiValidate = validateInvoiceKoiSales({
-      items: activeItems, koiList: koiFishList, customerId: form.customerId, customers,
-    });
-    if (!koiValidate.ok) {
-      setFormError(koiValidate.message);
-      addNotification({ type: "error", title: "Fish Stock", message: koiValidate.message });
-      return;
-    }
-    if (!stockPreview.ok) {
-      setFormError(stockPreview.message);
-      addNotification({ type: "error", title: "Insufficient Stock", message: stockPreview.message });
-      return;
-    }
-    applyStockPreview(setProducts, setStockLog, stockPreview);
-    onInventorySideEffect?.();
-    const koiSalePreview = previewApplyInvoiceKoiSales({
-      items: activeItems,
-      koiList: koiFishList,
-      customerId: form.customerId,
-      customers,
-      soldDate: issueDate,
-    });
-    let koiApply;
+
+    creatingInvoiceRef.current = true;
+    setCreatingInvoice(true);
+
+    let invId;
+    let invoiceItems;
+    let stockPreview;
+    let koiSalePreview;
+    const stockSideEffectMeta = { by: currentUser?.name || "Staff" };
+
     try {
-      koiApply = await applyInvoiceKoiSales({
+      invId = genInvoiceId(invoices, issueDate, { reservedIds: peekDeletions('invoices') });
+      stockSideEffectMeta.invoiceId = invId;
+      invoiceItems = activeItems.map(serializeInvoiceItem);
+      stockPreview = previewDeductStockForInvoice(products, stockLog, invoiceItems, stockSideEffectMeta);
+      const koiValidate = validateInvoiceKoiSales({
+        items: activeItems, koiList: koiFishList, customerId: form.customerId, customers,
+      });
+      if (!koiValidate.ok) {
+        setFormError(koiValidate.message);
+        addNotification({ type: "error", title: "Fish Stock", message: koiValidate.message });
+        return;
+      }
+      if (!stockPreview.ok) {
+        setFormError(stockPreview.message);
+        addNotification({ type: "error", title: "Insufficient Stock", message: stockPreview.message });
+        return;
+      }
+      applyStockPreview(setProducts, setStockLog, stockPreview);
+      onInventorySideEffect?.();
+      koiSalePreview = previewApplyInvoiceKoiSales({
         items: activeItems,
         koiList: koiFishList,
-        setKoiList: setKoiFishList,
         customerId: form.customerId,
         customers,
         soldDate: issueDate,
-        onKoiSold,
-        addNotification,
       });
-    } catch (err) {
-      restoreStockForInvoice(setProducts, setStockLog, products, invoiceItems, {
-        invoiceId: invId,
-        by: currentUser?.name || "Staff",
-      });
-      restoreInvoiceKoiSales(invoiceItems, setKoiFishList, setCustomerKoiList);
-      onInventorySideEffect?.();
-      setFormError(err?.message || "Could not save keep-at-farm Customer Koi record.");
-      addNotification({
-        type: "error",
-        title: "Fish Stock",
-        message: err?.message || "Could not save Customer Koi record for this sale.",
-      });
-      return;
-    }
-    if (!koiApply.ok) {
-      restoreStockForInvoice(setProducts, setStockLog, products, invoiceItems, {
-        invoiceId: invId,
-        by: currentUser?.name || "Staff",
-      });
-      onInventorySideEffect?.();
-      setFormError(koiApply.message);
-      addNotification({ type: "error", title: "Fish Stock", message: koiApply.message });
-      return;
-    }
-    const inv = touchUpdatedAt(db.sanitizeInvoiceForSync({
-      id: invId,
-      customerId: form.manualCustomer || !form.customerId ? null : form.customerId,
-      customerName: form.customerName,
-      customerWhatsapp: customerDetails.phone,
-      customerPhone: customerDetails.phone,
-      customerAddress: customerDetails.address || formatCustomerAddress(customerRecord),
-      items: invoiceItems,
-      discountType: form.discountType,
-      discountValue,
-      shipping: +form.shipping || 0,
-      total: formAmounts.total,
-      status: "pending",
-      date: issueDate,
-      due: dueDate,
-      notes: form.notes,
-      createdBy: currentUser.name,
-      booked: false,
-      bookedAt: null,
-      bookedBy: "",
-    }));
+      let koiApply;
+      try {
+        koiApply = await applyInvoiceKoiSales({
+          items: activeItems,
+          koiList: koiFishList,
+          setKoiList: setKoiFishList,
+          customerId: form.customerId,
+          customers,
+          soldDate: issueDate,
+          onKoiSold,
+          addNotification,
+        });
+      } catch (err) {
+        restoreStockForInvoice(setProducts, setStockLog, products, invoiceItems, {
+          invoiceId: invId,
+          by: currentUser?.name || "Staff",
+        });
+        restoreInvoiceKoiSales(invoiceItems, setKoiFishList, setCustomerKoiList);
+        onInventorySideEffect?.();
+        setFormError(err?.message || "Could not save keep-at-farm Customer Koi record.");
+        addNotification({
+          type: "error",
+          title: "Fish Stock",
+          message: err?.message || "Could not save Customer Koi record for this sale.",
+        });
+        return;
+      }
+      if (!koiApply.ok) {
+        restoreStockForInvoice(setProducts, setStockLog, products, invoiceItems, {
+          invoiceId: invId,
+          by: currentUser?.name || "Staff",
+        });
+        onInventorySideEffect?.();
+        setFormError(koiApply.message);
+        addNotification({ type: "error", title: "Fish Stock", message: koiApply.message });
+        return;
+      }
+      const inv = touchUpdatedAt(db.sanitizeInvoiceForSync({
+        id: invId,
+        customerId: form.manualCustomer || !form.customerId ? null : form.customerId,
+        customerName: form.customerName,
+        customerWhatsapp: customerDetails.phone,
+        customerPhone: customerDetails.phone,
+        customerAddress: customerDetails.address || formatCustomerAddress(customerRecord),
+        items: invoiceItems,
+        discountType: form.discountType,
+        discountValue,
+        shipping: +form.shipping || 0,
+        total: formAmounts.total,
+        status: "pending",
+        date: issueDate,
+        due: dueDate,
+        notes: form.notes,
+        createdBy: currentUser.name,
+        booked: false,
+        bookedAt: null,
+        bookedBy: "",
+      }));
 
-    setCreatingInvoice(true);
-    try {
       await onCreateInvoiceCloud?.(inv, {
         koiFishList: koiSalePreview.hasKoiLines ? koiSalePreview.nextKoiList : undefined,
         nextProducts: stockPreview.hasStockLines ? stockPreview.nextProducts : undefined,
@@ -2024,53 +2095,67 @@ function InvoiceModule({
         addNotification({ type: "info", title: "No WhatsApp Number", message: "Add a WhatsApp number to this customer, then use Send WhatsApp when ready." });
       }
     } catch (err) {
-      restoreStockForInvoice(setProducts, setStockLog, products, invoiceItems, {
-        invoiceId: invId,
-        by: currentUser?.name || "Staff",
+      if (invId && invoiceItems) {
+        restoreStockForInvoice(setProducts, setStockLog, products, invoiceItems, {
+          invoiceId: invId,
+          by: currentUser?.name || "Staff",
+        });
+        restoreInvoiceKoiSales(invoiceItems, setKoiFishList, setCustomerKoiList);
+        if (stockPreview?.hasStockLines) {
+          const restoredStock = previewRestoreStockForInvoice(products, stockLog, invoiceItems, stockSideEffectMeta);
+          try {
+            await onSyncInventoryToCloud?.(restoredStock.nextProducts, restoredStock.nextStockLog);
+          } catch (syncErr) {
+            addNotification({
+              type: "warning",
+              title: "Stock Sync Incomplete",
+              message: syncErr?.message || "Local stock was restored but cloud sync may need a retry.",
+            });
+          }
+        }
+        if (koiSalePreview?.hasKoiLines) {
+          const restored = previewRestoreInvoiceKoiSales(
+            invoiceItems,
+            koiSalePreview.nextKoiList,
+            customerKoiList,
+          );
+          try {
+            await onSyncKoiFishToCloud?.(restored.nextKoiList);
+          } catch (syncErr) {
+            addNotification({
+              type: "warning",
+              title: "Koi Sync Incomplete",
+              message: syncErr?.message || "Local koi was restored but cloud sync may need a retry.",
+            });
+          }
+          try {
+            await onSyncCustomerKoiToCloud?.(restored.nextCustomerKoiList);
+          } catch (syncErr) {
+            addNotification({
+              type: "warning",
+              title: "Customer Koi Sync Incomplete",
+              message: syncErr?.message || "Local customer koi was restored but cloud sync may need a retry.",
+            });
+          }
+        }
+        onInventorySideEffect?.();
+        setInvoices((prev) => prev.filter((i) => String(i.id) !== String(invId)));
+      }
+      const conflictMsg = /already in use/i.test(String(err?.message || ""));
+      const fallback = "Could not save invoice to cloud. Check connection and try again.";
+      const message = err?.message || fallback;
+      setFormError(conflictMsg
+        ? `${message} Refresh invoices, then tap Create again.`
+        : message);
+      addNotification({
+        type: "error",
+        title: conflictMsg ? "Invoice Number Conflict" : "Invoice Not Saved",
+        message: conflictMsg
+          ? `${message} Refresh invoices, then create again.`
+          : (err?.message || "Cloud save failed. Your invoice was not created."),
       });
-      restoreInvoiceKoiSales(invoiceItems, setKoiFishList, setCustomerKoiList);
-      if (stockPreview.hasStockLines) {
-        const restoredStock = previewRestoreStockForInvoice(products, stockLog, invoiceItems, stockSideEffectMeta);
-        try {
-          await onSyncInventoryToCloud?.(restoredStock.nextProducts, restoredStock.nextStockLog);
-        } catch (syncErr) {
-          addNotification({
-            type: "warning",
-            title: "Stock Sync Incomplete",
-            message: syncErr?.message || "Local stock was restored but cloud sync may need a retry.",
-          });
-        }
-      }
-      if (koiSalePreview.hasKoiLines) {
-        const restored = previewRestoreInvoiceKoiSales(
-          invoiceItems,
-          koiSalePreview.nextKoiList,
-          customerKoiList,
-        );
-        try {
-          await onSyncKoiFishToCloud?.(restored.nextKoiList);
-        } catch (syncErr) {
-          addNotification({
-            type: "warning",
-            title: "Koi Sync Incomplete",
-            message: syncErr?.message || "Local koi was restored but cloud sync may need a retry.",
-          });
-        }
-        try {
-          await onSyncCustomerKoiToCloud?.(restored.nextCustomerKoiList);
-        } catch (syncErr) {
-          addNotification({
-            type: "warning",
-            title: "Customer Koi Sync Incomplete",
-            message: syncErr?.message || "Local customer koi was restored but cloud sync may need a retry.",
-          });
-        }
-      }
-      onInventorySideEffect?.();
-      setInvoices((prev) => prev.filter((i) => String(i.id) !== String(invId)));
-      setFormError(err?.message || "Could not save invoice to cloud. Check connection and try again.");
-      addNotification({ type: "error", title: "Invoice Not Saved", message: err?.message || "Cloud save failed. Your invoice was not created." });
     } finally {
+      creatingInvoiceRef.current = false;
       setCreatingInvoice(false);
     }
   };
@@ -2116,8 +2201,12 @@ function InvoiceModule({
 
   const markPaid = async (id) => {
     if (markingPaidId) return;
+    if (!canEditRecords(currentUser)) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
     const invId = String(id);
-    const inv = resolveInvForPayment(invoices.find((i) => String(i.id) === invId));
+    const inv = await resolveInvForPayment(invoices.find((i) => String(i.id) === invId));
     if (!inv) return;
     if (getInvoiceStatus(inv) === "paid") return;
     if (!canMarkPaid(inv)) {
@@ -2331,7 +2420,7 @@ function InvoiceModule({
                 </Btn>
               )}
             </div>
-            {canMarkPaid(inv) && (
+            {canRecordPayment(inv) && (
               <Btn
                 variant="success"
                 size="sm"
@@ -2409,7 +2498,7 @@ function InvoiceModule({
                       {canCancelInvoice(inv) && canDeleteRecords(currentUser) && (
                         <Btn variant="ghost" size="sm" onClick={() => cancelInvoice(inv.id)} title="Cancel invoice"><XCircle size={12} className="text-red-400" /></Btn>
                       )}
-                      {canMarkPaid(inv) && <Btn variant="success" size="sm" onClick={() => markPaid(inv.id)}><Check size={12} />Paid</Btn>}
+                      {canRecordPayment(inv) && <Btn variant="success" size="sm" onClick={() => markPaid(inv.id)}><Check size={12} />Paid</Btn>}
                     </div>
                   </td>
                 </tr>
@@ -2552,7 +2641,7 @@ function InvoiceModule({
                         <div>
                           <p className="text-[10px] font-semibold text-slate-500 mb-1 uppercase">Item Name</p>
                           <p className="text-white font-medium text-sm bg-slate-900/40 border border-slate-700/50 rounded-lg px-3 py-2.5">{it.name}</p>
-                          {!fromKoi && (
+                          {!fromKoi && !fromInventory && (
                             <button
                               type="button"
                               onClick={() => convertToManualItem(idx)}
@@ -2741,7 +2830,7 @@ function InvoiceModule({
                 <Btn onClick={() => downloadPdf(activeViewInv)} disabled={pdfLoading} className="flex-1 sm:flex-none justify-center">
                   <Printer size={14} />{pdfLoading ? "Generating..." : "Download PDF"}
                 </Btn>
-                {canMarkPaid(activeViewInv) && (
+                {canRecordPayment(activeViewInv) && (
                   <Btn variant="success" onClick={() => markPaid(activeViewInv.id)} disabled={isMarkingView || isCancellingView || !!cancelConfirm} className="flex-1 sm:flex-none justify-center">
                     {isMarkingView ? <><Loader2 size={14} className="animate-spin" />Saving...</> : <><Check size={14} />Mark Paid</>}
                   </Btn>
@@ -2763,7 +2852,7 @@ function InvoiceModule({
                     onChange={(e) => {
                       const discountType = e.target.value;
                       if (discountType === "none") {
-                        applyInvoiceDiscount(activeViewInv, "none", 0);
+                        void applyInvoiceDiscount(activeViewInv, "none", 0);
                       } else {
                         patchInvoice(activeViewInv.id, { discountType, discountValue: activeViewInv.discountValue || "" });
                       }
@@ -2789,9 +2878,12 @@ function InvoiceModule({
                     <div className="flex items-end">
                       <Btn
                         className="w-full justify-center"
-                        onClick={() => applyInvoiceDiscount(activeViewInv, activeViewInv.discountType, activeViewInv.discountValue)}
+                        onClick={() => { void applyInvoiceDiscount(activeViewInv, activeViewInv.discountType, activeViewInv.discountValue); }}
+                        disabled={String(savingInvoiceFeesId) === String(activeViewInv.id)}
                       >
-                        <Check size={14} />Apply discount
+                        {String(savingInvoiceFeesId) === String(activeViewInv.id)
+                          ? <><Loader2 size={14} className="animate-spin" />Saving...</>
+                          : <><Check size={14} />Apply discount</>}
                       </Btn>
                     </div>
                   )}
@@ -2802,7 +2894,7 @@ function InvoiceModule({
                     type="number"
                     value={shippingDraft}
                     onChange={(e) => setShippingDraft(e.target.value)}
-                    onBlur={() => applyInvoiceShipping(activeViewInv, shippingDraft)}
+                    onBlur={() => { void applyInvoiceShipping(activeViewInv, shippingDraft); }}
                     min="0"
                     step="0.01"
                     placeholder="0.00"
@@ -2810,9 +2902,12 @@ function InvoiceModule({
                   <div className="flex items-end">
                     <Btn
                       className="w-full justify-center"
-                      onClick={() => applyInvoiceShipping(activeViewInv, shippingDraft)}
+                      onClick={() => { void applyInvoiceShipping(activeViewInv, shippingDraft); }}
+                      disabled={String(savingInvoiceFeesId) === String(activeViewInv.id)}
                     >
-                      <Check size={14} />Apply shipping
+                      {String(savingInvoiceFeesId) === String(activeViewInv.id)
+                        ? <><Loader2 size={14} className="animate-spin" />Saving...</>
+                        : <><Check size={14} />Apply shipping</>}
                     </Btn>
                   </div>
                 </div>
@@ -7756,6 +7851,10 @@ export default function App() {
       revertPaidOptimistic();
       throw new Error("Permission denied (invoices).");
     }
+    if (!canEditRecords(currentUser)) {
+      revertPaidOptimistic();
+      throw new Error("Permission denied (edit).");
+    }
     if (!(await ensureCloudSyncReady())) {
       revertPaidOptimistic();
       throw new Error("Session needs refresh. Log out and log in again.");
@@ -8107,7 +8206,7 @@ export default function App() {
           koiFlushed = true;
         }
       }
-      const confirmed = await db.upsertInvoiceCloud(optimistic);
+      const confirmed = await db.upsertInvoiceCloud(optimistic, { createOnly: true });
       const confirmedRow = touchUpdatedAt(db.sanitizeInvoiceForSync(confirmed));
       const localRow = syncStateRef.current.invoices.find((i) => String(i.id) === invId);
       const mergedRow = localRow ? resolveInvoiceConflict(localRow, confirmedRow) : confirmedRow;
@@ -8154,6 +8253,63 @@ export default function App() {
     currentUser, handleSyncFailure, touchLastSync, ensureCloudSyncReady, resetSyncHealth,
     flushKoiFishSync, flushInventorySync, flushCustomerKoiSync, setKoiFishList, setProducts, setStockLog,
   ]);
+
+  const patchInvoiceCloud = useCallback(async (inv) => {
+    const invId = String(inv.id);
+    const payload = touchUpdatedAt(db.sanitizeInvoiceForSync(inv));
+
+    const timerKey = "invoices:Invoices";
+    if (syncTimersRef.current[timerKey]) {
+      clearTimeout(syncTimersRef.current[timerKey]);
+      delete syncTimersRef.current[timerKey];
+    }
+
+    const applyLocal = (row) => {
+      const finalInvoices = sortInvoices(
+        syncStateRef.current.invoices.map((i) => (String(i.id) === invId ? row : i)),
+      );
+      syncStateRef.current = { ...syncStateRef.current, invoices: finalInvoices };
+      setInvoices(applyInvoicePins(finalInvoices));
+      return row;
+    };
+
+    if (!isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) {
+      return applyLocal(payload);
+    }
+    if (!hasPermission(currentUser, "invoices")) {
+      throw new Error("Permission denied (invoices).");
+    }
+    if (!canEditRecords(currentUser)) {
+      throw new Error("Permission denied (edit).");
+    }
+    if (!(await ensureCloudSyncReady())) {
+      throw new Error("Session needs refresh. Log out and log in again.");
+    }
+
+    let waited = 0;
+    while (syncInFlightRef.current > 0 && waited < 5000) {
+      await new Promise((r) => setTimeout(r, 100));
+      waited += 100;
+    }
+
+    syncInFlightRef.current += 1;
+    try {
+      const confirmed = await db.upsertInvoiceCloud(payload);
+      const confirmedRow = touchUpdatedAt(db.sanitizeInvoiceForSync(confirmed));
+      const localRow = syncStateRef.current.invoices.find((i) => String(i.id) === invId);
+      const mergedRow = localRow ? resolveInvoiceConflict(localRow, confirmedRow) : confirmedRow;
+      applyLocal(mergedRow);
+      resetSyncHealth();
+      touchLastSync();
+      explicitFlushAtRef.current.invoices = Date.now();
+      return mergedRow;
+    } catch (err) {
+      handleSyncFailure(err);
+      throw err;
+    } finally {
+      syncInFlightRef.current -= 1;
+    }
+  }, [currentUser, handleSyncFailure, touchLastSync, ensureCloudSyncReady, resetSyncHealth]);
 
   const requestInventorySideEffect = useCallback(() => {
     inventorySyncPendingRef.current = true;
@@ -9004,7 +9160,7 @@ export default function App() {
       case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} customerKoiList={customerKoiList} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} onAbortKoiSaleInvoice={handleAbortKoiSaleInvoice} onSyncKoiFish={flushKoiFishSync} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} onRecordsSaved={flushCustomerKoiSync} />);
       case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondDataWithRef} addNotification={addNotification} currentUser={currentUser} users={users} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} onPersistPondData={syncPondDataNow} onSyncReminderCalendar={syncReminderCalendar} />);
-      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} stockLog={stockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} draftSignal={invoiceDraftSignal} onDraftApplied={clearInvoiceOpenDraft} openViewId={invoiceViewRequest?.id} onViewOpened={() => setInvoiceViewRequest(null)} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} onSyncKoiFishToCloud={flushKoiFishSync} onSyncInventoryToCloud={flushInventorySync} onSyncCustomerKoiToCloud={flushCustomerKoiSync} onBookedChange={markInvoiceBookedCloud} />);
+      case "invoices": return guard("invoices", "Invoices", <InvoiceModule key={invoiceDraftSignal ? `draft-${invoiceDraftSignal}` : "default"} invoices={invoices} setInvoices={setInvoices} setCustomers={setCustomers} setProducts={setProducts} setStockLog={setStockLog} stockLog={stockLog} customers={customers} products={products} koiFishList={koiFishList} setKoiFishList={setKoiFishList} onKoiSold={handleKoiSold} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} openDraft={invoiceOpenDraft} draftSignal={invoiceDraftSignal} onDraftApplied={clearInvoiceOpenDraft} openViewId={invoiceViewRequest?.id} onViewOpened={() => setInvoiceViewRequest(null)} onMarkInvoicePaid={markInvoicePaidCloud} onCancelInvoiceCloud={cancelInvoiceCloud} onCreateInvoiceCloud={createInvoiceCloud} onPatchInvoiceCloud={patchInvoiceCloud} onInventorySideEffect={requestInventorySideEffect} onSyncKoiFishToCloud={flushKoiFishSync} onSyncInventoryToCloud={flushInventorySync} onSyncCustomerKoiToCloud={flushCustomerKoiSync} onBookedChange={markInvoiceBookedCloud} />);
       case "customers": return guard("customers", "Customers", <CustomerModule customers={customers} setCustomers={setCustomers} invoices={invoices} setInvoices={setInvoices} deliveries={deliveries} setDeliveries={setDeliveries} customerKoiList={customerKoiList} setCustomerKoiList={setCustomerKoiList} addNotification={addNotification} currentUser={currentUser} onCustomersSaved={flushCustomersSync} />);
       case "expenses": return guard("expenses", "Expenses", <ExpenseModule expenses={expenses} setExpenses={setExpensesWithRef} addNotification={addNotification} currentUser={currentUser} onPersistExpenses={flushExpenseSync} />);
       case "deliveries": return guard("deliveries", "Deliveries", <DeliveryModule deliveries={deliveries} setDeliveries={setDeliveries} customers={customers} invoices={invoices} whatsappGroups={whatsappGroups} setWhatsappGroups={setWhatsappGroups} addNotification={addNotification} currentUser={currentUser} cloudMode={isSupabaseConfigured && cloudSync} users={users} onPersistDeliveries={flushDeliveriesSync} onPersistWhatsappGroups={flushWhatsappGroupsSync} />);

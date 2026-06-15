@@ -482,10 +482,10 @@ export async function markInvoiceBookedCloud(id, { booked, bookedBy } = {}) {
 }
 
 /** Upsert a single invoice on the server (avoids full-list sync timestamp races on create). */
-export async function upsertInvoiceCloud(invoice) {
+export async function upsertInvoiceCloud(invoice, { createOnly = false } = {}) {
   if (!isSupabaseConfigured) throw new Error('Cloud sync is not configured')
   const payload = sanitizeInvoiceForSync(touchUpdatedAt(invoice))
-  const data = await apiCall({ action: 'upsert_invoice', invoice: payload })
+  const data = await apiCall({ action: 'upsert_invoice', invoice: payload, createOnly: Boolean(createOnly) })
   return mapInvoice(data.invoice)
 }
 

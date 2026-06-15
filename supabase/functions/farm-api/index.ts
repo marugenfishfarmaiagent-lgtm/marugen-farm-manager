@@ -863,6 +863,9 @@ Deno.serve(async (req) => {
       if (!hasPermission(user, "invoices")) {
         return J({ error: "Permission denied (invoices)" }, 403);
       }
+      if (!hasPermission(user, "edit")) {
+        return J({ error: "Permission denied (edit)" }, 403);
+      }
       const id = String(body.id || "").trim();
       if (!id) return J({ error: "Invoice id required" }, 400);
 
@@ -1035,6 +1038,15 @@ Deno.serve(async (req) => {
         return J({ error: "Use cancel_invoice to void an invoice" }, 400);
       }
 
+      const createOnly = Boolean(body.createOnly);
+      if (!createOnly) {
+        const { data: existingRow, error: existingErr } = await db.from("invoices").select("id").eq("id", id).maybeSingle();
+        if (existingErr) throw existingErr;
+        if (existingRow && !hasPermission(user, "edit")) {
+          return J({ error: "Permission denied (edit)" }, 403);
+        }
+      }
+
       const now = new Date().toISOString();
       const row = {
         id,
@@ -1058,6 +1070,25 @@ Deno.serve(async (req) => {
         created_by: incoming.createdBy ?? incoming.created_by ?? "",
         updated_at: now,
       };
+
+      const invoiceIdConflict = () => J({
+        error: `Invoice number ${id} is already in use. Refresh the page and try again.`,
+      }, 409);
+
+      if (createOnly) {
+        const { data: existing, error: fetchErr } = await db.from("invoices").select("id").eq("id", id).maybeSingle();
+        if (fetchErr) throw fetchErr;
+        if (existing) return invoiceIdConflict();
+
+        const { data, error } = await db.from("invoices").insert(row).select("*").single();
+        if (error) {
+          if (error.code === "23505") return invoiceIdConflict();
+          throw error;
+        }
+        await clearSyncTombstones(db, "invoices", [id]);
+        await applyInvoiceKoiSalesOnServer(db, items, invoiceCustomerId(incoming), nullableDate(row.date), now);
+        return J({ ok: true, invoice: data });
+      }
 
       const { data, error } = await db.from("invoices").upsert(row, { onConflict: "id" }).select("*").single();
       if (error) throw error;

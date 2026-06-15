@@ -64,15 +64,38 @@ export function validateStockForItems(products, items) {
   return { ok: true }
 }
 
-function adjustProductsStock(setProducts, items, deltaSign) {
+function computeStockAdjust(products, items, deltaSign) {
   const qtyByProduct = aggregateQtyByProduct(items)
-  setProducts((prev) => prev.map((p) => {
+  if (deltaSign < 0) {
+    for (const [productId, qty] of qtyByProduct) {
+      const p = products.find((x) => sameProductId(x.id, productId))
+      if (!p || !isStockTracked(p)) continue
+      const stock = Number(p.stock) || 0
+      if (qty > stock) {
+        return {
+          ok: false,
+          message: `Not enough ${p.name} in stock (${stock} ${p.unit || 'unit'} available, need ${qty}).`,
+          nextProducts: products,
+        }
+      }
+    }
+  }
+  const nextProducts = products.map((p) => {
     if (!isStockTracked(p)) return p
     const qty = qtyByProduct.get(String(p.id))
     if (!qty) return p
     const stock = Number(p.stock) || 0
-    return touchUpdatedAt({ ...p, stock: Math.max(0, stock + deltaSign * qty) })
-  }))
+    return touchUpdatedAt({ ...p, stock: stock + deltaSign * qty })
+  })
+  return { ok: true, nextProducts }
+}
+
+function adjustProductsStock(setProducts, items, deltaSign) {
+  const qtyByProduct = aggregateQtyByProduct(items)
+  setProducts((prev) => {
+    const result = computeStockAdjust(prev, items, deltaSign)
+    return result.ok ? result.nextProducts : prev
+  })
 }
 
 function appendStockLog(setStockLog, entries) {
@@ -104,17 +127,6 @@ function buildLogEntries(items, products, { invoiceId, by, restore }) {
     .filter(Boolean)
 }
 
-function applyStockAdjust(products, items, deltaSign) {
-  const qtyByProduct = aggregateQtyByProduct(items)
-  return products.map((p) => {
-    if (!isStockTracked(p)) return p
-    const qty = qtyByProduct.get(String(p.id))
-    if (!qty) return p
-    const stock = Number(p.stock) || 0
-    return touchUpdatedAt({ ...p, stock: Math.max(0, stock + deltaSign * qty) })
-  })
-}
-
 export function previewDeductStockForInvoice(products, stockLog, items, { invoiceId, by }) {
   const linked = (items || []).filter((it) => it.productId != null && it.productId !== '')
   if (!linked.length) {
@@ -124,7 +136,11 @@ export function previewDeductStockForInvoice(products, stockLog, items, { invoic
   if (!check.ok) {
     return { ok: false, message: check.message, hasStockLines: true, nextProducts: products, nextStockLog: stockLog }
   }
-  const nextProducts = applyStockAdjust(products, linked, -1)
+  const adjusted = computeStockAdjust(products, linked, -1)
+  if (!adjusted.ok) {
+    return { ok: false, message: adjusted.message, hasStockLines: true, nextProducts: products, nextStockLog: stockLog }
+  }
+  const nextProducts = adjusted.nextProducts
   const entries = buildLogEntries(linked, products, { invoiceId, by, restore: false })
   const nextStockLog = entries.length ? [...entries, ...stockLog] : stockLog
   return { ok: true, hasStockLines: true, nextProducts, nextStockLog }
@@ -135,7 +151,7 @@ export function previewRestoreStockForInvoice(products, stockLog, items, { invoi
   if (!linked.length) {
     return { ok: true, hasStockLines: false, nextProducts: products, nextStockLog: stockLog }
   }
-  const nextProducts = applyStockAdjust(products, linked, 1)
+  const nextProducts = computeStockAdjust(products, linked, 1).nextProducts
   const entries = buildLogEntries(linked, products, { invoiceId, by, restore: true })
   const nextStockLog = entries.length ? [...entries, ...stockLog] : stockLog
   return { ok: true, hasStockLines: true, nextProducts, nextStockLog }
@@ -157,7 +173,9 @@ export function deductStockForInvoice(setProducts, setStockLog, products, items,
   if (!linked.length) return { ok: true }
   const check = validateStockForItems(products, linked)
   if (!check.ok) return check
-  adjustProductsStock(setProducts, linked, -1)
+  const adjusted = computeStockAdjust(products, linked, -1)
+  if (!adjusted.ok) return adjusted
+  setProducts(adjusted.nextProducts)
   appendStockLog(setStockLog, buildLogEntries(linked, products, { invoiceId, by, restore: false }))
   return { ok: true }
 }
