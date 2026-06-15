@@ -4,7 +4,7 @@ import {
 } from 'lucide-react'
 import {
   KOI_VARIETIES, KOI_STATUS, KOI_DEATH_CAUSES, FARM_POND_NAMES, mergePondNames,
-  formatSGD, formatKoiSize, genId, today, getInvoiceStatus,
+  formatSGD, formatKoiSize, genId, today,
 } from '../data/constants'
 import { Badge, Btn, Card, ConfirmModalFooter, Input, Modal, PondNameInput, Select, Textarea } from '../components/ui'
 import Fab from '../components/Fab'
@@ -16,7 +16,7 @@ import { LIST_PAGE_SIZE } from '../data/constants'
 import * as db from '../lib/database'
 import { isSupabaseConfigured } from '../lib/supabase'
 import { readKoiImageFile } from '../lib/koiImage'
-import { formatKoiInvoiceLineName, findLinkedKoiInvoices } from '../lib/koiInvoice'
+import { formatKoiInvoiceLineName, findInvoicesForKoiRefund } from '../lib/koiInvoice'
 import {
   buildDeceasedKoiPatch, buildSoldKoiPatch, normalizeKoiSizeField,
   sameKoiId, validateKoiFormFields, validateKoiSaleForm,
@@ -205,9 +205,7 @@ export default function KoiFish({
   }
 
   const refundLinkedInvoices = refundKoi
-    ? findLinkedKoiInvoices(invoices, refundKoi.id).filter(
-      (inv) => getInvoiceStatus(inv) !== 'cancelled',
-    )
+    ? findInvoicesForKoiRefund(invoices, refundKoi)
     : []
 
   const notifyImageError = (message) => {

@@ -40,7 +40,14 @@ function bookedTs(record) {
   return ts({ updatedAt: record.bookedAt })
 }
 
-/** Prefer paid/cancelled when timestamps tie — avoids cloud pull reverting a just-marked invoice. */
+function terminalInvoiceRank(status) {
+  const s = String(status || 'pending').toLowerCase()
+  if (s === 'cancelled') return 2
+  if (s === 'paid') return 1
+  return 0
+}
+
+/** Prefer paid/cancelled when timestamps tie — cancelled beats paid (refund credit notes). */
 export function resolveInvoiceConflict(local, remote) {
   const lt = ts(local)
   const rt = ts(remote)
@@ -48,6 +55,10 @@ export function resolveInvoiceConflict(local, remote) {
   const rs = remote?.status || 'pending'
   if (isTerminalInvoiceStatus(ls) && !isTerminalInvoiceStatus(rs)) return local
   if (isTerminalInvoiceStatus(rs) && !isTerminalInvoiceStatus(ls)) return remote
+
+  const lr = terminalInvoiceRank(ls)
+  const rr = terminalInvoiceRank(rs)
+  if (lr !== rr) return lr > rr ? local : remote
 
   const base = lt !== rt ? (lt > rt ? local : remote) : local
 

@@ -192,10 +192,48 @@ export function restoreInvoiceKoiSales(items, setKoiList, setCustomerKoiList, op
   return removedIds
 }
 
+export function invoiceLineKoiId(item) {
+  if (!item || typeof item !== 'object') return null
+  const direct = item.koiId ?? item.koi_id
+  if (direct != null && direct !== '') return String(direct)
+  const match = String(item.name || '').match(/\((KOI-[A-Z0-9]+)\)/i)
+  return match ? match[1] : null
+}
+
 export function findLinkedKoiInvoices(invoices, koiId) {
   return (invoices || []).filter((inv) =>
-    (inv.items || []).some((it) => sameKoiId(it.koiId, koiId)),
+    (inv.items || []).some((it) => sameKoiId(invoiceLineKoiId(it), koiId)),
   )
+}
+
+/** Invoices to void on koi refund — line koiId, name tag, or sale notes. */
+export function findInvoicesForKoiRefund(invoices, koi) {
+  if (!koi?.id) return []
+  const koiIdStr = String(koi.id)
+  const seen = new Set()
+  const matches = []
+
+  const add = (inv) => {
+    const id = String(inv?.id || '')
+    if (!id || seen.has(id) || getInvoiceStatus(inv) === 'cancelled') return
+    seen.add(id)
+    matches.push(inv)
+  }
+
+  for (const inv of findLinkedKoiInvoices(invoices, koi.id)) add(inv)
+
+  for (const inv of invoices || []) {
+    if (getInvoiceStatus(inv) === 'cancelled') continue
+    if (String(inv.notes || '').includes(koiIdStr)) {
+      add(inv)
+      continue
+    }
+    if (koi.soldTo != null && koi.soldTo !== '' && String(inv.customerId) === String(koi.soldTo)) {
+      if ((inv.items || []).some((it) => String(it.name || '').includes(koiIdStr))) add(inv)
+    }
+  }
+
+  return matches
 }
 
 export function hasActiveInvoiceForKoi(invoices, koiId) {

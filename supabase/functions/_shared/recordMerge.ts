@@ -21,6 +21,13 @@ function isTerminalInvoiceStatus(status: unknown): boolean {
 
 const TERMINAL_KOI_STATUSES = new Set(["sold", "deceased"]);
 
+function terminalInvoiceRank(status: unknown): number {
+  const s = String(status ?? "pending").toLowerCase();
+  if (s === "cancelled") return 2;
+  if (s === "paid") return 1;
+  return 0;
+}
+
 /** Merge incoming client invoice row with existing server row (snake_case). */
 export function mergeInvoiceDbRow(
   existing: Record<string, unknown>,
@@ -36,6 +43,14 @@ export function mergeInvoiceDbRow(
     base = { ...existing, ...incoming };
   } else if (isTerminalInvoiceStatus(rs) && !isTerminalInvoiceStatus(ls)) {
     base = { ...incoming, ...existing };
+  } else if (isTerminalInvoiceStatus(ls) && isTerminalInvoiceStatus(rs)) {
+    const lr = terminalInvoiceRank(ls);
+    const rr = terminalInvoiceRank(rs);
+    if (lr !== rr) {
+      base = lr > rr ? { ...existing, ...incoming } : { ...incoming, ...existing };
+    } else {
+      base = lt !== rt ? (lt > rt ? { ...existing, ...incoming } : { ...incoming, ...existing }) : { ...existing, ...incoming };
+    }
   } else {
     base = lt !== rt ? (lt > rt ? { ...existing, ...incoming } : { ...incoming, ...existing }) : { ...existing, ...incoming };
   }

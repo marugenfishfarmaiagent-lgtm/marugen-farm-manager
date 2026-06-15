@@ -17,7 +17,7 @@ import {
 import { isStockTracked, priceListProducts, stockProducts } from "./lib/productCatalog";
 import {
   applyInvoiceKoiSales, restoreInvoiceKoiSales, previewRestoreInvoiceKoiSales, previewApplyInvoiceKoiSales, availableKoiForInvoice, reconcileKoiSoldFromInvoices,
-  formatKoiInvoiceLineName, validateInvoiceKoiSales, findLinkedKoiInvoices, buildKoiRefundUpdate,
+  formatKoiInvoiceLineName, validateInvoiceKoiSales, findLinkedKoiInvoices, findInvoicesForKoiRefund, buildKoiRefundUpdate,
   isRefundCreditNoteInvoice, buildInvoiceFromKoiSaleDraft, hasActiveInvoiceForKoi,
 } from "./lib/koiInvoice";
 import { sameKoiId } from "./lib/koiOps";
@@ -8572,23 +8572,13 @@ export default function App() {
       sameKoiId(k.id, koi.id) ? buildKoiRefundUpdate(k, reason) : k
     ));
 
-    const linkedInvoices = findLinkedKoiInvoices(invoices, koi.id).filter(
-      (inv) => getInvoiceStatus(inv) !== "cancelled",
-    );
+    const invoiceList = syncStateRef.current.invoices ?? invoices;
+    const linkedInvoices = findInvoicesForKoiRefund(invoiceList, koi);
 
     let koiSynced = false;
+    let customerKoiSynced = false;
     let cancelledInvoiceIds = [];
     try {
-      if (nextKoiList !== koiFishList) {
-        await flushKoiFishSync(nextKoiList);
-        koiSynced = true;
-      }
-      await flushCustomerKoiSync(nextCustomerKoi);
-      if (nextKoiList !== koiFishList) {
-        setKoiFishList(nextKoiList);
-      }
-      setCustomerKoiList(nextCustomerKoi);
-
       for (const inv of linkedInvoices) {
         await cancelInvoiceCloud(inv, {
           skipKoiRestore: true,
@@ -8596,6 +8586,21 @@ export default function App() {
           refundReason: reason,
         });
         cancelledInvoiceIds.push(inv.id);
+      }
+
+      await flushKoiFishSync(nextKoiList);
+      koiSynced = true;
+      await flushCustomerKoiSync(nextCustomerKoi);
+      customerKoiSynced = true;
+      setKoiFishList(nextKoiList);
+      setCustomerKoiList(nextCustomerKoi);
+
+      if (!linkedInvoices.length) {
+        addNotification({
+          type: "warning",
+          title: "No Linked Invoice",
+          message: `${koi.id} was returned to stock, but no matching invoice was found to void.`,
+        });
       }
     } catch (err) {
       for (const invId of [...cancelledInvoiceIds].reverse()) {
@@ -8618,15 +8623,22 @@ export default function App() {
       }
       linkedCustomerKoi.forEach((r) => unmarkDeleted("customer_koi", r.id));
       setCustomerKoiList(snapshotCustomerKoi);
-      if (nextKoiList !== koiFishList) {
-        setKoiFishList(snapshotKoiList);
-        if (koiSynced) {
-          try {
-            await flushKoiFishSync(snapshotKoiList);
-          } catch {
-            /* best-effort server rollback */
-          }
+      if (customerKoiSynced) {
+        try {
+          await flushCustomerKoiSync(snapshotCustomerKoi);
+        } catch {
+          /* best-effort server rollback */
         }
+      }
+      if (koiSynced) {
+        setKoiFishList(snapshotKoiList);
+        try {
+          await flushKoiFishSync(snapshotKoiList);
+        } catch {
+          /* best-effort server rollback */
+        }
+      } else {
+        setKoiFishList(snapshotKoiList);
       }
       addNotification({
         type: "error",
