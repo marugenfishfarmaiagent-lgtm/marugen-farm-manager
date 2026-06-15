@@ -117,7 +117,8 @@ export function sanitizeInvoiceForSync(inv) {
     bookedBy: inv.bookedBy ?? inv.booked_by ?? '',
     createdBy: inv.createdBy ?? inv.created_by ?? '',
   }
-  if (inv.updatedAt) clean.updatedAt = inv.updatedAt
+  const updatedAt = inv.updatedAt ?? inv.updated_at
+  if (updatedAt) clean.updatedAt = updatedAt
   return clean
 }
 
@@ -142,6 +143,7 @@ function mapInvoice(row) {
     bookedAt: row.booked_at ?? row.bookedAt ?? null,
     bookedBy: row.booked_by ?? row.bookedBy ?? '',
     createdBy: row.created_by ?? row.createdBy ?? '',
+    updated_at: row.updated_at,
   }))
 }
 

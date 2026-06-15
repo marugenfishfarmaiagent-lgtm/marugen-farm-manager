@@ -72,7 +72,7 @@ import {
 import { isSupabaseConfigured } from "./lib/supabase";
 import * as auth from "./lib/auth";
 import { markDeleted, clearAllDeletions, peekDeletions, unmarkDeleted } from "./lib/syncDeletions";
-import { applyServerTombstones, buildLiveRowsByEntity, stripTombstonedRows } from "./lib/tombstones";
+import { applyServerTombstones, filterMergeDeletions, mergeLiveByEntityWithLocal, stripTombstonedRows } from "./lib/tombstones";
 import { writeCloudFirst, writeInventoryCloudFirst } from "./lib/cloudWrite";
 import { mergeRecords, mergePondData, mergeInvoices, mergeProducts, mergeKoiFish, mergeCustomerKoi, resolveInvoiceConflict, resolveExpenseConflict, resolveEventConflict } from "./lib/cloudMerge";
 import {
@@ -6881,7 +6881,8 @@ export default function App() {
     });
 
     const syncTombstones = data.syncTombstones || [];
-    const liveByEntity = buildLiveRowsByEntity(cleaned);
+    const localSnap = syncStateRef.current;
+    const liveByEntity = mergeLiveByEntityWithLocal(cleaned, localSnap);
     applyServerTombstones(syncTombstones, liveByEntity);
     cleaned.invoices = stripTombstonedRows(cleaned.invoices, "invoices", syncTombstones);
     cleaned.customers = stripTombstonedRows(cleaned.customers, "customers", syncTombstones);
@@ -6931,10 +6932,17 @@ export default function App() {
     if (merge) {
       setCustomers((prev) => mergeRecords(prev, cleaned.customers, peekDeletions("customers")));
       setProducts((prev) => mergeProducts(prev, cleaned.products, peekDeletions("products")));
+      const localInvoices = localSnap.invoices ?? [];
       const mergedInvoices = applyInvoicePins(mergeInvoices(
-        stripTombstonedRows(syncStateRef.current.invoices ?? [], "invoices", syncTombstones),
+        stripTombstonedRows(localInvoices, "invoices", syncTombstones),
         cleaned.invoices,
-        peekDeletions("invoices"),
+        filterMergeDeletions(
+          "invoices",
+          syncTombstones,
+          localInvoices,
+          cleaned.invoices,
+          peekDeletions("invoices"),
+        ),
       ));
       setInvoices(mergedInvoices);
       setExpenses((prev) => mergeRecords(prev, cleaned.expenses, peekDeletions("expenses"), resolveExpenseConflict));
