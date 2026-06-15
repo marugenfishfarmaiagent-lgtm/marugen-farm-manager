@@ -1326,6 +1326,33 @@ export async function executeAiAction(name, args, ctx) {
           keepPondName,
         })
         const nextKoiList = ctx.koiFishList.map((k) => (sameKoiId(k.id, koi.id) ? soldPatch : k))
+        const saleDraft = a.createInvoice !== false ? {
+          customerId: String(customer.id),
+          customerName: customer.name,
+          manualCustomer: false,
+          items: [{
+            name: formatKoiInvoiceLineName(koi),
+            qty: 1,
+            price: soldPrice,
+            productId: '',
+            manual: false,
+            koiId: koi.id,
+            koiDisposition: disposition,
+            keepPondName: disposition === 'keep' ? keepPondName : '',
+            koiAlreadySold: true,
+          }],
+          notes: `Koi sale — ${koi.name || koi.variety} (${koi.id})`,
+          due: soldDate,
+          discountType: 'none',
+          discountValue: '',
+        } : null
+        if (saleDraft && ctx.onCreateInvoiceFromSale) {
+          try {
+            await ctx.onCreateInvoiceFromSale(saleDraft)
+          } catch (err) {
+            return { success: false, error: err?.message || 'Could not create invoice for this sale.' }
+          }
+        }
         if (disposition === 'keep') {
           try {
             await ctx.onKoiSold?.(koi, customer, soldPrice, soldDate, { disposition, keepPondName })
@@ -1357,32 +1384,7 @@ export async function executeAiAction(name, args, ctx) {
           title: 'Koi Sold (AI)',
           message: `${koi.id} → ${customer.name} ${formatSGD(soldPrice)} (${dispositionNote})`,
         })
-        if (a.createInvoice !== false && ctx.onCreateInvoiceFromSale) {
-          try {
-            await ctx.onCreateInvoiceFromSale({
-              customerId: String(customer.id),
-              customerName: customer.name,
-              manualCustomer: false,
-              items: [{
-                name: formatKoiInvoiceLineName(koi),
-                qty: 1,
-                price: soldPrice,
-                productId: '',
-                manual: false,
-                koiId: koi.id,
-                koiDisposition: disposition,
-                keepPondName: disposition === 'keep' ? keepPondName : '',
-                koiAlreadySold: true,
-              }],
-              notes: `Koi sale — ${koi.name || koi.variety} (${koi.id})`,
-              due: soldDate,
-              discountType: 'none',
-              discountValue: '',
-            })
-          } catch (err) {
-            return { success: false, error: err?.message || 'Koi sold but invoice could not be created.' }
-          }
-        } else {
+        if (!saleDraft) {
           onNavigate?.('koifish')
         }
         return { success: true, message: `Sold ${koi.id} to ${customer.name} for ${formatSGD(soldPrice)} (${dispositionNote})` }

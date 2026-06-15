@@ -8087,6 +8087,7 @@ export default function App() {
     pinInvoice(optimistic);
     const nextInvoices = sortInvoices([optimistic, ...syncStateRef.current.invoices.filter((i) => String(i.id) !== invId)]);
     syncStateRef.current = { ...syncStateRef.current, invoices: nextInvoices };
+    setInvoices(applyInvoicePins(nextInvoices));
 
     const revertCreateOptimistic = () => {
       unpinInvoice(invId);
@@ -8674,16 +8675,17 @@ export default function App() {
       addNotification({
         type: "warning",
         title: "Invoice Access Required",
-        message: "Sale saved. You do not have permission to create invoices.",
+        message: "You need Invoices permission to create an invoice for this sale.",
       });
-      return;
+      throw new Error("Permission denied (invoices).");
     }
 
+    const invoiceList = syncStateRef.current.invoices ?? invoices;
     const koiIds = (draft?.items || []).map((it) => it.koiId).filter(Boolean);
     let existing = null;
     for (const koiId of koiIds) {
-      if (!hasActiveInvoiceForKoi(invoices, koiId)) continue;
-      existing = findLinkedKoiInvoices(invoices, koiId).find(
+      if (!hasActiveInvoiceForKoi(invoiceList, koiId)) continue;
+      existing = findLinkedKoiInvoices(invoiceList, koiId).find(
         (inv) => getInvoiceStatus(inv) !== "cancelled",
       );
       if (existing) break;
@@ -8701,7 +8703,7 @@ export default function App() {
 
     const inv = touchUpdatedAt(db.sanitizeInvoiceForSync(
       buildInvoiceFromKoiSaleDraft(draft, {
-        invoices,
+        invoices: invoiceList,
         customers,
         createdBy: currentUser.name,
       }),
@@ -8721,10 +8723,11 @@ export default function App() {
       setActiveTab("invoices");
       setInvoiceDraftSignal((n) => n + 1);
       addNotification({
-        type: "warning",
+        type: "error",
         title: "Invoice Not Saved",
-        message: err?.message || "Review the draft and save manually.",
+        message: err?.message || "Could not save invoice. Sale was not completed.",
       });
+      throw err;
     }
   }, [
     currentUser, addNotification, invoices, customers, createInvoiceCloud,

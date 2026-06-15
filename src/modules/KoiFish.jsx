@@ -443,8 +443,31 @@ export default function KoiFish({
     })
     const nextList = koiList.map((k) => (sameKoiId(k.id, currentKoi.id) ? soldPatch : k))
     const snapshotKoi = koiList
+    const saleDraft = sellForm.createInvoice ? {
+      customerId: String(customer.id),
+      customerName: customer.name,
+      manualCustomer: false,
+      items: [{
+        name: formatKoiInvoiceLineName(currentKoi),
+        qty: 1,
+        price: soldPrice,
+        productId: '',
+        manual: false,
+        koiId: currentKoi.id,
+        koiDisposition: sellForm.disposition,
+        keepPondName: sellForm.disposition === 'keep' ? keepPondName : '',
+        koiAlreadySold: true,
+      }],
+      notes: `Koi sale — ${currentKoi.name || currentKoi.variety} (${currentKoi.id})`,
+      due: soldDate,
+      discountType: 'none',
+      discountValue: '',
+    } : null
     try {
       setSaving(true)
+      if (saleDraft) {
+        await onCreateInvoiceFromSale?.(saleDraft)
+      }
       if (sellForm.disposition === 'keep') {
         await onKoiSold?.(currentKoi, customer, soldPrice, soldDate, {
           disposition: sellForm.disposition,
@@ -471,28 +494,6 @@ export default function KoiFish({
         title: 'Koi Sold',
         message: `${currentKoi.id} sold to ${customer?.name || 'customer'} for ${formatSGD(soldPrice)} (${dispositionNote})`,
       })
-      if (sellForm.createInvoice) {
-        await onCreateInvoiceFromSale?.({
-          customerId: String(customer.id),
-          customerName: customer.name,
-          manualCustomer: false,
-          items: [{
-            name: formatKoiInvoiceLineName(currentKoi),
-            qty: 1,
-            price: soldPrice,
-            productId: '',
-            manual: false,
-            koiId: currentKoi.id,
-            koiDisposition: sellForm.disposition,
-            keepPondName: sellForm.disposition === 'keep' ? keepPondName : '',
-            koiAlreadySold: true,
-          }],
-          notes: `Koi sale — ${currentKoi.name || currentKoi.variety} (${currentKoi.id})`,
-          due: soldDate,
-          discountType: 'none',
-          discountValue: '',
-        })
-      }
       setSellKoi(null)
     } catch (err) {
       setKoiList(snapshotKoi)
