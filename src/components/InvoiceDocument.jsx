@@ -139,10 +139,12 @@ export default function InvoiceDocument({ invoice, className = '', preview = fal
                 <span className="text-gray-800">{data.shippingFmt}</span>
               </div>
             )}
-            <div className="flex justify-between text-gray-500">
-              <span>Tax</span>
-              <span className="text-gray-800">{data.taxFmt}</span>
-            </div>
+            {data.tax > 0 && (
+              <div className="flex justify-between text-gray-500">
+                <span>GST</span>
+                <span className="text-gray-800">{data.taxFmt}</span>
+              </div>
+            )}
             <div
               className="flex justify-between items-center rounded-md px-3 py-2.5 mt-2 text-white font-bold text-[13px]"
               style={{ backgroundColor: isPaid ? '#047857' : isCancelled ? '#6b7280' : THEME.maroon }}

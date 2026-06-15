@@ -249,6 +249,7 @@ export function buildInvoiceFromKoiSaleDraft(draft, { invoices, customers, creat
   const discountType = draft?.discountType || 'none'
   const discountValue = discountType === 'none' ? 0 : +draft.discountValue || 0
   const shipping = +(draft?.shipping ?? 0) || 0
+  const tax = +(draft?.tax ?? 0) || 0
   const { total } = calcInvoiceAmounts({
     items: invoiceItems.map((it) => ({
       name: it.name,
@@ -258,6 +259,7 @@ export function buildInvoiceFromKoiSaleDraft(draft, { invoices, customers, creat
     discountType,
     discountValue,
     shipping,
+    tax,
   })
   const customerDetails = resolveInvoiceCustomer(
     { customerId: draft?.customerId, customerName: draft?.customerName },
@@ -275,6 +277,7 @@ export function buildInvoiceFromKoiSaleDraft(draft, { invoices, customers, creat
     discountType,
     discountValue,
     shipping,
+    tax,
     total,
     status: 'pending',
     date: issueDate,

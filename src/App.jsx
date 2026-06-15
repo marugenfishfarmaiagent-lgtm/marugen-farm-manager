@@ -83,6 +83,7 @@ import {
   TEAM_SYNC_USER_IDLE_MS,
 } from "./lib/teamSyncDetect";
 import { applyInvoicePins, pinInvoice, unpinInvoice, releaseInvoicePinAfterConfirm } from "./lib/invoicePins";
+import { saveInvoicePendingCreate, clearInvoicePendingCreate, readInvoicePendingCreate } from "./lib/invoicePendingOp";
 import { touchPondData, touchUpdatedAt } from "./lib/syncMeta";
 import {
   applyCustomerPaidDelta, buildNewCustomerRecord, buildUpdatedCustomerRecord, getCustomerDeleteWarnings,
@@ -1500,10 +1501,11 @@ function InvoiceModule({
     discountType: draft.discountType || "none",
     discountValue: draft.discountValue || "",
     shipping: draft.shipping ?? "",
+    tax: draft.tax ?? "",
   }), [emptyItem]);
   const emptyForm = useCallback(() => ({
     customerId: "", customerName: "", manualCustomer: false, items: [emptyItem()], notes: "", due: today(),
-    discountType: "none", discountValue: "", shipping: "",
+    discountType: "none", discountValue: "", shipping: "", tax: "",
   }), [emptyItem]);
 
   const [showNew, setShowNew] = useState(!!openDraft);
@@ -1524,13 +1526,16 @@ function InvoiceModule({
   const [showWhatsappInput, setShowWhatsappInput] = useState(false);
   const [whatsappDraft, setWhatsappDraft] = useState("");
   const [shippingDraft, setShippingDraft] = useState("");
+  const [taxDraft, setTaxDraft] = useState("");
   const [form, setForm] = useState(() => (openDraft ? buildFormFromDraft(openDraft) : emptyForm()));
   const openedFromNavRef = useRef(null);
   const creatingInvoiceRef = useRef(false);
 
-  const resetShippingDraft = useCallback((inv) => {
-    const saved = Number(inv?.shipping) || 0;
-    setShippingDraft(saved > 0 ? String(saved) : "");
+  const resetFeeDrafts = useCallback((inv) => {
+    const savedShipping = Number(inv?.shipping) || 0;
+    setShippingDraft(savedShipping > 0 ? String(savedShipping) : "");
+    const savedTax = Number(inv?.tax) || 0;
+    setTaxDraft(savedTax > 0 ? String(savedTax) : "");
   }, []);
 
   const openViewInvoiceRef = useRef(null);
@@ -1612,14 +1617,15 @@ function InvoiceModule({
     customers,
   );
 
-  const invoiceWithDraftShipping = (inv) => {
+  const invoiceWithDraftFees = (inv) => {
     if (!inv || !activeViewInv || String(activeViewInv.id) !== String(inv.id)) return inv;
     if (!["pending", "overdue"].includes(getInvoiceStatus(inv)) || !canEditRecords(currentUser)) return inv;
     const draftShipping = shippingDraft === "" ? 0 : (+shippingDraft || 0);
-    return { ...activeViewInv, shipping: draftShipping };
+    const draftTax = taxDraft === "" ? 0 : (+taxDraft || 0);
+    return { ...activeViewInv, shipping: draftShipping, tax: draftTax };
   };
 
-  const invoiceForPdfExport = (inv) => invoiceForDisplay(invoiceWithDraftShipping(inv));
+  const invoiceForPdfExport = (inv) => invoiceForDisplay(invoiceWithDraftFees(inv));
 
   const requestInvoiceBookedChange = (id) => {
     if (!canMarkAccounting(currentUser)) {
@@ -1655,8 +1661,8 @@ function InvoiceModule({
     }
     const apply = (i) => {
       if (i.id !== id) return i;
-      const needsAmountRecalc = "discountType" in normalized || "discountValue" in normalized || "shipping" in normalized;
-      const base = needsAmountRecalc ? invoiceWithDraftShipping(i) : i;
+      const needsAmountRecalc = "discountType" in normalized || "discountValue" in normalized || "shipping" in normalized || "tax" in normalized;
+      const base = needsAmountRecalc ? invoiceWithDraftFees(i) : i;
       let merged = touchUpdatedAt(db.sanitizeInvoiceForSync({ ...base, ...normalized }));
       if (needsAmountRecalc) {
         merged = { ...merged, total: calcInvoiceAmounts(merged).total };
@@ -1682,7 +1688,7 @@ function InvoiceModule({
     }
     const discountValue = discountType === "none" ? 0 : +discountValueRaw || 0;
     const latest = invoices.find((i) => String(i.id) === String(inv.id)) || inv;
-    const base = invoiceWithDraftShipping(latest);
+    const base = invoiceWithDraftFees(latest);
     const merged = touchUpdatedAt(db.sanitizeInvoiceForSync({
       ...base,
       discountType,
@@ -1768,50 +1774,121 @@ function InvoiceModule({
     return true;
   };
 
+  const commitInvoiceTax = async (inv, taxRaw, { silent = false } = {}) => {
+    if (!inv) return inv;
+    if (!canEditRecords(currentUser)) {
+      if (!silent) notifyPermissionDenied(addNotification, "edit");
+      return inv;
+    }
+    const tax = taxRaw === "" || taxRaw == null ? 0 : +taxRaw || 0;
+    if (tax < 0) {
+      if (!silent) {
+        addNotification({ type: "error", title: "Invalid GST", message: "GST amount cannot be negative." });
+      }
+      return inv;
+    }
+    const latest = invoices.find((i) => String(i.id) === String(inv.id)) || inv;
+    const prevTax = Number(latest.tax) || 0;
+    if (prevTax === tax) {
+      setTaxDraft(tax > 0 ? String(tax) : "");
+      return latest;
+    }
+    const merged = touchUpdatedAt(db.sanitizeInvoiceForSync({
+      ...latest,
+      tax,
+      total: calcInvoiceAmounts({ ...latest, tax }).total,
+    }));
+    if (!silent) setSavingInvoiceFeesId(inv.id);
+    try {
+      const saved = await onPatchInvoiceCloud?.(merged);
+      const row = saved || merged;
+      setTaxDraft(tax > 0 ? String(tax) : "");
+      if (saved) setViewInv((prev) => (prev?.id === inv.id ? saved : prev));
+      if (!silent) {
+        addNotification({ type: "success", title: "GST Updated", message: `Total is now ${formatSGD(row.total)}` });
+      }
+      return row;
+    } catch (err) {
+      if (!silent) {
+        addNotification({
+          type: "error",
+          title: "GST Not Saved",
+          message: err?.message || "Could not save GST to cloud. Try again.",
+        });
+      }
+      return latest;
+    } finally {
+      if (!silent) setSavingInvoiceFeesId(null);
+    }
+  };
+
+  const applyInvoiceTax = async (inv, taxRaw) => {
+    if (!canEditRecords(currentUser)) {
+      notifyPermissionDenied(addNotification, "edit");
+      return false;
+    }
+    await commitInvoiceTax(inv, taxRaw);
+    return true;
+  };
+
   const resolveInvForPayment = async (inv) => {
     if (!inv || !activeViewInv || String(activeViewInv.id) !== String(inv.id)) return inv;
     if (!["pending", "overdue"].includes(getInvoiceStatus(inv))) return inv;
-    return commitInvoiceShipping(activeViewInv, shippingDraft, { silent: true });
+    const withShipping = await commitInvoiceShipping(activeViewInv, shippingDraft, { silent: true });
+    return commitInvoiceTax(withShipping, taxDraft, { silent: true });
   };
 
-  const persistShippingDraftIfDirty = async (inv, draftRaw = shippingDraft) => {
+  const persistFeeDraftsIfDirty = async (inv, {
+    shippingRaw = shippingDraft,
+    taxRaw = taxDraft,
+  } = {}) => {
     if (!inv || !canEditRecords(currentUser)) return inv;
     if (!["pending", "overdue"].includes(getInvoiceStatus(inv))) return inv;
-    const latest = invoices.find((i) => String(i.id) === String(inv.id)) || inv;
-    const draftShipping = draftRaw === "" ? 0 : (+draftRaw || 0);
+    let latest = invoices.find((i) => String(i.id) === String(inv.id)) || inv;
+    const draftShipping = shippingRaw === "" ? 0 : (+shippingRaw || 0);
     const prevShipping = Number(latest.shipping) || 0;
-    if (draftShipping === prevShipping) return latest;
-    return commitInvoiceShipping(latest, draftRaw, { silent: true });
+    if (draftShipping !== prevShipping) {
+      latest = await commitInvoiceShipping(latest, shippingRaw, { silent: true });
+    }
+    const draftTax = taxRaw === "" ? 0 : (+taxRaw || 0);
+    const prevTax = Number(latest.tax) || 0;
+    if (draftTax !== prevTax) {
+      latest = await commitInvoiceTax(latest, taxRaw, { silent: true });
+    }
+    return latest;
   };
 
   const openViewInvoice = async (inv) => {
     if (activeViewInv && String(activeViewInv.id) !== String(inv?.id)) {
-      await persistShippingDraftIfDirty(activeViewInv);
-      resetShippingDraft(inv);
+      await persistFeeDraftsIfDirty(activeViewInv);
+      resetFeeDrafts(inv);
     } else if (!activeViewInv) {
-      resetShippingDraft(inv);
+      resetFeeDrafts(inv);
     }
     setViewInv(inv);
   };
 
   const closeViewInvoice = async () => {
     if (cancelConfirm || blockViewDismiss) return;
-    await persistShippingDraftIfDirty(activeViewInv);
+    await persistFeeDraftsIfDirty(activeViewInv);
     setViewInv(null);
     setShowWhatsappInput(false);
     setShippingDraft("");
+    setTaxDraft("");
   };
 
   const shippingDraftRef = useRef(shippingDraft);
+  const taxDraftRef = useRef(taxDraft);
   const viewInvRef = useRef(viewInv);
   const invoicesRef = useRef(invoices);
-  const persistShippingDraftRef = useRef(persistShippingDraftIfDirty);
+  const persistFeeDraftsRef = useRef(persistFeeDraftsIfDirty);
 
   useEffect(() => {
     shippingDraftRef.current = shippingDraft;
+    taxDraftRef.current = taxDraft;
     viewInvRef.current = viewInv;
     invoicesRef.current = invoices;
-    persistShippingDraftRef.current = persistShippingDraftIfDirty;
+    persistFeeDraftsRef.current = persistFeeDraftsIfDirty;
     openViewInvoiceRef.current = openViewInvoice;
   });
 
@@ -1819,7 +1896,12 @@ function InvoiceModule({
     const id = viewInvRef.current?.id;
     if (!id) return;
     const inv = invoicesRef.current.find((i) => String(i.id) === String(id));
-    if (inv) void persistShippingDraftRef.current(inv, shippingDraftRef.current);
+    if (inv) {
+      void persistFeeDraftsRef.current(inv, {
+        shippingRaw: shippingDraftRef.current,
+        taxRaw: taxDraftRef.current,
+      });
+    }
   }, []);
 
   const stripBlankItems = (items) => items.filter(
@@ -1914,6 +1996,7 @@ function InvoiceModule({
     discountType: form.discountType,
     discountValue: form.discountType === "none" ? 0 : +form.discountValue || 0,
     shipping: +form.shipping || 0,
+    tax: +form.tax || 0,
   });
 
   const createInvoice = async () => {
@@ -1954,6 +2037,10 @@ function InvoiceModule({
     }
     if (form.shipping !== "" && +form.shipping < 0) {
       setFormError("Shipping fee cannot be negative.");
+      return;
+    }
+    if (form.tax !== "" && +form.tax < 0) {
+      setFormError("GST amount cannot be negative.");
       return;
     }
     const hasStockTrackedLines = activeItems.some((it) => {
@@ -2049,6 +2136,7 @@ function InvoiceModule({
         addNotification({ type: "error", title: "Fish Stock", message: koiApply.message });
         return;
       }
+      saveInvoicePendingCreate({ invoiceId: invId, items: invoiceItems });
       const inv = touchUpdatedAt(db.sanitizeInvoiceForSync({
         id: invId,
         customerId: form.manualCustomer || !form.customerId ? null : form.customerId,
@@ -2060,6 +2148,7 @@ function InvoiceModule({
         discountType: form.discountType,
         discountValue,
         shipping: +form.shipping || 0,
+        tax: +form.tax || 0,
         total: formAmounts.total,
         status: "pending",
         date: issueDate,
@@ -2082,6 +2171,7 @@ function InvoiceModule({
           ? previewRestoreInvoiceKoiSales(invoiceItems, koiSalePreview.nextKoiList, customerKoiList)
           : undefined,
       });
+      clearInvoicePendingCreate();
       setShowNew(false);
       setFormError("");
       setForm(emptyForm());
@@ -2141,6 +2231,7 @@ function InvoiceModule({
         onInventorySideEffect?.();
         setInvoices((prev) => prev.filter((i) => String(i.id) !== String(invId)));
       }
+      clearInvoicePendingCreate();
       const conflictMsg = /already in use/i.test(String(err?.message || ""));
       const fallback = "Could not save invoice to cloud. Check connection and try again.";
       const message = err?.message || fallback;
@@ -2279,12 +2370,13 @@ function InvoiceModule({
   };
 
   const exportInvoicesCsv = () => {
+    const visible = invoices.filter(isAppVisibleInvoice);
     const base = backupBaseName();
-    downloadFile(invoicesToCsv(invoices), `${base}-invoices.csv`, "text/csv");
+    downloadFile(invoicesToCsv(visible), `${base}-invoices.csv`, "text/csv");
     addNotification({
       type: "success",
       title: "Invoices exported",
-      message: `${invoices.length} invoice(s) saved as CSV.`,
+      message: `${visible.length} visible invoice(s) saved as CSV (older hidden records excluded).`,
     });
   };
 
@@ -2375,7 +2467,7 @@ function InvoiceModule({
             />
           </Card>
         ) : invoicePage.paginatedItems.map(inv => {
-          const invAmounts = calcInvoiceAmounts(invoiceWithDraftShipping(inv));
+          const invAmounts = calcInvoiceAmounts(invoiceWithDraftFees(inv));
           const status = getInvoiceStatus(inv);
           const isMarking = markingPaidId === inv.id;
           return (
@@ -2465,7 +2557,7 @@ function InvoiceModule({
               </td></tr>
             ) :
               invoicePage.paginatedItems.map(inv => {
-                const invAmounts = calcInvoiceAmounts(invoiceWithDraftShipping(inv));
+                const invAmounts = calcInvoiceAmounts(invoiceWithDraftFees(inv));
                 return (
                 <tr key={inv.id} data-invoice-id={inv.id} className={`text-slate-300 hover:bg-slate-700/20 ${highlightInvId === inv.id ? "bg-cyan-500/10 ring-1 ring-inset ring-cyan-500/40" : ""}`}>
                   <td className="p-3 font-mono text-cyan-400 font-bold text-xs">{inv.id}</td>
@@ -2755,6 +2847,17 @@ function InvoiceModule({
                   placeholder="0.00"
                 />
               </div>
+              <div className="mt-3">
+                <Input
+                  label="GST (S$)"
+                  type="number"
+                  value={form.tax}
+                  onChange={(e) => setForm((f) => ({ ...f, tax: e.target.value }))}
+                  min="0"
+                  step="0.01"
+                  placeholder="0.00"
+                />
+              </div>
             </div>
             <div className="bg-slate-900/50 p-4 space-y-2 text-sm">
               <div className="flex justify-between text-slate-400">
@@ -2771,6 +2874,12 @@ function InvoiceModule({
                 <div className="flex justify-between text-slate-400">
                   <span>Shipping</span>
                   <span className="text-slate-200">{formatSGD(+form.shipping || 0)}</span>
+                </div>
+              )}
+              {(+form.tax || 0) > 0 && (
+                <div className="flex justify-between text-slate-400">
+                  <span>GST</span>
+                  <span className="text-slate-200">{formatSGD(+form.tax || 0)}</span>
                 </div>
               )}
               <div className="flex justify-between items-center pt-2 border-t border-slate-700/50">
@@ -2804,7 +2913,7 @@ function InvoiceModule({
         {activeViewInv && (() => {
           const canEditDiscount = ["pending", "overdue"].includes(getInvoiceStatus(activeViewInv));
           const canEditFees = canEditDiscount && canEditRecords(currentUser);
-          const draftInv = invoiceWithDraftShipping(activeViewInv);
+          const draftInv = invoiceWithDraftFees(activeViewInv);
           const viewAmounts = calcInvoiceAmounts(canEditFees ? draftInv : activeViewInv);
           const docInv = invoiceForPdfExport(activeViewInv);
           const isMarkingView = String(markingPaidId) === String(activeViewInv.id);
@@ -2911,6 +3020,29 @@ function InvoiceModule({
                     </Btn>
                   </div>
                 </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                  <Input
+                    label="GST (S$)"
+                    type="number"
+                    value={taxDraft}
+                    onChange={(e) => setTaxDraft(e.target.value)}
+                    onBlur={() => { void applyInvoiceTax(activeViewInv, taxDraft); }}
+                    min="0"
+                    step="0.01"
+                    placeholder="0.00"
+                  />
+                  <div className="flex items-end">
+                    <Btn
+                      className="w-full justify-center"
+                      onClick={() => { void applyInvoiceTax(activeViewInv, taxDraft); }}
+                      disabled={String(savingInvoiceFeesId) === String(activeViewInv.id)}
+                    >
+                      {String(savingInvoiceFeesId) === String(activeViewInv.id)
+                        ? <><Loader2 size={14} className="animate-spin" />Saving...</>
+                        : <><Check size={14} />Apply GST</>}
+                    </Btn>
+                  </div>
+                </div>
                 <div className="flex flex-wrap gap-4 mt-3 text-xs text-slate-400">
                   <span>Subtotal: <span className="text-slate-200">{formatSGD(viewAmounts.subtotal)}</span></span>
                   {viewAmounts.discountAmount > 0 && (
@@ -2918,6 +3050,9 @@ function InvoiceModule({
                   )}
                   {viewAmounts.shipping > 0 && (
                     <span>Shipping: <span className="text-slate-200">{formatSGD(viewAmounts.shipping)}</span></span>
+                  )}
+                  {viewAmounts.tax > 0 && (
+                    <span>GST: <span className="text-slate-200">{formatSGD(viewAmounts.tax)}</span></span>
                   )}
                   <span>Total due: <span className="text-cyan-400 font-bold">{formatSGD(viewAmounts.total)}</span></span>
                 </div>
@@ -2942,7 +3077,7 @@ function InvoiceModule({
               </Card>
             )}
             <div className="no-print rounded-xl border border-slate-600 bg-[#d4d4d4] p-2 sm:p-6 min-w-0 max-w-full overflow-x-hidden overflow-y-auto max-h-[min(65vh,920px)] relative z-0 isolate">
-              <InvoicePreviewFrame resetKey={`${activeViewInv?.id || ''}-${activeViewInv?.status || ''}-${activeViewInv?.updatedAt || ''}-${shippingDraft}`}>
+              <InvoicePreviewFrame resetKey={`${activeViewInv?.id || ''}-${activeViewInv?.status || ''}-${activeViewInv?.updatedAt || ''}-${shippingDraft}-${taxDraft}`}>
                 <InvoiceDocument invoice={docInv} preview className="shadow-2xl" />
               </InvoicePreviewFrame>
             </div>
@@ -6695,6 +6830,7 @@ export default function App() {
   const inventorySyncPendingRef = useRef(false);
   const handleKoiSoldRef = useRef(() => {});
   const invoicesNormalizedRef = useRef(false);
+  const invoicePendingRecoveryRef = useRef(false);
   const currentUserRef = useRef(currentUser);
 
   useEffect(() => {
@@ -8562,6 +8698,33 @@ export default function App() {
     invoicesNormalizedRef.current = true;
     setInvoices((prev) => sortInvoices(prev.map((inv) => db.sanitizeInvoiceForSync(inv))));
   }, [cloudHydrated]);
+
+  useEffect(() => {
+    if (!dataReady || !cloudHydrated || invoicePendingRecoveryRef.current) return;
+    const pending = readInvoicePendingCreate();
+    if (!pending) return;
+    invoicePendingRecoveryRef.current = true;
+
+    const invId = String(pending.invoiceId);
+    const items = pending.items || [];
+    const exists = (syncStateRef.current.invoices || []).some((i) => String(i.id) === invId);
+    if (exists) {
+      clearInvoicePendingCreate();
+      return;
+    }
+
+    const productsSnap = syncStateRef.current.products || [];
+    const by = currentUser?.name || "Staff";
+    restoreStockForInvoice(setProducts, setStockLog, productsSnap, items, { invoiceId: invId, by });
+    restoreInvoiceKoiSales(items, setKoiFishList, setCustomerKoiList);
+    inventorySyncPendingRef.current = true;
+    clearInvoicePendingCreate();
+    addNotification({
+      type: "warning",
+      title: "Interrupted Invoice Recovered",
+      message: `Stock and fish were restored after an unfinished create for ${invId}. Create the invoice again if still needed.`,
+    });
+  }, [dataReady, cloudHydrated, currentUser, addNotification]);
 
   const pendingRemindersKey = useMemo(
     () => pendingRemindersSyncKey(pondData.reminders),

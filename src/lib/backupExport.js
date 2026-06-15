@@ -1,4 +1,4 @@
-import { getInvoiceStatus } from '../data/constants'
+import { isAppVisibleInvoice } from './retention'
 
 export const BACKUP_VERSION = 1
 
@@ -81,13 +81,14 @@ function summarizeInvoiceItems(items = []) {
   }).join('; ')
 }
 
-export function invoicesToCsv(invoices = []) {
+export function invoicesToCsv(invoices = [], { visibleOnly = false } = {}) {
+  const rows = (visibleOnly ? invoices.filter(isAppVisibleInvoice) : invoices)
   const header = csvRow([
     'id', 'date', 'due', 'status', 'customer_name', 'customer_phone', 'customer_whatsapp',
-    'total', 'booked', 'booked_at', 'booked_by', 'discount_type', 'discount_value', 'shipping',
+    'total', 'booked', 'booked_at', 'booked_by', 'discount_type', 'discount_value', 'shipping', 'tax',
     'notes', 'items_summary', 'created_by',
   ])
-  const rows = invoices.map((inv) => csvRow([
+  const body = rows.map((inv) => csvRow([
     inv.id,
     inv.date,
     inv.due,
@@ -102,11 +103,12 @@ export function invoicesToCsv(invoices = []) {
     inv.discountType || 'none',
     inv.discountValue ?? 0,
     inv.shipping ?? 0,
+    inv.tax ?? 0,
     inv.notes || '',
     summarizeInvoiceItems(inv.items),
     inv.createdBy || '',
   ]))
-  return [header, ...rows].join('\n')
+  return [header, ...body].join('\n')
 }
 
 export function expensesToCsv(expenses = []) {

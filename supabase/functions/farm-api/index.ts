@@ -32,6 +32,7 @@ import {
 } from "../_shared/koiImageStorage.ts";
 import { signFarmImageUrl } from "../_shared/farmImageStorage.ts";
 import { deleteInvoicePdfs } from "../_shared/invoiceStorage.ts";
+import { deductStockForInvoiceOnServer, restoreStockForInvoiceOnServer } from "../_shared/invoiceStock.ts";
 import { hashPin, verifyPin } from "../_shared/pin.ts";
 import { purgeExpiredCloudData } from "../_shared/retention.ts";
 import {
@@ -985,6 +986,11 @@ Deno.serve(async (req) => {
       } else if (!skipKoiRestore) {
         await restoreInvoiceKoiSalesOnServer(db, existing.items || [], now);
       }
+      await restoreStockForInvoiceOnServer(db, id, existing.items || [], {
+        by: user.name || "Staff",
+        now,
+        invoiceDate: nullableDate(existing.date),
+      });
       return J({ ok: true, invoice: data, customer: customerRow });
     }
 
@@ -1064,6 +1070,7 @@ Deno.serve(async (req) => {
         discount_type: incoming.discountType ?? incoming.discount_type ?? "none",
         discount_value: nullableNumeric(incoming.discountValue ?? incoming.discount_value),
         shipping: nullableNumeric(incoming.shipping),
+        tax: nullableNumeric(incoming.tax),
         booked: Boolean(incoming.booked),
         booked_at: nullableTimestamptz(incoming.bookedAt ?? incoming.booked_at),
         booked_by: incoming.bookedBy ?? incoming.booked_by ?? "",
@@ -1085,8 +1092,19 @@ Deno.serve(async (req) => {
           if (error.code === "23505") return invoiceIdConflict();
           throw error;
         }
-        await clearSyncTombstones(db, "invoices", [id]);
-        await applyInvoiceKoiSalesOnServer(db, items, invoiceCustomerId(incoming), nullableDate(row.date), now);
+        const createdBy = String(incoming.createdBy ?? incoming.created_by ?? user.name ?? "Staff");
+        try {
+          await clearSyncTombstones(db, "invoices", [id]);
+          await applyInvoiceKoiSalesOnServer(db, items, invoiceCustomerId(incoming), nullableDate(row.date), now);
+          await deductStockForInvoiceOnServer(db, id, items, {
+            by: createdBy,
+            now,
+            invoiceDate: nullableDate(row.date),
+          });
+        } catch (sideErr) {
+          await db.from("invoices").delete().eq("id", id);
+          throw sideErr;
+        }
         return J({ ok: true, invoice: data });
       }
 
@@ -1240,6 +1258,7 @@ Deno.serve(async (req) => {
           discount_type: i.discountType ?? "none",
           discount_value: nullableNumeric(i.discountValue),
           shipping: nullableNumeric(i.shipping),
+          tax: nullableNumeric(i.tax),
           booked: Boolean(i.booked),
           booked_at: nullableTimestamptz(i.bookedAt),
           booked_by: i.bookedBy ?? "",
@@ -1579,6 +1598,7 @@ Deno.serve(async (req) => {
           discount_type: i.discountType ?? "none",
           discount_value: nullableNumeric(i.discountValue),
           shipping: nullableNumeric(i.shipping),
+          tax: nullableNumeric(i.tax),
           booked: Boolean(i.booked),
           booked_at: nullableTimestamptz(i.bookedAt),
           booked_by: i.bookedBy ?? "",
