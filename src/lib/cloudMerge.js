@@ -171,7 +171,10 @@ export function resolveKoiConflict(local, remote) {
   const ls = local?.status || KOI_STATUS.AVAILABLE
   const rs = remote?.status || KOI_STATUS.AVAILABLE
   if (TERMINAL_KOI_STATUSES.has(ls) && !TERMINAL_KOI_STATUSES.has(rs)) return local
-  if (TERMINAL_KOI_STATUSES.has(rs) && !TERMINAL_KOI_STATUSES.has(ls)) return remote
+  if (TERMINAL_KOI_STATUSES.has(rs) && !TERMINAL_KOI_STATUSES.has(ls)) {
+    if (lt >= rt) return local
+    return remote
+  }
   if (lt !== rt) return lt > rt ? local : remote
   return local
 }

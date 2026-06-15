@@ -7613,7 +7613,7 @@ export default function App() {
     }
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
-  const flushKoiFishSync = useCallback(async (koiOverride) => {
+  const flushKoiFishSync = useCallback(async (koiOverride, options = {}) => {
     if (!isSupabaseConfigured) return;
     if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
       throw new Error("Cloud sync is not ready.");
@@ -7637,7 +7637,7 @@ export default function App() {
     const payload = koiOverride ?? syncStateRef.current.koiFishList ?? [];
     syncInFlightRef.current += 1;
     try {
-      await db.syncKoiFish(payload);
+      await db.syncKoiFish(payload, options);
       resetSyncHealth();
       touchLastSync();
       explicitFlushAtRef.current.koifish = Date.now();
@@ -8630,10 +8630,15 @@ export default function App() {
         cancelledInvoiceIds.push(inv.id);
       }
 
-      await flushKoiFishSync(nextKoiList);
+      await flushKoiFishSync(nextKoiList, { force: true });
       koiSynced = true;
       await flushCustomerKoiSync(nextCustomerKoi);
       customerKoiSynced = true;
+      syncStateRef.current = {
+        ...syncStateRef.current,
+        koiFishList: nextKoiList,
+        customerKoiList: nextCustomerKoi,
+      };
       setKoiFishList(nextKoiList);
       setCustomerKoiList(nextCustomerKoi);
 

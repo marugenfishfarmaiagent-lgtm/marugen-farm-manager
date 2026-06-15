@@ -106,7 +106,8 @@ export function mergeKoiDbRow(
   if (TERMINAL_KOI_STATUSES.has(ls) && !TERMINAL_KOI_STATUSES.has(rs)) {
     picked = { ...existing, ...incoming };
   } else if (TERMINAL_KOI_STATUSES.has(rs) && !TERMINAL_KOI_STATUSES.has(ls)) {
-    picked = { ...incoming, ...existing };
+    // Refund/restock with a newer client row beats stale sold on server.
+    picked = lt >= rt ? { ...existing, ...incoming } : { ...incoming, ...existing };
   } else if (lt !== rt) {
     picked = lt > rt ? { ...existing, ...incoming } : { ...incoming, ...existing };
   } else {
@@ -115,10 +116,15 @@ export function mergeKoiDbRow(
 
   const status = String(picked.status ?? "available").toLowerCase();
   const soldTo = picked.sold_to ?? picked.soldTo;
+  const isSold = status === "sold";
   return {
     ...picked,
     status,
-    sold_to: status === "sold" ? soldTo : null,
+    sold_to: isSold ? soldTo : null,
+    sold_date: isSold ? (picked.sold_date ?? picked.soldDate ?? null) : null,
+    sold_price: isSold ? (picked.sold_price ?? picked.soldPrice ?? null) : null,
+    sell_disposition: isSold ? (picked.sell_disposition ?? picked.sellDisposition ?? null) : null,
+    keep_pond_name: isSold ? (picked.keep_pond_name ?? picked.keepPondName ?? null) : null,
   };
 }
 
