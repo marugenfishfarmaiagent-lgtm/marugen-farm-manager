@@ -77,6 +77,15 @@ export function normalizeProductRecord(raw, { catalogOnly = false } = {}) {
   }
 }
 
+/** Build activity-log note for manual restock (optional supplier invoice no.). */
+export function formatRestockLogNote(raw) {
+  const text = String(raw ?? '').trim()
+  if (!text) return 'Manual restock'
+  const inv = text.match(/INV\d{8}-\d+/i)
+  if (inv) return `Restock ${inv[0].toUpperCase()}`
+  return text
+}
+
 export function buildStockLogEntry(product, type, { qty, price, total, note, by } = {}) {
   const entry = touchUpdatedAt({
     id: genStockLogId(),

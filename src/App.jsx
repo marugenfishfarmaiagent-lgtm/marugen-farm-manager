@@ -6,12 +6,13 @@ import CustomerKoi from "./modules/CustomerKoi";
 import PondManagement from "./modules/PondManagement";
 import { loadKoiFish, saveKoiFish, loadCustomerKoi, saveCustomerKoi, loadPondData, savePondData } from "./lib/koiStorage";
 import { loadProducts, saveProducts, loadStockLog, saveStockLog } from "./lib/farmStorage";
+import { markLowStockAlertShownToday, wasLowStockAlertShownToday } from "./lib/lowStockAlert";
 import {
   clearLocalOnlyStorage, emptyPondData, resolveCloudKoiPayload, resolveCloudWhatsappGroups,
 } from "./lib/cloudData";
 import { applyStockPreview, deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem, validateStockForItems, previewDeductStockForInvoice, previewRestoreStockForInvoice } from "./lib/inventoryStock";
 import {
-  adjustProductStockInList, buildStockLogEntry, getLowStockProducts, isProductOnActiveInvoice,
+  adjustProductStockInList, buildStockLogEntry, formatRestockLogNote, getLowStockProducts, isProductOnActiveInvoice,
   normalizeProductRecord, parseStockQty, sameProductId, sortStockLog, validateProductFields,
 } from "./lib/inventoryOps";
 import { isStockTracked, priceListProducts, stockProducts } from "./lib/productCatalog";
@@ -926,6 +927,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   const [showSell, setShowSell] = useState(null);
   const [showRestock, setShowRestock] = useState(null);
   const [restockQty, setRestockQty] = useState(1);
+  const [restockNote, setRestockNote] = useState("");
   const [search, setSearch] = useState("");
   const [catFilter, setCatFilter] = useState("All");
   const [useQty, setUseQty] = useState(1);
@@ -1203,7 +1205,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     setSellPrice("");
   };
 
-  const restock = async (product, qty) => {
+  const restock = async (product, qty, note) => {
     const amount = parseStockQty(qty);
     if (amount <= 0) {
       addNotification({ type: "error", title: "Invalid Quantity", message: "Enter a quantity of at least 1." });
@@ -1212,10 +1214,11 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     const productsSnapshot = products;
     const stockSnapshot = stockLog;
     const nextProducts = adjustProductStockInList(productsSnapshot, product.id, amount);
+    const logNote = formatRestockLogNote(note);
     const nextStockLog = [
       buildStockLogEntry(product, "restock", {
         qty: amount,
-        note: "Manual restock",
+        note: logNote,
         by: currentUser?.name || "Staff",
       }),
       ...stockSnapshot,
@@ -1224,7 +1227,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     addNotification({
       type: "info",
       title: "Restocked",
-      message: `${product.name} restocked by ${amount} ${product.unit}`,
+      message: `${product.name} restocked by ${amount} ${product.unit}${logNote !== "Manual restock" ? ` (${logNote})` : ""}`,
     });
   };
 
@@ -1335,7 +1338,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
                     <div className="flex gap-2 flex-wrap">
                       <Btn variant="success" size="sm" onClick={() => { setShowSell(p); setSellPrice(p.price.toString()); }}><ShoppingBag size={12} />Sell</Btn>
                       <Btn variant="secondary" size="sm" onClick={() => setShowUse(p)}><Archive size={12} />Use</Btn>
-                      <Btn variant="ghost" size="sm" onClick={() => { setShowRestock(p); setRestockQty(1); }}><Plus size={12} />Restock</Btn>
+                      <Btn variant="ghost" size="sm" onClick={() => { setShowRestock(p); setRestockQty(1); setRestockNote(""); }}><Plus size={12} />Restock</Btn>
                     </div>
                   )}
                 </Card>
@@ -1498,17 +1501,25 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       {/* Restock Modal */}
       <Modal
         open={!!showRestock}
-        onClose={() => setShowRestock(null)}
+        onClose={() => { setShowRestock(null); setRestockNote(""); }}
         title={`Restock: ${showRestock?.name}`}
         size="sm"
         footer={(
-          <ConfirmModalFooter onCancel={() => setShowRestock(null)}>
-            <Btn onClick={() => { const q = parseStockQty(restockQty); if (q > 0) { restock(showRestock, q); setShowRestock(null); } }} disabled={parseStockQty(restockQty) <= 0} className="w-full sm:w-auto justify-center"><Plus size={14} />Confirm Restock</Btn>
+          <ConfirmModalFooter onCancel={() => { setShowRestock(null); setRestockNote(""); }}>
+            <Btn onClick={() => {
+              const q = parseStockQty(restockQty);
+              if (q > 0) {
+                restock(showRestock, q, restockNote);
+                setShowRestock(null);
+                setRestockNote("");
+              }
+            }} disabled={parseStockQty(restockQty) <= 0} className="w-full sm:w-auto justify-center"><Plus size={14} />Confirm Restock</Btn>
           </ConfirmModalFooter>
         )}
       >
         <p className="text-slate-400 text-sm mb-4">Current stock: <span className="text-white font-bold">{showRestock?.stock} {showRestock?.unit}</span></p>
-        <Input label="Quantity to Add" type="number" value={restockQty} onChange={(e) => setRestockQty(parseStockQty(e.target.value) || "")} min="1" />
+        <Input label="Quantity to Add" type="number" value={restockQty} onChange={(e) => setRestockQty(parseStockQty(e.target.value) || "")} min="1" className="mb-3" />
+        <Input label="Invoice No. (optional)" value={restockNote} onChange={(e) => setRestockNote(e.target.value)} placeholder="INV20260615-01" />
       </Modal>
 
       {/* Sell Stock Modal */}
@@ -8817,16 +8828,20 @@ export default function App() {
   useEffect(() => {
     if (!currentUser || !hasPermission(currentUser, "inventory")) return;
     const lowStock = getLowStockProducts(products);
-    if (lowStock.length > 0 && !lowStockNotified.current) {
-      lowStockNotified.current = true;
-      addNotification({
-        type: "warning",
-        title: "Low Stock Alert",
-        message: `${lowStock.length} product(s) need restocking: ${lowStock.map(p => p.name).join(", ")}`,
-        team: false,
-      });
+    if (lowStock.length === 0) {
+      lowStockNotified.current = false;
+      return;
     }
-    if (lowStock.length === 0) lowStockNotified.current = false;
+    const userId = currentUser.id;
+    if (lowStockNotified.current || wasLowStockAlertShownToday(userId)) return;
+    lowStockNotified.current = true;
+    markLowStockAlertShownToday(userId);
+    addNotification({
+      type: "warning",
+      title: "Low Stock Alert",
+      message: `${lowStock.length} product(s) need restocking: ${lowStock.map(p => p.name).join(", ")}`,
+      team: false,
+    });
   }, [products, currentUser, addNotification]);
 
   const navItems = currentUser
