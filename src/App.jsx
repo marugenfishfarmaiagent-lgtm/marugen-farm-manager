@@ -924,7 +924,6 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   const [deleteProduct, setDeleteProduct] = useState(null);
   const [deletingProduct, setDeletingProduct] = useState(false);
   const [showUse, setShowUse] = useState(null);
-  const [showSell, setShowSell] = useState(null);
   const [showRestock, setShowRestock] = useState(null);
   const [restockQty, setRestockQty] = useState(1);
   const [restockNote, setRestockNote] = useState("");
@@ -932,8 +931,6 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   const [catFilter, setCatFilter] = useState("All");
   const [useQty, setUseQty] = useState(1);
   const [useNote, setUseNote] = useState("");
-  const [sellQty, setSellQty] = useState(1);
-  const [sellPrice, setSellPrice] = useState("");
   const [showOlderStockLog, setShowOlderStockLog] = useState(false);
   const [form, setForm] = useState(EMPTY_PRODUCT_FORM);
 
@@ -1162,49 +1159,6 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     setUseNote("");
   };
 
-  const sellStock = async (product) => {
-    const qty = parseStockQty(sellQty);
-    const available = Number(product.stock) || 0;
-    if (qty <= 0) {
-      addNotification({ type: "error", title: "Invalid Quantity", message: "Enter a quantity of at least 1." });
-      return;
-    }
-    if (qty > available) {
-      addNotification({
-        type: "error",
-        title: "Insufficient Stock",
-        message: `Only ${available} ${product.unit || "unit"} of ${product.name} available.`,
-      });
-      return;
-    }
-    const price = parseStockQty(sellPrice) || Number(product.price) || 0;
-    if (price < 0) {
-      addNotification({ type: "error", title: "Invalid Price", message: "Selling price cannot be negative." });
-      return;
-    }
-    const productsSnapshot = products;
-    const stockSnapshot = stockLog;
-    const nextProducts = adjustProductStockInList(productsSnapshot, product.id, -qty);
-    const nextStockLog = [
-      buildStockLogEntry(product, "sell", {
-        qty,
-        price,
-        total: qty * price,
-        by: currentUser?.name || "Staff",
-      }),
-      ...stockSnapshot,
-    ];
-    if (!(await persistInventory(nextProducts, nextStockLog))) return;
-    addNotification({
-      type: "success",
-      title: "Sale Recorded",
-      message: `Sold ${qty}x ${product.name} for ${formatSGD(qty * price)}`,
-    });
-    setShowSell(null);
-    setSellQty(1);
-    setSellPrice("");
-  };
-
   const restock = async (product, qty, note) => {
     const amount = parseStockQty(qty);
     if (amount <= 0) {
@@ -1240,7 +1194,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
         <h2 className="text-xl sm:text-2xl font-black text-white">Inventory</h2>
         <p className="text-slate-400 text-sm">Stock tracking & invoice price list</p>
       </div>
-      <Fab onClick={() => openAddProduct(tab === "pricelist")} label={tab === "pricelist" ? "Add Price Item" : "Add Product"} hidden={!canEdit || showAdd || !!editProduct || !!deleteProduct || !!showUse || !!showRestock || !!showSell} />
+      <Fab onClick={() => openAddProduct(tab === "pricelist")} label={tab === "pricelist" ? "Add Price Item" : "Add Product"} hidden={!canEdit || showAdd || !!editProduct || !!deleteProduct || !!showUse || !!showRestock} />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
@@ -1336,7 +1290,6 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
                   )}
                   {!isCatalog && (
                     <div className="flex gap-2 flex-wrap">
-                      <Btn variant="success" size="sm" onClick={() => { setShowSell(p); setSellPrice(p.price.toString()); }}><ShoppingBag size={12} />Sell</Btn>
                       <Btn variant="secondary" size="sm" onClick={() => setShowUse(p)}><Archive size={12} />Use</Btn>
                       <Btn variant="ghost" size="sm" onClick={() => { setShowRestock(p); setRestockQty(1); setRestockNote(""); }}><Plus size={12} />Restock</Btn>
                     </div>
@@ -1364,7 +1317,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
           )}
           <div className="md:hidden space-y-2 p-3">
             {visibleStockLog.length === 0 ? (
-              <EmptyState emoji="📦" title="No stock activity yet" hint="Sell, use, or restock products to see entries here" className="py-10" />
+              <EmptyState emoji="📦" title="No stock activity yet" hint="Use or restock products to see entries here" className="py-10" />
             ) : stockLogPage.paginatedItems.map((l) => (
               <div key={l.id} className="bg-slate-800 rounded-lg p-3 mb-2 border border-slate-700">
                 <div className="flex justify-between gap-2">
@@ -1387,7 +1340,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
             </tr></thead>
             <tbody className="divide-y divide-slate-700/30">
               {visibleStockLog.length === 0 ? (
-                <tr><td colSpan={7} className="p-0"><EmptyState emoji="📦" title="No stock activity yet" hint="Sell, use, or restock products to see entries here" className="py-10" /></td></tr>
+                <tr><td colSpan={7} className="p-0"><EmptyState emoji="📦" title="No stock activity yet" hint="Use or restock products to see entries here" className="py-10" /></td></tr>
               ) : stockLogPage.paginatedItems.map(l => (
                 <tr key={l.id} className="text-slate-300 hover:bg-slate-700/20">
                   <td className="p-3 text-slate-500 text-xs">{l.date}</td>
@@ -1520,27 +1473,6 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
         <p className="text-slate-400 text-sm mb-4">Current stock: <span className="text-white font-bold">{showRestock?.stock} {showRestock?.unit}</span></p>
         <Input label="Quantity to Add" type="number" value={restockQty} onChange={(e) => setRestockQty(parseStockQty(e.target.value) || "")} min="1" className="mb-3" />
         <Input label="Invoice No. (optional)" value={restockNote} onChange={(e) => setRestockNote(e.target.value)} placeholder="INV20260615-01" />
-      </Modal>
-
-      {/* Sell Stock Modal */}
-      <Modal
-        open={!!showSell}
-        onClose={() => setShowSell(null)}
-        title={`Sell: ${showSell?.name}`}
-        size="sm"
-        footer={(
-          <ConfirmModalFooter onCancel={() => setShowSell(null)}>
-            <Btn variant="success" onClick={() => sellStock(showSell)} disabled={parseStockQty(sellQty) <= 0} className="w-full sm:w-auto justify-center"><ShoppingBag size={14} />Confirm Sale</Btn>
-          </ConfirmModalFooter>
-        )}
-      >
-        <p className="text-slate-400 text-sm mb-4">Available: <span className="text-white font-bold">{showSell?.stock} {showSell?.unit}</span></p>
-        <Input label="Quantity to Sell" type="number" value={sellQty} onChange={(e) => setSellQty(parseStockQty(e.target.value) || "")} min="1" className="mb-3" />
-        <Input label="Selling Price (S$)" type="number" value={sellPrice} onChange={e => setSellPrice(e.target.value)} step="0.01" className="mb-1" />
-        <p className="text-xs text-slate-500 mb-4">Default: {showSell ? formatSGD(showSell.price) : ""} per {showSell?.unit}</p>
-        <div className="bg-slate-900/50 rounded-lg p-3">
-          <p className="text-sm text-slate-400">Total: <span className="text-emerald-400 font-black text-lg">{formatSGD(parseStockQty(sellQty) * (parseStockQty(sellPrice) || Number(showSell?.price) || 0))}</span></p>
-        </div>
       </Modal>
     </div>
   );
