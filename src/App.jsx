@@ -72,7 +72,7 @@ import {
 import { isSupabaseConfigured } from "./lib/supabase";
 import * as auth from "./lib/auth";
 import { markDeleted, clearAllDeletions, peekDeletions, unmarkDeleted } from "./lib/syncDeletions";
-import { applyServerTombstones, stripTombstonedRows } from "./lib/tombstones";
+import { applyServerTombstones, buildLiveRowsByEntity, stripTombstonedRows } from "./lib/tombstones";
 import { writeCloudFirst, writeInventoryCloudFirst } from "./lib/cloudWrite";
 import { mergeRecords, mergePondData, mergeInvoices, mergeProducts, mergeKoiFish, mergeCustomerKoi, resolveInvoiceConflict, resolveExpenseConflict, resolveEventConflict } from "./lib/cloudMerge";
 import {
@@ -6881,7 +6881,8 @@ export default function App() {
     });
 
     const syncTombstones = data.syncTombstones || [];
-    applyServerTombstones(syncTombstones);
+    const liveByEntity = buildLiveRowsByEntity(cleaned);
+    applyServerTombstones(syncTombstones, liveByEntity);
     cleaned.invoices = stripTombstonedRows(cleaned.invoices, "invoices", syncTombstones);
     cleaned.customers = stripTombstonedRows(cleaned.customers, "customers", syncTombstones);
     cleaned.products = stripTombstonedRows(cleaned.products, "products", syncTombstones);

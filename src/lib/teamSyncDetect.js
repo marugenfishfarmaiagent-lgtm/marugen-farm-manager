@@ -134,7 +134,7 @@ function prepareCleanedCloudData(data) {
   return {
     ...cleaned,
     whatsappGroups: cleaned.whatsappGroups || whatsapp.groups,
-    syncTombstones: fetchedData.syncTombstones || [],
+    syncTombstones: data.syncTombstones || [],
   }
 }
 
