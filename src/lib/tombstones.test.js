@@ -105,4 +105,20 @@ describe('tombstone resurrection', () => {
     assert.equal(pruned.length, 1)
     assert.equal(pruned[0].id, 'KOI-NEW')
   })
+
+  it('pruneLocalOnlyCloudRows drops local ghosts when server list is empty', () => {
+    const local = [{
+      id: 'KOI-GHOST',
+      status: 'sold',
+      updatedAt: new Date().toISOString(),
+    }]
+    const pruned = pruneLocalOnlyCloudRows(local, 'koi_fish', [], [])
+    assert.equal(pruned.length, 0)
+  })
+
+  it('pruneLocalOnlyCloudRows keeps in-flight rows when server is empty', () => {
+    const local = [{ id: 'KOI-NEW', status: 'available', updatedAt: new Date().toISOString() }]
+    const pruned = pruneLocalOnlyCloudRows(local, 'koi_fish', [], [], { inFlightAt: Date.now() })
+    assert.equal(pruned.length, 1)
+  })
 })

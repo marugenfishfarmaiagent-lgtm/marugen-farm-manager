@@ -66,16 +66,22 @@ export function tombstoneIdSet(tombstones, entity, { liveRows = [] } = {}) {
 /** Grace window for local-only rows not yet visible on server (in-flight save). */
 export const IN_FLIGHT_LOCAL_GRACE_MS = 90_000
 
-/** Drop tombstoned ghosts and stale local-only rows after SQL delete / cloud pull. */
-export function pruneLocalOnlyCloudRows(rows, entity, tombstones, remoteRows = []) {
+/**
+ * Drop tombstoned ghosts and stale local-only rows after SQL delete / cloud pull.
+ * When the server has zero rows, drop local-only ghosts unless a koi flush is in-flight.
+ */
+export function pruneLocalOnlyCloudRows(rows, entity, tombstones, remoteRows = [], { inFlightAt = 0 } = {}) {
   const remoteIds = new Set((remoteRows || []).map((r) => String(r.id)))
   const tombs = tombstoneMap(tombstones, entity)
   const cutoff = Date.now() - IN_FLIGHT_LOCAL_GRACE_MS
+  const inFlight = inFlightAt > 0 && inFlightAt >= cutoff
+  const serverEmpty = !(remoteRows || []).length
   return (rows || []).filter((row) => {
     if (row?.id == null) return false
     const id = String(row.id)
     if (remoteIds.has(id)) return true
     if (tombs.has(id)) return false
+    if (serverEmpty && !inFlight) return false
     return rowUpdatedTs(row) >= cutoff
   })
 }

@@ -6975,6 +6975,7 @@ export default function App() {
         "koi_fish",
         syncTombstones,
         remoteKoi,
+        { inFlightAt: explicitFlushAtRef.current.koifish },
       )
       setKoiFishList(reconcileKoiSoldFromInvoices(
         mergeKoiFish(
@@ -6996,6 +6997,7 @@ export default function App() {
           "customer_koi",
           syncTombstones,
           cleaned.customerKoiList,
+          { inFlightAt: explicitFlushAtRef.current.customerkoi },
         ),
         cleaned.customerKoiList,
         filterMergeDeletions(
@@ -8630,10 +8632,6 @@ export default function App() {
         cancelledInvoiceIds.push(inv.id);
       }
 
-      await flushKoiFishSync(nextKoiList, { force: true });
-      koiSynced = true;
-      await flushCustomerKoiSync(nextCustomerKoi);
-      customerKoiSynced = true;
       syncStateRef.current = {
         ...syncStateRef.current,
         koiFishList: nextKoiList,
@@ -8641,6 +8639,24 @@ export default function App() {
       };
       setKoiFishList(nextKoiList);
       setCustomerKoiList(nextCustomerKoi);
+
+      try {
+        await flushKoiFishSync(nextKoiList, { force: true });
+        koiSynced = true;
+        await flushCustomerKoiSync(nextCustomerKoi);
+        customerKoiSynced = true;
+      } catch (syncErr) {
+        if (cancelledInvoiceIds.length) {
+          explicitFlushAtRef.current.koifish = Date.now();
+          addNotification({
+            type: "warning",
+            title: "Refund Partially Synced",
+            message: `${koi.id} was returned to stock on the server. Cloud sync will retry — refresh if the Sold tab still shows this fish.`,
+          });
+        } else {
+          throw syncErr;
+        }
+      }
 
       if (!linkedInvoices.length) {
         addNotification({
@@ -8651,8 +8667,15 @@ export default function App() {
       }
     } catch (err) {
       linkedCustomerKoi.forEach((r) => unmarkDeleted("customer_koi", r.id));
-      setCustomerKoiList(snapshotCustomerKoi);
-      setKoiFishList(snapshotKoiList);
+      if (!koiSynced && !cancelledInvoiceIds.length) {
+        setKoiFishList(snapshotKoiList);
+      } else if (cancelledInvoiceIds.length) {
+        setKoiFishList(nextKoiList);
+        syncStateRef.current = { ...syncStateRef.current, koiFishList: nextKoiList };
+      }
+      if (!customerKoiSynced) {
+        setCustomerKoiList(snapshotCustomerKoi);
+      }
 
       for (const invId of cancelledInvoiceIds) {
         const original = linkedInvoiceSnapshots.find((i) => String(i.id) === String(invId));
@@ -8673,7 +8696,7 @@ export default function App() {
         if (customerKoiSynced) {
           await flushCustomerKoiSync(snapshotCustomerKoi);
         }
-        if (koiSynced || cancelledInvoiceIds.length) {
+        if (koiSynced) {
           await flushKoiFishSync(snapshotKoiList);
         }
       } catch {

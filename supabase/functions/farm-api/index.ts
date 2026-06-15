@@ -201,6 +201,32 @@ async function restoreInvoiceKoiSalesOnServer(
   }
 }
 
+/** Koi-tab sales use koiAlreadySold lines — still restore fish when voiding via refund. */
+async function restoreKoiForRefundOnServer(
+  db: ReturnType<typeof adminClient>,
+  items: unknown[],
+  now: string,
+) {
+  for (const raw of sanitizeInvoiceItems(items)) {
+    if (!raw || typeof raw !== "object") continue;
+    const it = raw as Record<string, unknown>;
+    const koiId = String(it.koiId ?? "").trim();
+    if (!koiId) continue;
+    const { data: existing } = await db.from("koi_fish").select("id, status").eq("id", koiId).maybeSingle();
+    if (!existing || existing.status === "deceased") continue;
+    const { error } = await db.from("koi_fish").update({
+      status: "available",
+      sold_to: null,
+      sold_date: null,
+      sold_price: null,
+      sell_disposition: null,
+      keep_pond_name: null,
+      updated_at: now,
+    }).eq("id", koiId);
+    if (error) throw error;
+  }
+}
+
 const ENTITY_PERMS: Record<string, string> = {
   users: "users",
   customers: "customers",
@@ -936,7 +962,9 @@ Deno.serve(async (req) => {
         }
       }
 
-      if (!skipKoiRestore) {
+      if (refundCancel) {
+        await restoreKoiForRefundOnServer(db, existing.items || [], now);
+      } else if (!skipKoiRestore) {
         await restoreInvoiceKoiSalesOnServer(db, existing.items || [], now);
       }
       return J({ ok: true, invoice: data, customer: customerRow });

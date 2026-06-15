@@ -1,16 +1,27 @@
 -- Clear invoices + koi fish stock only (test reset).
+-- Includes: sold koi (Koi Fish → Sold tab), customer koi, invoice-linked inventory sells.
 -- Keeps: customers, products, expenses, deliveries, events, pond data, etc.
 --
--- IMPORTANT: Also clears sync_tombstones for these entities so re-used invoice ids
--- (e.g. INV20260614-01) are not hidden after SQL delete + re-create.
+-- BEFORE RUNNING: close all Marugen app tabs (or log out) on every device.
+-- Otherwise open browsers may push deleted koi back to cloud.
+--
+-- Tombstones: DELETE triggers record sync_tombstones so devices drop local ghosts.
+-- Do NOT wipe those tombstones here — see clear_sync_tombstones_for_reuse.sql if you
+-- need to reuse the same KOI-xxx / INV-xxx ids after a reset.
 BEGIN;
 
 DELETE FROM customer_koi;
 DELETE FROM koi_fish;
 DELETE FROM invoices;
 
+-- Product stock log lines created by invoices (sell / cancel restock)
+DELETE FROM stock_activity
+WHERE type IN ('sell', 'restock')
+  AND (note LIKE 'Invoice %' OR note LIKE 'Invoice cancelled %');
+
+-- Invoice stock-log tombstones only (optional hygiene; koi/invoice tombstones stay)
 DELETE FROM sync_tombstones
-WHERE entity IN ('invoices', 'koi_fish', 'customer_koi');
+WHERE entity = 'stock_activity';
 
 UPDATE customers
 SET total_spent = 0,
