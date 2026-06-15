@@ -270,7 +270,14 @@ export function mergeCustomerKoi(local = [], remote = [], pendingDeleteIds = [])
 
 export function mergeKoiFish(local = [], remote = [], pendingDeleteIds = []) {
   const delSet = new Set((pendingDeleteIds || []).map(String))
-  const localMap = new Map((local || []).map((r) => [String(r.id), r]))
+  const localMap = new Map()
+  for (const row of local || []) {
+    if (row?.id == null) continue
+    const id = String(row.id)
+    if (delSet.has(id)) continue
+    const existing = localMap.get(id)
+    if (!existing || ts(row) >= ts(existing)) localMap.set(id, row)
+  }
   const remoteMap = new Map((remote || []).map((r) => [String(r.id), r]))
   const ids = new Set([...localMap.keys(), ...remoteMap.keys()])
 

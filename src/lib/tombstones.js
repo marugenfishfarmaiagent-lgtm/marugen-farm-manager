@@ -63,13 +63,35 @@ export function tombstoneIdSet(tombstones, entity, { liveRows = [] } = {}) {
   return blocked
 }
 
-export function stripTombstonedRows(rows, entity, tombstones) {
+/** Grace window for local-only rows not yet visible on server (in-flight save). */
+export const IN_FLIGHT_LOCAL_GRACE_MS = 90_000
+
+/** Drop tombstoned ghosts and stale local-only rows after SQL delete / cloud pull. */
+export function pruneLocalOnlyCloudRows(rows, entity, tombstones, remoteRows = []) {
+  const remoteIds = new Set((remoteRows || []).map((r) => String(r.id)))
   const tombs = tombstoneMap(tombstones, entity)
-  if (!tombs.size) return rows || []
+  const cutoff = Date.now() - IN_FLIGHT_LOCAL_GRACE_MS
   return (rows || []).filter((row) => {
     if (row?.id == null) return false
-    const deletedAt = tombs.get(String(row.id))
+    const id = String(row.id)
+    if (remoteIds.has(id)) return true
+    if (tombs.has(id)) return false
+    return rowUpdatedTs(row) >= cutoff
+  })
+}
+
+export function stripTombstonedRows(rows, entity, tombstones, { remoteRows } = {}) {
+  const tombs = tombstoneMap(tombstones, entity)
+  if (!tombs.size) return rows || []
+  const remoteIds = remoteRows
+    ? new Set((remoteRows || []).map((r) => String(r.id)))
+    : null
+  return (rows || []).filter((row) => {
+    if (row?.id == null) return false
+    const id = String(row.id)
+    const deletedAt = tombs.get(id)
     if (!deletedAt) return true
+    if (remoteIds && !remoteIds.has(id)) return false
     return isRowResurrectedAfterTombstone(row, deletedAt)
   })
 }

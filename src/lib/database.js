@@ -242,6 +242,7 @@ function mapKoiFish(row) {
     deathDate: row.death_date ?? row.deathDate ?? null,
     deathCause: row.death_cause ?? row.deathCause ?? null,
     deathPhoto: row.death_photo ?? row.deathPhoto ?? null,
+    updated_at: row.updated_at,
   })
 }
 

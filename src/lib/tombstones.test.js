@@ -5,6 +5,7 @@ import {
   applyServerTombstones,
   filterMergeDeletions,
   isRowResurrectedAfterTombstone,
+  pruneLocalOnlyCloudRows,
   stripTombstonedRows,
 } from './tombstones.js'
 
@@ -76,5 +77,32 @@ describe('tombstone resurrection', () => {
     )
     assert.deepEqual(pending, [])
     unmarkDeleted('invoices', 'INV20260614-01')
+  })
+
+  it('pruneLocalOnlyCloudRows drops tombstoned ghosts not on server', () => {
+    const tombstones = [{
+      entity: 'koi_fish',
+      recordId: 'KOI-OLD',
+      deletedAt: '2026-06-14T08:00:00.000Z',
+    }]
+    const local = [{
+      id: 'KOI-OLD',
+      status: 'sold',
+      soldPrice: 1000,
+      updatedAt: '2026-06-14T12:00:00.000Z',
+    }, {
+      id: 'KOI-NEW',
+      status: 'sold',
+      soldPrice: 100,
+      updatedAt: new Date().toISOString(),
+    }]
+    const pruned = pruneLocalOnlyCloudRows(local, 'koi_fish', tombstones, [{
+      id: 'KOI-NEW',
+      status: 'sold',
+      soldPrice: 100,
+      updatedAt: new Date().toISOString(),
+    }])
+    assert.equal(pruned.length, 1)
+    assert.equal(pruned[0].id, 'KOI-NEW')
   })
 })

@@ -72,7 +72,7 @@ import {
 import { isSupabaseConfigured } from "./lib/supabase";
 import * as auth from "./lib/auth";
 import { markDeleted, clearAllDeletions, peekDeletions, unmarkDeleted } from "./lib/syncDeletions";
-import { applyServerTombstones, filterMergeDeletions, mergeLiveByEntityWithLocal, stripTombstonedRows } from "./lib/tombstones";
+import { applyServerTombstones, filterMergeDeletions, mergeLiveByEntityWithLocal, pruneLocalOnlyCloudRows, stripTombstonedRows } from "./lib/tombstones";
 import { writeCloudFirst, writeInventoryCloudFirst } from "./lib/cloudWrite";
 import { mergeRecords, mergePondData, mergeInvoices, mergeProducts, mergeKoiFish, mergeCustomerKoi, resolveInvoiceConflict, resolveExpenseConflict, resolveEventConflict } from "./lib/cloudMerge";
 import {
@@ -6884,7 +6884,9 @@ export default function App() {
     const localSnap = syncStateRef.current;
     const liveByEntity = mergeLiveByEntityWithLocal(cleaned, localSnap);
     applyServerTombstones(syncTombstones, liveByEntity);
-    cleaned.invoices = stripTombstonedRows(cleaned.invoices, "invoices", syncTombstones);
+    cleaned.invoices = stripTombstonedRows(cleaned.invoices, "invoices", syncTombstones, {
+      remoteRows: cleaned.invoices,
+    });
     cleaned.customers = stripTombstonedRows(cleaned.customers, "customers", syncTombstones);
     cleaned.products = stripTombstonedRows(cleaned.products, "products", syncTombstones);
     cleaned.expenses = stripTombstonedRows(cleaned.expenses, "expenses", syncTombstones);
@@ -6934,7 +6936,7 @@ export default function App() {
       setProducts((prev) => mergeProducts(prev, cleaned.products, peekDeletions("products")));
       const localInvoices = localSnap.invoices ?? [];
       const mergedInvoices = applyInvoicePins(mergeInvoices(
-        stripTombstonedRows(localInvoices, "invoices", syncTombstones),
+        stripTombstonedRows(localInvoices, "invoices", syncTombstones, { remoteRows: cleaned.invoices }),
         cleaned.invoices,
         filterMergeDeletions(
           "invoices",
@@ -6967,15 +6969,43 @@ export default function App() {
         setEventsWithRef(mergedEvents);
       }
       setStockLog((prev) => mergeRecords(prev, cleaned.stockLog, peekDeletions("stock_activity")));
+      const remoteKoi = cleaned.koiFishList
+      const localKoi = pruneLocalOnlyCloudRows(
+        localSnap.koiFishList ?? [],
+        "koi_fish",
+        syncTombstones,
+        remoteKoi,
+      )
       setKoiFishList(reconcileKoiSoldFromInvoices(
         mergeKoiFish(
-          stripTombstonedRows(syncStateRef.current.koiFishList ?? [], "koi_fish", syncTombstones),
-          stripTombstonedRows(cleaned.koiFishList, "koi_fish", syncTombstones),
-          peekDeletions("koi_fish"),
+          localKoi,
+          stripTombstonedRows(remoteKoi, "koi_fish", syncTombstones, { remoteRows: remoteKoi }),
+          filterMergeDeletions(
+            "koi_fish",
+            syncTombstones,
+            localKoi,
+            remoteKoi,
+            peekDeletions("koi_fish"),
+          ),
         ),
         mergedInvoices,
       ));
-      setCustomerKoiList((prev) => mergeCustomerKoi(prev, cleaned.customerKoiList, peekDeletions("customer_koi")));
+      setCustomerKoiList((prev) => mergeCustomerKoi(
+        pruneLocalOnlyCloudRows(
+          prev,
+          "customer_koi",
+          syncTombstones,
+          cleaned.customerKoiList,
+        ),
+        cleaned.customerKoiList,
+        filterMergeDeletions(
+          "customer_koi",
+          syncTombstones,
+          prev,
+          cleaned.customerKoiList,
+          peekDeletions("customer_koi"),
+        ),
+      ));
       setWhatsappGroups((prev) => mergeRecords(prev, cleaned.whatsappGroups || whatsapp.groups, peekDeletions("whatsapp_groups")));
     } else {
       setCustomers(cleaned.customers);
