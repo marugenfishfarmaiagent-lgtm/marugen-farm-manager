@@ -4,6 +4,10 @@ export function invoiceIdFromStockLogNote(note) {
   return match ? match[0].toUpperCase() : ''
 }
 
+/** Manual sell/use/restock ids from genStockLogId() — ms epoch embedded in id. */
+const TIMESTAMP_ID_MIN = 1_000_000_000_000
+const TIMESTAMP_ID_MAX = 99_999_999_999_999
+
 function stockLogTime(row) {
   const raw = row?.updatedAt ?? row?.updated_at
   if (!raw) return 0
@@ -16,10 +20,21 @@ function stockLogIdNum(row) {
   return Number.isFinite(n) ? n : 0
 }
 
-/** Newest action first — by updatedAt, then numeric id. */
+export function isTimestampStockLogId(row) {
+  const id = stockLogIdNum(row)
+  return id >= TIMESTAMP_ID_MIN && id <= TIMESTAMP_ID_MAX
+}
+
+/** Manual rows sort by id (creation time); invoice-linked rows sort by updatedAt. */
+export function stockLogRecency(row) {
+  if (isTimestampStockLogId(row)) return stockLogIdNum(row)
+  return stockLogTime(row) || stockLogIdNum(row)
+}
+
+/** Newest action first. */
 export function compareStockLogDesc(a, b) {
-  const timeCmp = stockLogTime(b) - stockLogTime(a)
-  if (timeCmp !== 0) return timeCmp
+  const keyCmp = stockLogRecency(b) - stockLogRecency(a)
+  if (keyCmp !== 0) return keyCmp
   const idCmp = stockLogIdNum(b) - stockLogIdNum(a)
   if (idCmp !== 0) return idCmp
   return String(b?.id || '').localeCompare(String(a?.id || ''))

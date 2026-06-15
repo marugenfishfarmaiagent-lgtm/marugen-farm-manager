@@ -287,11 +287,24 @@ async function upsertSync(
     force?: boolean;
     mergeWithExisting?: (existing: Record<string, unknown>, incoming: Record<string, unknown>) => Record<string, unknown>;
     mergeCompareKeys?: string[];
+    preserveClientTimestamp?: boolean;
   } = {},
 ) {
   const db = adminClient();
   const now = new Date().toISOString();
-  const { prune = false, deletedIds = [], beforeDelete, force = false, mergeWithExisting, mergeCompareKeys } = options;
+  const {
+    prune = false,
+    deletedIds = [],
+    beforeDelete,
+    force = false,
+    mergeWithExisting,
+    mergeCompareKeys,
+    preserveClientTimestamp = false,
+  } = options;
+
+  const pickUpdatedAt = (clientRaw: unknown) => (
+    preserveClientTimestamp && clientRaw ? String(clientRaw) : now
+  );
 
   if (deletedIds.length) {
     if (beforeDelete) await beforeDelete(deletedIds);
@@ -334,16 +347,17 @@ async function upsertSync(
       next = mergeWithExisting(existing, row);
     }
 
+    const clientRaw = next.updated_at ?? next.updatedAt;
+    const clientTs = clientRaw ? new Date(String(clientRaw)).getTime() : NaN;
+
     if (force || !existing) {
-      const merged = { ...next, updated_at: now };
+      const merged = { ...next, updated_at: pickUpdatedAt(clientRaw) };
       delete merged.updatedAt;
       toUpsert.push(merged);
       continue;
     }
 
     const serverTs = existing.updated_at as string | null;
-    const clientRaw = next.updated_at ?? next.updatedAt;
-    const clientTs = clientRaw ? new Date(String(clientRaw)).getTime() : NaN;
     const serverTime = serverTs ? new Date(String(serverTs)).getTime() : 0;
 
     if (mergeWithExisting) {
@@ -353,15 +367,16 @@ async function upsertSync(
         : false;
       if (unchanged) continue;
       if (!Number.isFinite(clientTs) && serverTs) continue;
-      const mergedRow = { ...next, updated_at: now };
+      const mergedRow = { ...next, updated_at: pickUpdatedAt(clientRaw) };
       delete mergedRow.updatedAt;
       toUpsert.push(mergedRow);
       continue;
     }
 
     if (!clientRaw) continue;
+    if (preserveClientTimestamp && Number.isFinite(clientTs) && clientTs === serverTime) continue;
     if (Number.isFinite(clientTs) && clientTs >= serverTime) {
-      const merged = { ...next, updated_at: now };
+      const merged = { ...next, updated_at: pickUpdatedAt(clientRaw) };
       delete merged.updatedAt;
       toUpsert.push(merged);
     }
@@ -1354,7 +1369,7 @@ Deno.serve(async (req) => {
           type: String(l.type ?? "").toLowerCase(),
           qty: nullableNumeric(l.qty), value: l.value ?? l.total ?? null, note: l.note || "",
           date: nullableDate(l.date), added_by: l.by ?? l.added_by ?? "",
-        }, l)), "id", syncOpts);
+        }, l)), "id", { ...syncOpts, preserveClientTimestamp: true });
       } else if (entity === "koi_fish") {
         const incoming = (data || []) as Record<string, unknown>[];
         const KOI_STATUSES = new Set(["available", "sold", "sick", "deceased"]);
