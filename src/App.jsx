@@ -2350,6 +2350,13 @@ function InvoiceModule({
     creatingInvoiceRef.current = true;
     setCreatingInvoice(true);
 
+    const productsBeforeCreate = products;
+    const stockLogBeforeCreate = stockLog;
+    const restoreCreateStockSnapshot = () => {
+      setProducts(productsBeforeCreate);
+      setStockLog(stockLogBeforeCreate);
+    };
+
     let invId;
     let invoiceItems;
     let stockPreview;
@@ -2396,10 +2403,7 @@ function InvoiceModule({
           addNotification,
         });
       } catch (err) {
-        restoreStockForInvoice(setProducts, setStockLog, products, invoiceItems, {
-          invoiceId: invId,
-          by: currentUser?.name || "Staff",
-        });
+        restoreCreateStockSnapshot();
         restoreInvoiceKoiSales(invoiceItems, setKoiFishList, setCustomerKoiList);
         onInventorySideEffect?.();
         setFormError(err?.message || "Could not save keep-at-farm Customer Koi record.");
@@ -2411,10 +2415,7 @@ function InvoiceModule({
         return;
       }
       if (!koiApply.ok) {
-        restoreStockForInvoice(setProducts, setStockLog, products, invoiceItems, {
-          invoiceId: invId,
-          by: currentUser?.name || "Staff",
-        });
+        restoreCreateStockSnapshot();
         onInventorySideEffect?.();
         setFormError(koiApply.message);
         addNotification({ type: "error", title: "Fish Stock", message: koiApply.message });
@@ -2470,15 +2471,11 @@ function InvoiceModule({
       }
     } catch (err) {
       if (invId && invoiceItems) {
-        restoreStockForInvoice(setProducts, setStockLog, products, invoiceItems, {
-          invoiceId: invId,
-          by: currentUser?.name || "Staff",
-        });
+        restoreCreateStockSnapshot();
         restoreInvoiceKoiSales(invoiceItems, setKoiFishList, setCustomerKoiList);
         if (stockPreview?.hasStockLines) {
-          const restoredStock = previewRestoreStockForInvoice(products, stockLog, invoiceItems, stockSideEffectMeta);
           try {
-            await onSyncInventoryToCloud?.(restoredStock.nextProducts, restoredStock.nextStockLog);
+            await onSyncInventoryToCloud?.(productsBeforeCreate, stockLogBeforeCreate);
           } catch (syncErr) {
             addNotification({
               type: "warning",
