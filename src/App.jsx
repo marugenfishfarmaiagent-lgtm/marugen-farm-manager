@@ -915,7 +915,7 @@ function Dashboard({
 // ─────────────────────────────────────────────
 const EMPTY_PRODUCT_FORM = { name: "", category: "Fish Food", sku: "", price: "", unit: "kg", stock: "", minStock: "", description: "", trackStock: true };
 
-function InventoryModule({ products, setProducts, stockLog, setStockLog, invoices = [], addNotification, currentUser, onProductsSaved, onInventorySaved }) {
+function InventoryModule({ products, setProducts, stockLog, setStockLog, invoices = [], addNotification, currentUser, onProductsSaved, onInventorySaved, onAdjustStockCloud }) {
   const canEdit = canEditRecords(currentUser);
   const canDelete = canDeleteRecords(currentUser);
   const [tab, setTab] = useState("stock");
@@ -930,6 +930,9 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   const [deletingProduct, setDeletingProduct] = useState(false);
   const [showUse, setShowUse] = useState(null);
   const [showRestock, setShowRestock] = useState(null);
+  const [showAdjust, setShowAdjust] = useState(null);
+  const [adjustQty, setAdjustQty] = useState("");
+  const [adjustReason, setAdjustReason] = useState("");
   const [restockQty, setRestockQty] = useState(1);
   const [restockNote, setRestockNote] = useState("");
   const [search, setSearch] = useState("");
@@ -940,6 +943,8 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   const usingStockRef = useRef(false);
   const [restocking, setRestocking] = useState(false);
   const restockingRef = useRef(false);
+  const [adjustingStock, setAdjustingStock] = useState(false);
+  const adjustingStockRef = useRef(false);
   const [showOlderStockLog, setShowOlderStockLog] = useState(false);
   const [form, setForm] = useState(EMPTY_PRODUCT_FORM);
 
@@ -1150,6 +1155,10 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   };
 
   const confirmUseStock = async (product) => {
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
     if (!product || usingStockRef.current || usingStock) return;
     const qty = parseStockQty(useQty);
     const available = Number(product.stock) || 0;
@@ -1169,6 +1178,36 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     usingStockRef.current = true;
     setUsingStock(true);
     try {
+      if (onAdjustStockCloud) {
+        let response;
+        try {
+          response = await onAdjustStockCloud({
+            productId: product.id,
+            delta: -qty,
+            note: useNote || "Manual use",
+          });
+        } catch (err) {
+          addNotification({
+            type: "error",
+            title: "Use Failed",
+            message: err?.message || "Could not save stock use to cloud.",
+          });
+          return;
+        }
+        const remaining = Number(response?.product?.stock) || 0;
+        if (product.minStock > 0 && remaining <= product.minStock) {
+          addNotification({
+            type: "warning",
+            title: "Low Stock",
+            message: `${product.name} stock is low (${remaining} ${product.unit} remaining)`,
+          });
+        }
+        setShowUse(null);
+        setUseQty(1);
+        setUseNote("");
+        return;
+      }
+
       const productsSnapshot = products;
       const stockSnapshot = stockLog;
       const adjusted = adjustProductStockInList(productsSnapshot, product.id, -qty);
@@ -1209,6 +1248,29 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       addNotification({ type: "error", title: "Invalid Quantity", message: "Enter a quantity of at least 1." });
       return false;
     }
+    if (onAdjustStockCloud) {
+      try {
+        await onAdjustStockCloud({
+          productId: product.id,
+          delta: amount,
+          note: formatRestockLogNote(note),
+        });
+      } catch (err) {
+        addNotification({
+          type: "error",
+          title: "Restock Failed",
+          message: err?.message || "Could not save restock to cloud.",
+        });
+        return false;
+      }
+      addNotification({
+        type: "info",
+        title: "Restocked",
+        message: `${product.name} restocked by ${amount} ${product.unit}`,
+      });
+      return true;
+    }
+
     const productsSnapshot = products;
     const stockSnapshot = stockLog;
     const adjusted = adjustProductStockInList(productsSnapshot, product.id, amount);
@@ -1236,6 +1298,10 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   };
 
   const confirmRestock = async (product) => {
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
     if (!product || restockingRef.current || restocking) return;
     const q = parseStockQty(restockQty);
     if (q <= 0) {
@@ -1257,6 +1323,98 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     }
   };
 
+  const openAdjustStock = (product) => {
+    if (!canEdit) {
+      notifyPermissionDenied(addNotification, "edit");
+      return;
+    }
+    if (!product || product.trackStock === false) return;
+    setShowAdjust(product);
+    setAdjustQty("");
+    setAdjustReason("");
+  };
+
+  const confirmAdjustStock = async () => {
+    if (!showAdjust || adjustingStockRef.current || adjustingStock) return;
+    const delta = Number(adjustQty);
+    if (!Number.isFinite(delta) || delta === 0) {
+      addNotification({ type: "error", title: "Invalid Adjustment", message: "Enter a positive or negative quantity (not zero)." });
+      return;
+    }
+    const reason = String(adjustReason || "").trim();
+    if (!reason) {
+      addNotification({ type: "error", title: "Reason Required", message: "Enter a reason for this stock adjustment." });
+      return;
+    }
+
+    adjustingStockRef.current = true;
+    setAdjustingStock(true);
+    try {
+      if (onAdjustStockCloud) {
+        let response;
+        try {
+          response = await onAdjustStockCloud({
+            productId: showAdjust.id,
+            delta,
+            note: `Manual adjust: ${reason}`,
+          });
+        } catch (err) {
+          addNotification({
+            type: "error",
+            title: "Adjust Failed",
+            message: err?.message || "Could not save stock adjustment to cloud.",
+          });
+          return;
+        }
+        setEditProduct((prev) => (prev && sameProductId(prev.id, showAdjust.id)
+          ? { ...prev, stock: Number(response?.product?.stock) || Number(prev.stock) }
+          : prev));
+        addNotification({
+          type: "info",
+          title: "Stock Adjusted",
+          message: `${showAdjust.name}: ${delta > 0 ? "+" : ""}${delta} ${showAdjust.unit || "unit"} (${reason})`,
+        });
+        setShowAdjust(null);
+        setAdjustQty("");
+        setAdjustReason("");
+        return;
+      }
+
+      const productsSnapshot = products;
+      const stockSnapshot = stockLog;
+      const adjusted = adjustProductStockInList(productsSnapshot, showAdjust.id, delta);
+      if (!adjusted.ok) {
+        addNotification({ type: "error", title: "Adjust Failed", message: adjusted.message });
+        return;
+      }
+
+      const qty = Math.abs(delta);
+      const type = delta > 0 ? "restock" : "use";
+      const note = `Manual adjust: ${reason}`;
+      const nextStockLog = [
+        buildStockLogEntry(showAdjust, type, { qty, note, by: currentUser?.name || "Staff" }),
+        ...stockSnapshot,
+      ];
+      if (!(await persistInventory(adjusted.products, nextStockLog))) return;
+
+      const updated = adjusted.products.find((p) => sameProductId(p.id, showAdjust.id));
+      if (updated) {
+        setEditProduct((prev) => (prev && sameProductId(prev.id, updated.id) ? { ...prev, stock: updated.stock } : prev));
+      }
+      addNotification({
+        type: "info",
+        title: "Stock Adjusted",
+        message: `${showAdjust.name}: ${delta > 0 ? "+" : ""}${delta} ${showAdjust.unit || "unit"} (${reason})`,
+      });
+      setShowAdjust(null);
+      setAdjustQty("");
+      setAdjustReason("");
+    } finally {
+      adjustingStockRef.current = false;
+      setAdjustingStock(false);
+    }
+  };
+
   const totalStockValue = stockItems.reduce((s, p) => s + p.stock * p.price, 0);
   const lowStockItems = stockItems.filter((p) => p.minStock > 0 && p.stock <= p.minStock);
 
@@ -1266,7 +1424,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
         <h2 className="text-xl sm:text-2xl font-black text-white">Inventory</h2>
         <p className="text-slate-400 text-sm">Stock tracking & invoice price list</p>
       </div>
-      <Fab onClick={() => openAddProduct(tab === "pricelist")} label={tab === "pricelist" ? "Add Price Item" : "Add Product"} hidden={!canEdit || showAdd || !!editProduct || !!deleteProduct || !!showUse || !!showRestock} />
+      <Fab onClick={() => openAddProduct(tab === "pricelist")} label={tab === "pricelist" ? "Add Price Item" : "Add Product"} hidden={!canEdit || showAdd || !!editProduct || !!deleteProduct || !!showUse || !!showRestock || !!showAdjust} />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
@@ -1362,8 +1520,8 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
                   )}
                   {!isCatalog && (
                     <div className="flex gap-2 flex-wrap">
-                      <Btn variant="secondary" size="sm" onClick={() => setShowUse(p)}><Archive size={12} />Use</Btn>
-                      <Btn variant="ghost" size="sm" onClick={() => { setShowRestock(p); setRestockQty(1); setRestockNote(""); }}><Plus size={12} />Restock</Btn>
+                      <Btn variant="secondary" size="sm" onClick={() => setShowUse(p)} disabled={!canEdit}><Archive size={12} />Use</Btn>
+                      <Btn variant="ghost" size="sm" onClick={() => { setShowRestock(p); setRestockQty(1); setRestockNote(""); }} disabled={!canEdit}><Plus size={12} />Restock</Btn>
                     </div>
                   )}
                 </Card>
@@ -1473,7 +1631,16 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
               <Input label="Selling Price (S$)" type="number" value={editProduct.price} onChange={e => setEditProduct(p => ({ ...p, price: e.target.value }))} step="0.01" required />
               {editProduct.trackStock !== false && (
                 <>
-                  <Input label="Current Stock" type="number" value={editProduct.stock} onChange={e => setEditProduct(p => ({ ...p, stock: e.target.value }))} required />
+                  <div className="sm:col-span-2">
+                    <Input label="Current Stock" type="number" value={editProduct.stock} readOnly className="pointer-events-none opacity-80" />
+                    <p className="text-[11px] text-slate-500 mt-1">Stock is read-only here. Use Adjust Stock to keep history in activity log.</p>
+                    <div className="mt-2">
+                      <Btn type="button" variant="ghost" size="sm" onClick={() => openAdjustStock(editProduct)} disabled={savingProduct || !canEdit}>
+                        <Plus size={12} />Adjust Stock
+                      </Btn>
+                      {!canEdit && <p className="text-[11px] text-amber-400 mt-1">Edit permission is required to adjust stock.</p>}
+                    </div>
+                  </div>
                   <Input label="Min Stock Alert" type="number" value={editProduct.minStock} onChange={e => setEditProduct(p => ({ ...p, minStock: e.target.value }))} />
                 </>
               )}
@@ -1488,6 +1655,41 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
             </div>
           </>
         )}
+      </Modal>
+
+      {/* Adjust Stock Modal */}
+      <Modal
+        open={!!showAdjust}
+        onClose={() => { if (!adjustingStock) setShowAdjust(null); }}
+        title={`Adjust Stock: ${showAdjust?.name}`}
+        size="sm"
+        footer={(
+          <ConfirmModalFooter onCancel={() => { if (!adjustingStock) setShowAdjust(null); }} cancelDisabled={adjustingStock}>
+            <Btn onClick={confirmAdjustStock} disabled={adjustingStock} className="w-full sm:w-auto justify-center">
+              {adjustingStock ? <><Loader2 size={14} className="animate-spin" />Saving...</> : <><Check size={14} />Apply Adjustment</>}
+            </Btn>
+          </ConfirmModalFooter>
+        )}
+      >
+        <p className="text-slate-400 text-sm mb-3">
+          Current stock: <span className="text-white font-bold">{showAdjust?.stock} {showAdjust?.unit || "unit"}</span>
+        </p>
+        <Input
+          label="Adjustment Quantity (+/-)"
+          type="number"
+          value={adjustQty}
+          onChange={(e) => setAdjustQty(e.target.value)}
+          step="1"
+          placeholder="e.g. +5 or -3"
+          className="mb-3"
+        />
+        <Textarea
+          label="Reason (required)"
+          value={adjustReason}
+          onChange={(e) => setAdjustReason(e.target.value)}
+          rows={2}
+          placeholder="Damaged bags, stock recount, supplier correction..."
+        />
       </Modal>
 
       {/* Delete Product Modal */}
@@ -7561,6 +7763,52 @@ export default function App() {
     }
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
+  const adjustInventoryStockCloud = useCallback(async ({ productId, delta, note }) => {
+    if (!isSupabaseConfigured) throw new Error("Cloud sync is not configured.");
+    if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
+      throw new Error("Cloud sync is not ready.");
+    }
+    if (!hasPermission(currentUser, "inventory")) {
+      throw new Error("Permission denied (inventory).");
+    }
+    if (!canEditRecords(currentUser)) {
+      throw new Error("Permission denied (edit).");
+    }
+    let waited = 0;
+    while (syncInFlightRef.current > 0 && waited < 3000) {
+      await new Promise((r) => setTimeout(r, 100));
+      waited += 100;
+    }
+    if (!(await ensureCloudSyncReady())) {
+      throw new Error("Session needs refresh. Log out and log in again.");
+    }
+
+    syncInFlightRef.current += 1;
+    try {
+      const result = await db.adjustInventoryStockCloud({
+        productId,
+        delta,
+        note,
+      });
+      setProducts((prev) => prev.map((p) => (sameProductId(p.id, result.product.id) ? result.product : p)));
+      setStockLog((prev) => sortStockLog([result.stockEntry, ...prev.filter((l) => String(l.id) !== String(result.stockEntry.id))]));
+      syncStateRef.current = {
+        ...syncStateRef.current,
+        products: (syncStateRef.current.products || []).map((p) => (sameProductId(p.id, result.product.id) ? result.product : p)),
+        stockLog: sortStockLog([result.stockEntry, ...(syncStateRef.current.stockLog || []).filter((l) => String(l.id) !== String(result.stockEntry.id))]),
+      };
+      explicitFlushAtRef.current.inventory = Date.now();
+      resetSyncHealth();
+      touchLastSync();
+      return result;
+    } catch (err) {
+      handleSyncFailure(err);
+      throw err;
+    } finally {
+      syncInFlightRef.current -= 1;
+    }
+  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
+
   const flushDeliveriesSync = useCallback(async (deliveriesOverride) => {
     if (!isSupabaseConfigured) return;
     if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
@@ -9401,7 +9649,7 @@ export default function App() {
           cloudStale={dashboardCloudStale}
         />
       ));
-      case "inventory": return guard("inventory", "Inventory", <InventoryModule products={products} setProducts={setProducts} stockLog={stockLog} setStockLog={setStockLog} invoices={invoices} addNotification={addNotification} currentUser={currentUser} onProductsSaved={flushProductSync} onInventorySaved={flushInventorySync} />);
+      case "inventory": return guard("inventory", "Inventory", <InventoryModule products={products} setProducts={setProducts} stockLog={stockLog} setStockLog={setStockLog} invoices={invoices} addNotification={addNotification} currentUser={currentUser} onProductsSaved={flushProductSync} onInventorySaved={flushInventorySync} onAdjustStockCloud={adjustInventoryStockCloud} />);
       case "koifish": return guard("koifish", "Koi Fish", <KoiFish koiList={koiFishList} setKoiList={setKoiFishList} customers={customers} invoices={invoices} customerKoiList={customerKoiList} onKoiSold={handleKoiSold} onKoiRefund={handleKoiRefund} onCreateInvoiceFromSale={handleCreateInvoiceFromKoiSale} onAbortKoiSaleInvoice={handleAbortKoiSaleInvoice} onSyncKoiFish={flushKoiFishSync} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} canRefund={canRefundSales(currentUser)} />);
       case "customerkoi": return guard("customerkoi", "Customer Koi", <CustomerKoi records={customerKoiList} setRecords={setCustomerKoiList} customers={customers} farmKoiList={koiFishList} registeredPondNames={registeredPondNames} addNotification={addNotification} canEdit={canEditRecords(currentUser)} onRecordsSaved={flushCustomerKoiSync} />);
       case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondDataWithRef} addNotification={addNotification} currentUser={currentUser} users={users} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} onPersistPondData={syncPondDataNow} onSyncReminderCalendar={syncReminderCalendar} />);

@@ -112,6 +112,77 @@ function calcCustomerTier(totalSpent: number): string {
   return "Bronze";
 }
 
+function genStockActivityId(): number {
+  return Date.now() * 1000 + Math.floor(Math.random() * 1000);
+}
+
+async function netStockFromActivity(
+  db: ReturnType<typeof adminClient>,
+  productId: number,
+): Promise<number> {
+  const { data: rows, error } = await db.from("stock_activity")
+    .select("type, qty")
+    .eq("product_id", productId);
+  if (error) throw error;
+  return (rows || []).reduce((sum, row) => {
+    const qty = Number(row.qty) || 0;
+    if (row.type === "restock") return sum + qty;
+    if (row.type === "use" || row.type === "sell") return sum - qty;
+    return sum;
+  }, 0);
+}
+
+async function reconcileTrackedProductsStock(
+  db: ReturnType<typeof adminClient>,
+  { repair = false, now = new Date().toISOString() }: { repair?: boolean; now?: string } = {},
+): Promise<{
+  checked: number;
+  mismatches: Array<Record<string, unknown>>;
+  repaired: number;
+}> {
+  const { data: products, error: prodErr } = await db.from("products")
+    .select("id, name, stock, unit, track_stock")
+    .neq("track_stock", false);
+  if (prodErr) throw prodErr;
+
+  const mismatches: Array<Record<string, unknown>> = [];
+  let repaired = 0;
+
+  for (const product of products || []) {
+    const productId = Number(product.id);
+    if (!Number.isFinite(productId)) continue;
+    const ledger = await netStockFromActivity(db, productId);
+    const actual = Number(product.stock) || 0;
+    const drift = ledger - actual;
+    if (Math.abs(drift) < 1e-9) continue;
+
+    const mismatch: Record<string, unknown> = {
+      productId,
+      name: String(product.name || "Product"),
+      unit: String(product.unit || "unit"),
+      currentStock: actual,
+      ledgerStock: ledger,
+      drift,
+    };
+    if (repair) {
+      const { error: updErr } = await db.from("products")
+        .update({ stock: ledger, updated_at: now })
+        .eq("id", productId);
+      if (updErr) throw updErr;
+      await clearSyncTombstones(db, "products", [String(productId)]);
+      mismatch.repaired = true;
+      repaired += 1;
+    }
+    mismatches.push(mismatch);
+  }
+
+  return {
+    checked: (products || []).length,
+    mismatches,
+    repaired,
+  };
+}
+
 function sanitizeInvoiceItems(items: unknown): unknown[] {
   if (!Array.isArray(items)) return [];
   return items.map((raw) => {
@@ -858,6 +929,115 @@ Deno.serve(async (req) => {
         return J({ error: "Image not found" }, 404);
       }
       return J({ url, imageUrl: url });
+    }
+
+    if (body.action === "adjust_stock") {
+      if (!hasPermission(user, "inventory")) {
+        return J({ error: "Permission denied (inventory)" }, 403);
+      }
+      if (!hasPermission(user, "edit")) {
+        return J({ error: "Permission denied (edit)" }, 403);
+      }
+
+      const productId = nullableBigint(body.productId ?? body.product_id);
+      if (productId == null) return J({ error: "Product id required" }, 400);
+
+      const delta = Number(body.delta);
+      if (!Number.isFinite(delta) || delta === 0) {
+        return J({ error: "Adjustment delta must be a non-zero number" }, 400);
+      }
+
+      const qty = Math.abs(delta);
+      const type = delta > 0 ? "restock" : "use";
+      const now = new Date().toISOString();
+      const note = String(body.note ?? "").trim() || (type === "restock" ? "Manual restock" : "Manual use");
+
+      const ledgerBefore = await netStockFromActivity(db, productId);
+
+      let productRow: Record<string, unknown> | null = null;
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const { data: current, error: curErr } = await db.from("products")
+          .select("id, name, stock, unit, price, track_stock")
+          .eq("id", productId)
+          .maybeSingle();
+        if (curErr) throw curErr;
+        if (!current) return J({ error: "Product not found" }, 404);
+        if (current.track_stock === false) return J({ error: "This item is invoice price-list only (not tracked in stock)." }, 400);
+
+        const currentStock = Number(current.stock) || 0;
+        if (Math.abs(ledgerBefore - currentStock) >= 1e-9) {
+          return J({
+            error: `Stock drift detected for ${current.name}. Run inventory reconciliation before adjusting.`,
+            code: "stock_drift",
+            details: {
+              productId,
+              currentStock,
+              ledgerStock: ledgerBefore,
+              drift: ledgerBefore - currentStock,
+            },
+          }, 409);
+        }
+        if (delta < 0 && qty > currentStock) {
+          return J({ error: `Not enough ${current.name} in stock (${currentStock} ${current.unit || "unit"} available, need ${qty}).` }, 400);
+        }
+        const nextStock = currentStock + delta;
+
+        const { data: updated, error: updErr } = await db.from("products")
+          .update({ stock: nextStock, updated_at: now })
+          .eq("id", productId)
+          .eq("stock", current.stock)
+          .select("*")
+          .maybeSingle();
+        if (updErr) throw updErr;
+        if (updated) {
+          productRow = updated;
+          break;
+        }
+      }
+
+      if (!productRow) {
+        return J({ error: "Stock changed by another device. Please retry." }, 409);
+      }
+
+      const price = Number(productRow.price ?? 0) || 0;
+      const stockEntry = {
+        id: genStockActivityId(),
+        product_id: productId,
+        product_name: String(productRow.name || "Product"),
+        type,
+        qty,
+        value: type === "use" ? qty * price : null,
+        note,
+        date: nullableDate(now) || now.slice(0, 10),
+        added_by: user.name || "Staff",
+        updated_at: now,
+      };
+      const { data: insertedLog, error: insErr } = await db.from("stock_activity")
+        .insert(stockEntry)
+        .select("*")
+        .single();
+      if (insErr) throw insErr;
+
+      await clearSyncTombstones(db, "products", [String(productId)]);
+      await clearSyncTombstones(db, "stock_activity", [String(stockEntry.id)]);
+      return J({ ok: true, product: productRow, stockEntry: insertedLog });
+    }
+
+    if (body.action === "reconcile_inventory_stock") {
+      if (user.role !== "owner") {
+        return J({ error: "Permission denied" }, 403);
+      }
+      const repair = Boolean(body.repair);
+      const now = new Date().toISOString();
+      const summary = await reconcileTrackedProductsStock(db, { repair, now });
+      return J({
+        ok: true,
+        repair,
+        checked: summary.checked,
+        mismatchCount: summary.mismatches.length,
+        repaired: summary.repaired,
+        mismatches: summary.mismatches,
+      });
     }
 
     if (body.action === "mark_invoice_paid") {

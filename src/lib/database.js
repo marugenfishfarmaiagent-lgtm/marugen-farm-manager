@@ -567,6 +567,30 @@ export async function syncStockActivity(logs, options) {
   await syncCall('stock_activity', logs, options)
 }
 
+/** Atomically adjust one product stock and append stock activity on the server. */
+export async function adjustInventoryStockCloud({ productId, delta, note } = {}) {
+  if (!isSupabaseConfigured) throw new Error('Cloud sync is not configured')
+  const data = await apiCall({
+    action: 'adjust_stock',
+    productId: normalizeBigintId(productId),
+    delta: Number(delta),
+    note: note || '',
+  })
+  return {
+    product: mapProduct(data.product),
+    stockEntry: mapStockLog(data.stockEntry),
+  }
+}
+
+/** Owner-only: compare products.stock with stock_activity net; optional repair on server. */
+export async function reconcileInventoryStockCloud({ repair = false } = {}) {
+  if (!isSupabaseConfigured) throw new Error('Cloud sync is not configured')
+  return apiCall({
+    action: 'reconcile_inventory_stock',
+    repair: Boolean(repair),
+  })
+}
+
 export async function syncKoiFish(list, options) {
   if (!isSupabaseConfigured) return
   const payload = (list || []).map((k) => {
