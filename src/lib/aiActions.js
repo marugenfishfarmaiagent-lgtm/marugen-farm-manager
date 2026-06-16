@@ -6,6 +6,7 @@ import { calcInvoiceAmounts } from './invoiceDesign'
 import { writeCloudFirst, writeInventoryCloudFirst, writeListCloudFirst } from './cloudWrite.js'
 import { touchUpdatedAt } from './syncMeta'
 import { peekDeletions } from './syncDeletions'
+import { peekReservedInvoiceIds } from './invoiceIdReserve'
 import { formatCustomerAddress, resolveInvoiceCustomer } from './invoiceWhatsApp'
 import { applyStockPreview, deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem, previewDeductStockForInvoice, previewRestoreStockForInvoice, validateStockForItems } from './inventoryStock'
 import { adjustProductStockInList, buildStockLogEntry } from './inventoryOps'
@@ -664,7 +665,9 @@ export async function executeAiAction(name, args, ctx) {
           { customerId: customer?.id || '', customerName: displayName },
           ctx.customers,
         )
-        const invId = genInvoiceId(ctx.invoices, issueDate, { reservedIds: peekDeletions('invoices') })
+        const invId = genInvoiceId(ctx.invoices, issueDate, {
+          reservedIds: [...peekDeletions('invoices'), ...peekReservedInvoiceIds()],
+        })
         const invoiceItems = items.map(serializeInvoiceItem)
         const stockSideEffectMeta = { invoiceId: invId, by: currentUser?.name || 'Staff' }
         const stockPreview = previewDeductStockForInvoice(
