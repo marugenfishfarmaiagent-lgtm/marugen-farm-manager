@@ -120,10 +120,25 @@ export function getLowStockProducts(products = []) {
 
 export function adjustProductStockInList(products, productId, delta) {
   const d = Number(delta) || 0
-  if (!d) return products
-  return products.map((p) => (
-    sameProductId(p.id, productId)
-      ? touchUpdatedAt({ ...p, stock: Math.max(0, (Number(p.stock) || 0) + d) })
-      : p
-  ))
+  if (!d) return { ok: true, products }
+
+  const product = products.find((p) => sameProductId(p.id, productId))
+  if (product && isStockTracked(product) && d < 0) {
+    const stock = Number(product.stock) || 0
+    const qty = Math.abs(d)
+    if (qty > stock) {
+      return {
+        ok: false,
+        message: `Not enough ${product.name} in stock (${stock} ${product.unit || 'unit'} available, need ${qty}).`,
+        products,
+      }
+    }
+  }
+
+  const nextProducts = products.map((p) => {
+    if (!sameProductId(p.id, productId)) return p
+    const stock = Number(p.stock) || 0
+    return touchUpdatedAt({ ...p, stock: stock + d })
+  })
+  return { ok: true, products: nextProducts }
 }

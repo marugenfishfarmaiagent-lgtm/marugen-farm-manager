@@ -1011,7 +1011,9 @@ export async function executeAiAction(name, args, ctx) {
 
         const productsSnapshot = ctx.products
         const stockSnapshot = ctx.stockLog
-        const nextProducts = adjustProductStockInList(productsSnapshot, product.id, qty)
+        const adjusted = adjustProductStockInList(productsSnapshot, product.id, qty)
+        if (!adjusted.ok) return { success: false, error: adjusted.message }
+        const nextProducts = adjusted.products
         const nextStockLog = [
           buildStockLogEntry(product, 'restock', { qty, note: 'AI restock', by: currentUser.name }),
           ...stockSnapshot,

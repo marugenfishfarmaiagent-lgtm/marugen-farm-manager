@@ -12,7 +12,7 @@ import {
 } from "./lib/cloudData";
 import { applyStockPreview, deductStockForInvoice, restoreStockForInvoice, serializeInvoiceItem, validateStockForItems, previewDeductStockForInvoice, previewRestoreStockForInvoice } from "./lib/inventoryStock";
 import {
-  adjustProductStockInList, buildStockLogEntry, formatRestockLogNote, getLowStockProducts, isProductOnActiveInvoice,
+  adjustProductStockInList, buildStockLogEntry, formatRestockLogNote, genStockLogId, getLowStockProducts, isProductOnActiveInvoice,
   normalizeProductRecord, parseStockQty, sameProductId, sortStockLog, validateProductFields,
 } from "./lib/inventoryOps";
 import { isStockTracked, priceListProducts, stockProducts } from "./lib/productCatalog";
@@ -920,8 +920,12 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   const canDelete = canDeleteRecords(currentUser);
   const [tab, setTab] = useState("stock");
   const [showAdd, setShowAdd] = useState(false);
+  const [addingProduct, setAddingProduct] = useState(false);
+  const addingProductRef = useRef(false);
   const [addCatalogOnly, setAddCatalogOnly] = useState(false);
   const [editProduct, setEditProduct] = useState(null);
+  const [savingProduct, setSavingProduct] = useState(false);
+  const savingProductRef = useRef(false);
   const [deleteProduct, setDeleteProduct] = useState(null);
   const [deletingProduct, setDeletingProduct] = useState(false);
   const [showUse, setShowUse] = useState(null);
@@ -932,6 +936,10 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   const [catFilter, setCatFilter] = useState("All");
   const [useQty, setUseQty] = useState(1);
   const [useNote, setUseNote] = useState("");
+  const [usingStock, setUsingStock] = useState(false);
+  const usingStockRef = useRef(false);
+  const [restocking, setRestocking] = useState(false);
+  const restockingRef = useRef(false);
   const [showOlderStockLog, setShowOlderStockLog] = useState(false);
   const [form, setForm] = useState(EMPTY_PRODUCT_FORM);
 
@@ -983,6 +991,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   };
 
   const addProduct = async () => {
+    if (addingProductRef.current || addingProduct) return;
     if (!canEdit) {
       notifyPermissionDenied(addNotification, "edit");
       return;
@@ -993,31 +1002,39 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       addNotification({ type: "error", title: "Invalid Product", message: check.message });
       return;
     }
-    const normalized = normalizeProductRecord(form, { catalogOnly });
-    const p = touchUpdatedAt({ ...form, ...normalized, id: Date.now() });
-    const productsSnapshot = products;
-    const stockSnapshot = stockLog;
-    const nextProducts = [...productsSnapshot, p];
-    let nextStockLog = stockSnapshot;
-    if (!catalogOnly && p.stock > 0) {
-      nextStockLog = [
-        buildStockLogEntry(p, "restock", {
-          qty: p.stock,
-          note: "Opening stock",
-          by: currentUser?.name || "Staff",
-        }),
-        ...stockSnapshot,
-      ];
+
+    addingProductRef.current = true;
+    setAddingProduct(true);
+    try {
+      const normalized = normalizeProductRecord(form, { catalogOnly });
+      const p = touchUpdatedAt({ ...form, ...normalized, id: genStockLogId() });
+      const productsSnapshot = products;
+      const stockSnapshot = stockLog;
+      const nextProducts = [...productsSnapshot, p];
+      let nextStockLog = stockSnapshot;
+      if (!catalogOnly && p.stock > 0) {
+        nextStockLog = [
+          buildStockLogEntry(p, "restock", {
+            qty: p.stock,
+            note: "Opening stock",
+            by: currentUser?.name || "Staff",
+          }),
+          ...stockSnapshot,
+        ];
+      }
+      if (!(await persistInventory(nextProducts, nextStockLog))) return;
+      addNotification({
+        type: "success",
+        title: catalogOnly ? "Price List Item Added" : "Product Added",
+        message: `${p.name} ${catalogOnly ? "added to invoice price list" : "added to inventory"}`,
+      });
+      setShowAdd(false);
+      setAddCatalogOnly(false);
+      setForm(EMPTY_PRODUCT_FORM);
+    } finally {
+      addingProductRef.current = false;
+      setAddingProduct(false);
     }
-    if (!(await persistInventory(nextProducts, nextStockLog))) return;
-    addNotification({
-      type: "success",
-      title: catalogOnly ? "Price List Item Added" : "Product Added",
-      message: `${p.name} ${catalogOnly ? "added to invoice price list" : "added to inventory"}`,
-    });
-    setShowAdd(false);
-    setAddCatalogOnly(false);
-    setForm(EMPTY_PRODUCT_FORM);
   };
 
   const openAddProduct = (catalogOnly = false) => {
@@ -1029,15 +1046,20 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   };
 
   const saveEditProduct = async () => {
+    if (!editProduct || savingProductRef.current || savingProduct) return;
     if (!canEdit) {
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
+    savingProductRef.current = true;
+    setSavingProduct(true);
     const current = products.find((p) => sameProductId(p.id, editProduct.id));
     const catalogOnly = editProduct.trackStock === false;
     const check = validateProductFields(editProduct, { catalogOnly });
     if (!check.ok) {
       addNotification({ type: "error", title: "Invalid Product", message: check.message });
+      savingProductRef.current = false;
+      setSavingProduct(false);
       return;
     }
     const normalized = normalizeProductRecord(editProduct, { catalogOnly });
@@ -1079,6 +1101,9 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
         message: err?.message || "Could not save product to cloud.",
       });
       return;
+    } finally {
+      savingProductRef.current = false;
+      setSavingProduct(false);
     }
     addNotification({ type: "success", title: "Product Updated", message: `${updated.name} saved` });
     setEditProduct(null);
@@ -1125,6 +1150,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   };
 
   const confirmUseStock = async (product) => {
+    if (!product || usingStockRef.current || usingStock) return;
     const qty = parseStockQty(useQty);
     const available = Number(product.stock) || 0;
     if (qty <= 0) {
@@ -1139,36 +1165,58 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       });
       return;
     }
-    const productsSnapshot = products;
-    const stockSnapshot = stockLog;
-    const nextProducts = adjustProductStockInList(productsSnapshot, product.id, -qty);
-    const nextStockLog = [
-      buildStockLogEntry(product, "use", { qty, note: useNote, by: currentUser?.name || "Staff" }),
-      ...stockSnapshot,
-    ];
-    if (!(await persistInventory(nextProducts, nextStockLog))) return;
-    const remaining = available - qty;
-    if (product.minStock > 0 && remaining <= product.minStock) {
-      addNotification({
-        type: "warning",
-        title: "Low Stock",
-        message: `${product.name} stock is low (${remaining} ${product.unit} remaining)`,
-      });
+
+    usingStockRef.current = true;
+    setUsingStock(true);
+    try {
+      const productsSnapshot = products;
+      const stockSnapshot = stockLog;
+      const adjusted = adjustProductStockInList(productsSnapshot, product.id, -qty);
+      if (!adjusted.ok) {
+        addNotification({
+          type: "error",
+          title: "Insufficient Stock",
+          message: adjusted.message,
+        });
+        return;
+      }
+      const nextProducts = adjusted.products;
+      const nextStockLog = [
+        buildStockLogEntry(product, "use", { qty, note: useNote, by: currentUser?.name || "Staff" }),
+        ...stockSnapshot,
+      ];
+      if (!(await persistInventory(nextProducts, nextStockLog))) return;
+      const remaining = available - qty;
+      if (product.minStock > 0 && remaining <= product.minStock) {
+        addNotification({
+          type: "warning",
+          title: "Low Stock",
+          message: `${product.name} stock is low (${remaining} ${product.unit} remaining)`,
+        });
+      }
+      setShowUse(null);
+      setUseQty(1);
+      setUseNote("");
+    } finally {
+      usingStockRef.current = false;
+      setUsingStock(false);
     }
-    setShowUse(null);
-    setUseQty(1);
-    setUseNote("");
   };
 
   const restock = async (product, qty, note) => {
     const amount = parseStockQty(qty);
     if (amount <= 0) {
       addNotification({ type: "error", title: "Invalid Quantity", message: "Enter a quantity of at least 1." });
-      return;
+      return false;
     }
     const productsSnapshot = products;
     const stockSnapshot = stockLog;
-    const nextProducts = adjustProductStockInList(productsSnapshot, product.id, amount);
+    const adjusted = adjustProductStockInList(productsSnapshot, product.id, amount);
+    if (!adjusted.ok) {
+      addNotification({ type: "error", title: "Restock Failed", message: adjusted.message });
+      return false;
+    }
+    const nextProducts = adjusted.products;
     const logNote = formatRestockLogNote(note);
     const nextStockLog = [
       buildStockLogEntry(product, "restock", {
@@ -1178,12 +1226,35 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       }),
       ...stockSnapshot,
     ];
-    if (!(await persistInventory(nextProducts, nextStockLog))) return;
+    if (!(await persistInventory(nextProducts, nextStockLog))) return false;
     addNotification({
       type: "info",
       title: "Restocked",
       message: `${product.name} restocked by ${amount} ${product.unit}${logNote !== "Manual restock" ? ` (${logNote})` : ""}`,
     });
+    return true;
+  };
+
+  const confirmRestock = async (product) => {
+    if (!product || restockingRef.current || restocking) return;
+    const q = parseStockQty(restockQty);
+    if (q <= 0) {
+      addNotification({ type: "error", title: "Invalid Quantity", message: "Enter a quantity of at least 1." });
+      return;
+    }
+
+    restockingRef.current = true;
+    setRestocking(true);
+    try {
+      const ok = await restock(product, q, restockNote);
+      if (!ok) return;
+      setShowRestock(null);
+      setRestockQty(1);
+      setRestockNote("");
+    } finally {
+      restockingRef.current = false;
+      setRestocking(false);
+    }
   };
 
   const totalStockValue = stockItems.reduce((s, p) => s + p.stock * p.price, 0);
@@ -1361,7 +1432,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       )}
 
       {/* Add Product Modal */}
-      <Modal open={showAdd} onClose={() => { setShowAdd(false); setAddCatalogOnly(false); }} title={addCatalogOnly ? "Add Price List Item" : "Add New Product"} size="lg">
+      <Modal open={showAdd} onClose={() => { if (!addingProduct) { setShowAdd(false); setAddCatalogOnly(false); } }} title={addCatalogOnly ? "Add Price List Item" : "Add New Product"} size="lg">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {addCatalogOnly && (
             <p className="sm:col-span-2 text-violet-300 text-xs bg-violet-500/10 border border-violet-500/30 rounded-lg p-2">
@@ -1382,13 +1453,17 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
           <Textarea label="Description" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} className="sm:col-span-2" />
         </div>
         <div className="modal-actions">
-          <Btn variant="secondary" onClick={() => { setShowAdd(false); setAddCatalogOnly(false); }}>Cancel</Btn>
-          <Btn onClick={addProduct}><Plus size={14} />{addCatalogOnly ? "Add to Price List" : "Add Product"}</Btn>
+          <Btn variant="secondary" onClick={() => { if (!addingProduct) { setShowAdd(false); setAddCatalogOnly(false); } }} disabled={addingProduct}>Cancel</Btn>
+          <Btn onClick={addProduct} disabled={addingProduct}>
+            {addingProduct
+              ? <><Loader2 size={14} className="animate-spin" />Saving...</>
+              : <><Plus size={14} />{addCatalogOnly ? "Add to Price List" : "Add Product"}</>}
+          </Btn>
         </div>
       </Modal>
 
       {/* Edit Product Modal */}
-      <Modal open={!!editProduct} onClose={() => setEditProduct(null)} title={editProduct?.trackStock === false ? "Edit Price List Item" : "Edit Product"} size="lg">
+      <Modal open={!!editProduct} onClose={() => { if (!savingProduct) setEditProduct(null); }} title={editProduct?.trackStock === false ? "Edit Price List Item" : "Edit Product"} size="lg">
         {editProduct && (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1406,8 +1481,10 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
               <Textarea label="Description" value={editProduct.description} onChange={e => setEditProduct(p => ({ ...p, description: e.target.value }))} className="sm:col-span-2" />
             </div>
             <div className="modal-actions">
-              <Btn variant="secondary" onClick={() => setEditProduct(null)}>Cancel</Btn>
-              <Btn onClick={saveEditProduct}><Check size={14} />Save Changes</Btn>
+              <Btn variant="secondary" onClick={() => { if (!savingProduct) setEditProduct(null); }} disabled={savingProduct}>Cancel</Btn>
+              <Btn onClick={saveEditProduct} disabled={savingProduct}>
+                {savingProduct ? <><Loader2 size={14} className="animate-spin" />Saving...</> : <><Check size={14} />Save Changes</>}
+              </Btn>
             </div>
           </>
         )}
@@ -1438,12 +1515,18 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       {/* Use Stock Modal */}
       <Modal
         open={!!showUse}
-        onClose={() => setShowUse(null)}
+        onClose={() => { if (!usingStock) setShowUse(null); }}
         title={`Use: ${showUse?.name}`}
         size="sm"
         footer={(
-          <ConfirmModalFooter onCancel={() => setShowUse(null)}>
-            <Btn onClick={() => confirmUseStock(showUse)} disabled={parseStockQty(useQty) <= 0} className="w-full sm:w-auto justify-center"><Archive size={14} />Confirm Use</Btn>
+          <ConfirmModalFooter onCancel={() => { if (!usingStock) setShowUse(null); }} cancelDisabled={usingStock}>
+            <Btn
+              onClick={() => confirmUseStock(showUse)}
+              disabled={usingStock || parseStockQty(useQty) <= 0}
+              className="w-full sm:w-auto justify-center"
+            >
+              {usingStock ? <><Loader2 size={14} className="animate-spin" />Saving...</> : <><Archive size={14} />Confirm Use</>}
+            </Btn>
           </ConfirmModalFooter>
         )}
       >
@@ -1455,19 +1538,18 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       {/* Restock Modal */}
       <Modal
         open={!!showRestock}
-        onClose={() => { setShowRestock(null); setRestockNote(""); }}
+        onClose={() => { if (!restocking) { setShowRestock(null); setRestockNote(""); } }}
         title={`Restock: ${showRestock?.name}`}
         size="sm"
         footer={(
-          <ConfirmModalFooter onCancel={() => { setShowRestock(null); setRestockNote(""); }}>
-            <Btn onClick={() => {
-              const q = parseStockQty(restockQty);
-              if (q > 0) {
-                restock(showRestock, q, restockNote);
-                setShowRestock(null);
-                setRestockNote("");
-              }
-            }} disabled={parseStockQty(restockQty) <= 0} className="w-full sm:w-auto justify-center"><Plus size={14} />Confirm Restock</Btn>
+          <ConfirmModalFooter onCancel={() => { if (!restocking) { setShowRestock(null); setRestockNote(""); } }} cancelDisabled={restocking}>
+            <Btn
+              onClick={() => confirmRestock(showRestock)}
+              disabled={restocking || parseStockQty(restockQty) <= 0}
+              className="w-full sm:w-auto justify-center"
+            >
+              {restocking ? <><Loader2 size={14} className="animate-spin" />Saving...</> : <><Plus size={14} />Confirm Restock</>}
+            </Btn>
           </ConfirmModalFooter>
         )}
       >
