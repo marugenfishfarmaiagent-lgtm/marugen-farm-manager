@@ -27,4 +27,18 @@ describe('sortStockLog', () => {
       'Invoice INV20260615-05',
     ])
   })
+
+  it('puts invoice restock above invoice sell for same invoice when recency ties', () => {
+    const rows = [
+      { id: 501, type: 'sell', note: 'Invoice INV20260616-04', updatedAt: '2026-06-16T09:00:00.000Z' },
+      { id: 100, type: 'restock', note: 'Invoice cancelled INV20260616-04', updatedAt: '2026-06-16T09:00:00.000Z' },
+      { id: 700, type: 'sell', note: 'Invoice INV20260616-03', updatedAt: '2026-06-16T09:00:00.000Z' },
+    ]
+    const sorted = sortStockLog(rows)
+    assert.deepEqual(sorted.map((r) => r.note), [
+      'Invoice cancelled INV20260616-04',
+      'Invoice INV20260616-04',
+      'Invoice INV20260616-03',
+    ])
+  })
 })

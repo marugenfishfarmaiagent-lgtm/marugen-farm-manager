@@ -35,6 +35,19 @@ export function stockLogRecency(row) {
 export function compareStockLogDesc(a, b) {
   const keyCmp = stockLogRecency(b) - stockLogRecency(a)
   if (keyCmp !== 0) return keyCmp
+  const invA = invoiceIdFromStockLogNote(a?.note)
+  const invB = invoiceIdFromStockLogNote(b?.note)
+  if (invA && invB && invA !== invB) {
+    const invCmp = invB.localeCompare(invA)
+    if (invCmp !== 0) return invCmp
+  }
+  if (invA && invA === invB) {
+    const typeRank = { restock: 3, sell: 2, use: 1 }
+    const rankA = typeRank[String(a?.type || '').toLowerCase()] || 0
+    const rankB = typeRank[String(b?.type || '').toLowerCase()] || 0
+    const rankCmp = rankB - rankA
+    if (rankCmp !== 0) return rankCmp
+  }
   const idCmp = stockLogIdNum(b) - stockLogIdNum(a)
   if (idCmp !== 0) return idCmp
   return String(b?.id || '').localeCompare(String(a?.id || ''))
