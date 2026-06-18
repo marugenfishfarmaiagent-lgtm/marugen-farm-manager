@@ -3971,6 +3971,8 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
       const { dataUrl, name } = await compressReceiptImage(file);
       setUploadPreview(dataUrl);
       setUploadName(name);
+      if (albumInputRef.current) albumInputRef.current.value = "";
+      if (cameraInputRef.current) cameraInputRef.current.value = "";
     } catch (err) {
       addNotification({ type: "error", title: "Upload Failed", message: err?.message || "Could not process image." });
       resetUpload();
@@ -3995,9 +3997,16 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
     const { id, currentlyBooked } = bookedConfirm;
     const patch = makeBookedPatch(!currentlyBooked, currentUser.name);
     setBookedConfirm(null);
-    await commitExpenseList((prev) => prev.map((e) => (
+    const saved = await commitExpenseList((prev) => prev.map((e) => (
       sameExpenseId(e.id, id) ? touchUpdatedAt({ ...e, ...patch }) : e
     )));
+    if (saved) {
+      addNotification({
+        type: "success",
+        title: currentlyBooked ? "Mark removed" : "Marked in accounts",
+        message: currentlyBooked ? "Receipt unmarked from accounts." : "Receipt marked as entered in accounts.",
+      });
+    }
   };
 
   const requestDeleteExpense = (expense) => {
