@@ -277,7 +277,7 @@ function mapPondData(payload, updatedAt) {
     ...emptyPondData(),
     ...payload,
     reminders: (payload.reminders || []).map((row) => normalizeReminderRecord(row)),
-    treatmentGuides: payload.treatmentGuides?.length
+    treatmentGuides: payload.treatmentGuides != null
       ? payload.treatmentGuides
       : emptyPondData().treatmentGuides,
   }

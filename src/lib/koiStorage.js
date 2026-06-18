@@ -51,7 +51,7 @@ export function loadPondData() {
   return {
     ...INITIAL_POND_DATA,
     ...data,
-    treatmentGuides: data.treatmentGuides?.length ? data.treatmentGuides : [...DEFAULT_TREATMENT_GUIDES],
+    treatmentGuides: data.treatmentGuides != null ? data.treatmentGuides : [...DEFAULT_TREATMENT_GUIDES],
   }
 }
 

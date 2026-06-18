@@ -163,9 +163,9 @@ export default function PondManagement({
   }
   const hasPonds = ponds.length > 0
 
-  const displayGuides = treatmentGuides.length ? treatmentGuides : DEFAULT_TREATMENT_GUIDES
+  const displayGuides = treatmentGuides?.length ? treatmentGuides : (treatmentGuides == null ? DEFAULT_TREATMENT_GUIDES : [])
 
-  const ensureGuidesMutable = () => (treatmentGuides.length ? treatmentGuides : [...DEFAULT_TREATMENT_GUIDES])
+  const ensureGuidesMutable = () => (treatmentGuides != null ? treatmentGuides : [...DEFAULT_TREATMENT_GUIDES])
 
   const pondSaltLevel = (pond) => pond.lastSalt
 
@@ -456,7 +456,7 @@ export default function PondManagement({
       if (currentEditId) {
         const saved = await commitPondData((prev) => touchPondData({
           ...prev,
-          treatmentGuides: (prev.treatmentGuides.length ? prev.treatmentGuides : [...DEFAULT_TREATMENT_GUIDES])
+          treatmentGuides: (prev.treatmentGuides != null ? prev.treatmentGuides : [...DEFAULT_TREATMENT_GUIDES])
             .map((g) => (g.id === currentEditId ? { ...g, ...payload } : g)),
         }))
         if (!saved) return
@@ -464,7 +464,7 @@ export default function PondManagement({
       } else {
         const saved = await commitPondData((prev) => touchPondData({
           ...prev,
-          treatmentGuides: [...(prev.treatmentGuides.length ? prev.treatmentGuides : [...DEFAULT_TREATMENT_GUIDES]), { ...payload, id: genId('GUIDE') }],
+          treatmentGuides: [...(prev.treatmentGuides != null ? prev.treatmentGuides : [...DEFAULT_TREATMENT_GUIDES]), { ...payload, id: genId('GUIDE') }],
         }))
         if (!saved) return
         addNotification({ type: 'success', title: 'Guide Added', message: payload.title })
@@ -484,7 +484,7 @@ export default function PondManagement({
     try {
       const saved = await commitPondData((prev) => touchPondData({
         ...prev,
-        treatmentGuides: (prev.treatmentGuides.length ? prev.treatmentGuides : [...DEFAULT_TREATMENT_GUIDES])
+        treatmentGuides: (prev.treatmentGuides != null ? prev.treatmentGuides : [...DEFAULT_TREATMENT_GUIDES])
           .filter((g) => g.id !== guideId),
       }))
       if (!saved) return
