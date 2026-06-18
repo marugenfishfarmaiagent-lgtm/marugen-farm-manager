@@ -267,6 +267,29 @@ function useIsMobile(breakpoint = 1024) {
 const tierColor = { Bronze: "text-orange-400", Silver: "text-slate-300", Gold: "text-yellow-400", Platinum: "text-cyan-400" };
 const statusColor = { paid: "bg-emerald-500/20 text-emerald-300", pending: "bg-amber-500/20 text-amber-300", overdue: "bg-red-500/20 text-red-300", scheduled: "bg-blue-500/20 text-blue-300", delivered: "bg-emerald-500/20 text-emerald-300", cancelled: "bg-red-500/20 text-red-300", transit: "bg-purple-500/20 text-purple-300" };
 const eventTypeColor = { maintenance: "bg-blue-500/20 text-blue-300 border-blue-500/30", feeding: "bg-green-500/20 text-green-300 border-green-500/30", purchase: "bg-yellow-500/20 text-yellow-300 border-yellow-500/30", customer: "bg-purple-500/20 text-purple-300 border-purple-500/30", other: "bg-slate-500/20 text-slate-300 border-slate-500/30" };
+const STOCK_NOTE_INVOICE_RE = /^Invoice (INV\d{8}-\d+)$/i;
+const STOCK_NOTE_CANCELLED_RE = /^Invoice cancelled (INV\d{8}-\d+)$/i;
+
+function linkedInvoiceIdFromStockNote(note) {
+  const text = String(note || "").trim();
+  const hit = text.match(STOCK_NOTE_INVOICE_RE) || text.match(STOCK_NOTE_CANCELLED_RE);
+  return hit?.[1] || null;
+}
+
+function pruneOrphanInvoiceStockLogs(stockRows = [], invoices = []) {
+  const liveInvoiceIds = new Set((invoices || []).map((inv) => String(inv?.id || "")));
+  const nextRows = [];
+  const removedIds = [];
+  for (const row of stockRows || []) {
+    const invoiceId = linkedInvoiceIdFromStockNote(row?.note);
+    if (invoiceId && !liveInvoiceIds.has(invoiceId)) {
+      if (row?.id != null && row.id !== "") removedIds.push(String(row.id));
+      continue;
+    }
+    nextRows.push(row);
+  }
+  return { nextRows, removedIds };
+}
 
 function Badge({ children, className = "" }) {
   return <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${className}`}>{children}</span>;
@@ -1901,6 +1924,21 @@ function InvoiceModule({
     { ...inv, status: getInvoiceStatus(inv) },
     customers,
   );
+
+  const invoiceWithDraftShipping = (inv) => {
+    if (!inv || !activeViewInv || String(activeViewInv.id) !== String(inv.id)) return inv;
+    if (!["pending", "overdue"].includes(getInvoiceStatus(inv)) || !canEditRecords(currentUser)) return inv;
+    const draftShipping = shippingDraft === "" ? 0 : (+shippingDraft || 0);
+    return { ...activeViewInv, shipping: draftShipping };
+  };
+
+  const persistShippingDraftIfDirty = async (inv) => {
+    if (!inv) return;
+    const savedShipping = Number(inv.shipping) || 0;
+    const draftShipping = shippingDraft === "" ? 0 : (+shippingDraft || 0);
+    if (savedShipping === draftShipping) return;
+    await commitInvoiceShipping(inv, shippingDraft, { silent: true });
+  };
 
   const invoiceWithDraftFees = (inv) => {
     if (!inv || !activeViewInv || String(activeViewInv.id) !== String(inv.id)) return inv;
@@ -9072,6 +9110,17 @@ export default function App() {
       });
     })();
   }, [dataReady, cloudHydrated, currentUser, addNotification, refreshFromCloud]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !dataReady || !cloudHydrated) return;
+    setStockLog((prev) => {
+      const { nextRows, removedIds } = pruneOrphanInvoiceStockLogs(prev, syncStateRef.current.invoices || invoices);
+      if (!removedIds.length) return prev;
+      removedIds.forEach((id) => markDeleted("stock_activity", id));
+      syncStateRef.current = { ...syncStateRef.current, stockLog: nextRows };
+      return nextRows;
+    });
+  }, [isSupabaseConfigured, dataReady, cloudHydrated, invoices, setStockLog]);
 
   const pendingRemindersKey = useMemo(
     () => pendingRemindersSyncKey(pondData.reminders),
