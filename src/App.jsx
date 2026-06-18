@@ -5629,6 +5629,7 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
   const [showAllPast, setShowAllPast] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [deletingEvent, setDeletingEvent] = useState(false);
+  const [savingEvent, setSavingEvent] = useState(false);
 
   const commitEventList = async (buildNext) => {
     if (savingEventRef.current) {
@@ -5725,63 +5726,69 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
-    if (isEditing) {
-      const existing = events.find((e) => sameEventId(e.id, editEventId));
-      if (!existing) {
-        addNotification({ type: "error", title: "Not Found", message: "Event no longer exists." });
-        closeEventForm();
-        return;
-      }
-      const built = buildUpdatedEventRecord(form, existing);
-      if (!built.ok) {
-        addNotification({ type: "error", title: "Cannot Save Event", message: built.message });
-        return;
-      }
-      const saved = await commitEventList((prev) => prev.map((e) => (
-        sameEventId(e.id, editEventId) ? built.event : e
-      )));
-      if (!saved) return;
-      addNotification({ type: "success", title: "Event Updated", message: `"${built.event.title}" saved.` });
-      if (newlyAssignedUserIds(existing.assignedUserIds, built.event.assignedUserIds).length) {
-        notifyAssignmentChange({
-          isNew: false,
-          previousAssignedUserIds: existing.assignedUserIds,
-          nextAssignedUserIds: built.event.assignedUserIds,
-          title: "Event Assigned",
-          message: `${built.event.title} · ${built.event.date} ${built.event.time || ""}`.trim(),
-          url: "/?tab=calendar",
-          actor: currentUser?.name,
-          actorRole: currentUser?.role,
-        });
-      }
-    } else {
-      const built = buildNewEventRecord(form, {
-        createdBy: currentUser?.name || "Staff",
-        existingEvents: events,
-      });
-      if (!built.ok) {
-        addNotification({ type: "error", title: "Cannot Add Event", message: built.message });
-        return;
-      }
-      const saved = await commitEventList((prev) => [...prev, built.event]);
-      if (!saved) return;
-      const eventMsg = `${built.event.title} on ${built.event.date}`;
-      if (hasAssignedTeam(built.event.assignedUserIds)) {
-        addNotification({ type: "success", title: "Event Added", message: eventMsg });
-        notifyAssignmentChange({
-          isNew: true,
-          nextAssignedUserIds: built.event.assignedUserIds,
-          title: "Event Assigned",
-          message: `${built.event.title} · ${built.event.date} ${built.event.time || ""}`.trim(),
-          url: "/?tab=calendar",
-          actor: currentUser?.name,
-          actorRole: currentUser?.role,
-        });
+    if (savingEventRef.current) return;
+    setSavingEvent(true);
+    try {
+      if (isEditing) {
+        const existing = events.find((e) => sameEventId(e.id, editEventId));
+        if (!existing) {
+          addNotification({ type: "error", title: "Not Found", message: "Event no longer exists." });
+          closeEventForm();
+          return;
+        }
+        const built = buildUpdatedEventRecord(form, existing);
+        if (!built.ok) {
+          addNotification({ type: "error", title: "Cannot Save Event", message: built.message });
+          return;
+        }
+        const saved = await commitEventList((prev) => prev.map((e) => (
+          sameEventId(e.id, editEventId) ? built.event : e
+        )));
+        if (!saved) return;
+        addNotification({ type: "success", title: "Event Updated", message: `"${built.event.title}" saved.` });
+        if (newlyAssignedUserIds(existing.assignedUserIds, built.event.assignedUserIds).length) {
+          notifyAssignmentChange({
+            isNew: false,
+            previousAssignedUserIds: existing.assignedUserIds,
+            nextAssignedUserIds: built.event.assignedUserIds,
+            title: "Event Assigned",
+            message: `${built.event.title} · ${built.event.date} ${built.event.time || ""}`.trim(),
+            url: "/?tab=calendar",
+            actor: currentUser?.name,
+            actorRole: currentUser?.role,
+          });
+        }
       } else {
-        addNotification({ type: "info", title: "Event Added", message: eventMsg });
+        const built = buildNewEventRecord(form, {
+          createdBy: currentUser?.name || "Staff",
+          existingEvents: events,
+        });
+        if (!built.ok) {
+          addNotification({ type: "error", title: "Cannot Add Event", message: built.message });
+          return;
+        }
+        const saved = await commitEventList((prev) => [...prev, built.event]);
+        if (!saved) return;
+        const eventMsg = `${built.event.title} on ${built.event.date}`;
+        if (hasAssignedTeam(built.event.assignedUserIds)) {
+          addNotification({ type: "success", title: "Event Added", message: eventMsg });
+          notifyAssignmentChange({
+            isNew: true,
+            nextAssignedUserIds: built.event.assignedUserIds,
+            title: "Event Assigned",
+            message: `${built.event.title} · ${built.event.date} ${built.event.time || ""}`.trim(),
+            url: "/?tab=calendar",
+            actor: currentUser?.name,
+            actorRole: currentUser?.role,
+          });
+        } else {
+          addNotification({ type: "info", title: "Event Added", message: eventMsg });
+        }
       }
+      closeEventForm();
+    } finally {
+      setSavingEvent(false);
     }
-    closeEventForm();
   };
 
   const requestDeleteEvent = (e) => {
@@ -5929,8 +5936,8 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
               <Trash2 size={14} />Delete
             </Btn>
           )}
-          <Btn variant="secondary" onClick={closeEventForm}>Cancel</Btn>
-          <Btn onClick={saveEvent} disabled={!canEdit}><Plus size={14} />{isEditing ? "Save Changes" : "Add Event"}</Btn>
+          <Btn variant="secondary" onClick={closeEventForm} disabled={savingEvent}>Cancel</Btn>
+          <Btn onClick={saveEvent} disabled={!canEdit || savingEvent}><Plus size={14} />{savingEvent ? "Saving…" : isEditing ? "Save Changes" : "Add Event"}</Btn>
         </div>
       </Modal>
 
