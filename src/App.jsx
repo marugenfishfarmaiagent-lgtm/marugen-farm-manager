@@ -4539,6 +4539,8 @@ function DeliveryModule({
   const [deletingDelivery, setDeletingDelivery] = useState(false);
   const [viewDeliveryId, setViewDeliveryId] = useState(null);
   const [photoUploading, setPhotoUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [updatingStatusId, setUpdatingStatusId] = useState(null);
   const deliveryAddressManual = useRef(false);
   const deliveryAlbumRef = useRef(null);
   const deliveryCameraRef = useRef(null);
@@ -4720,7 +4722,7 @@ function DeliveryModule({
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
-    if (photoUploading) return;
+    if (photoUploading || saving) return;
     let built;
     let existing = null;
     if (isEditing) {
@@ -4747,6 +4749,7 @@ function DeliveryModule({
     let d = applyDeliveryPhotoFields(built.delivery);
     const deliveriesSnapshot = deliveries;
     try {
+      setSaving(true);
       if (d.photoData?.startsWith?.("data:image")) {
         setPhotoUploading(true);
         if (isSupabaseConfigured) {
@@ -4802,6 +4805,7 @@ function DeliveryModule({
       addNotification({ type: "error", title: "Save Failed", message: err?.message || "Could not save delivery to cloud." });
     } finally {
       setPhotoUploading(false);
+      setSaving(false);
     }
   };
 
@@ -4885,6 +4889,7 @@ function DeliveryModule({
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
+    if (updatingStatusId) return;
     const current = deliveries.find((d) => sameDeliveryId(d.id, id));
     if (!current) return;
     const built = buildDeliveryStatusPatch(status, current);
@@ -4896,6 +4901,7 @@ function DeliveryModule({
     const nextDeliveries = snapshot.map((d) => (
       sameDeliveryId(d.id, id) ? touchUpdatedAt({ ...d, ...built.patch }) : d
     ));
+    setUpdatingStatusId(id);
     try {
       if (cloudMode && onPersistDeliveries) {
         await onPersistDeliveries(nextDeliveries);
@@ -4909,6 +4915,8 @@ function DeliveryModule({
         message: err?.message || "Could not save delivery status to cloud.",
       });
       return;
+    } finally {
+      setUpdatingStatusId(null);
     }
     if (status === "delivered") {
       addNotification({ type: "success", title: "Delivery Completed", message: `${id} delivered successfully!` });
@@ -4931,6 +4939,7 @@ function DeliveryModule({
   };
 
   const addWhatsappGroup = async () => {
+    if (saving) return;
     const name = groupForm.name.trim();
     const link = normalizeWhatsAppGroupLink(groupForm.link);
     if (!name) {
@@ -4943,6 +4952,7 @@ function DeliveryModule({
     }
     const snapshot = whatsappGroups;
     const nextGroups = [...snapshot, touchUpdatedAt({ id: genId("GRP"), name, link })];
+    setSaving(true);
     try {
       await writeCloudFirst({
         snapshot,
@@ -4950,16 +4960,17 @@ function DeliveryModule({
         setState: persistWhatsappGroups,
         flush: cloudMode && onPersistWhatsappGroups ? (n) => onPersistWhatsappGroups(n) : undefined,
       });
+      setGroupForm({ name: "", link: "" });
+      addNotification({ type: "success", title: "Group Saved", message: `${name} added to WhatsApp groups.` });
     } catch (err) {
       addNotification({
         type: "error",
         title: "Save Failed",
         message: err?.message || "Could not save WhatsApp group to cloud.",
       });
-      return;
+    } finally {
+      setSaving(false);
     }
-    setGroupForm({ name: "", link: "" });
-    addNotification({ type: "success", title: "Group Saved", message: `${name} added to WhatsApp groups.` });
   };
 
   const deleteWhatsappGroup = async (id) => {
@@ -5094,11 +5105,11 @@ function DeliveryModule({
                     {canEdit && ["scheduled", "transit"].includes(d.status) && (
                       <div className="flex gap-2 mt-2">
                         {d.status === "scheduled" && (
-                          <Btn variant="secondary" size="sm" className="flex-1 justify-center" onClick={() => updateStatus(d.id, "transit")}>
+                          <Btn variant="secondary" size="sm" className="flex-1 justify-center" disabled={!!updatingStatusId} onClick={() => updateStatus(d.id, "transit")}>
                             <Truck size={12} /> Out for delivery
                           </Btn>
                         )}
-                        <Btn variant="success" size="sm" className="flex-1 justify-center" onClick={() => updateStatus(d.id, "delivered")}>
+                        <Btn variant="success" size="sm" className="flex-1 justify-center" disabled={!!updatingStatusId} onClick={() => updateStatus(d.id, "delivered")}>
                           <CheckCircle size={12} /> Mark as Delivered
                         </Btn>
                       </div>
@@ -5219,7 +5230,7 @@ function DeliveryModule({
                   )}
                   {canEdit && (statusFlow[d.status] ?? []).map(next => (
                     <Btn key={next} variant={next === "delivered" ? "success" : next === "cancelled" ? "danger" : "secondary"} size="sm"
-                      onClick={() => updateStatus(d.id, next)}>
+                      disabled={!!updatingStatusId} onClick={() => updateStatus(d.id, next)}>
                       {next === "delivered" ? <Check size={12} /> : next === "transit" ? <Truck size={12} /> : <X size={12} />}
                       {next}
                     </Btn>
@@ -5366,8 +5377,8 @@ function DeliveryModule({
             }} className="mr-auto"><Trash2 size={14} />Delete</Btn>
           )}
           <Btn variant="secondary" onClick={closeDeliveryForm}>Cancel</Btn>
-          <Btn onClick={saveDelivery} disabled={!canEdit || photoUploading}>
-            <Truck size={14} />{photoUploading ? "Saving…" : (isEditing ? "Save Changes" : "Schedule")}
+          <Btn onClick={saveDelivery} disabled={!canEdit || photoUploading || saving}>
+            <Truck size={14} />{(photoUploading || saving) ? "Saving…" : (isEditing ? "Save Changes" : "Schedule")}
           </Btn>
         </div>
       </Modal>
@@ -5459,7 +5470,7 @@ function DeliveryModule({
             <Input label="Group name" value={groupForm.name} onChange={(e) => setGroupForm((f) => ({ ...f, name: e.target.value }))} placeholder="e.g. Delivery Team" />
             <Input label="Invite link" value={groupForm.link} onChange={(e) => setGroupForm((f) => ({ ...f, link: e.target.value }))} placeholder="https://chat.whatsapp.com/..." className="sm:col-span-2" />
           </div>
-          <Btn onClick={addWhatsappGroup} className="w-full sm:w-auto justify-center"><Plus size={14} />Add Group</Btn>
+          <Btn onClick={addWhatsappGroup} disabled={saving} className="w-full sm:w-auto justify-center"><Plus size={14} />{saving ? "Saving…" : "Add Group"}</Btn>
           {whatsappGroups.length === 0 ? (
             <Card className="p-6 text-center text-slate-500 text-sm">No groups saved yet</Card>
           ) : (
