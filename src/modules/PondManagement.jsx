@@ -79,6 +79,7 @@ export default function PondManagement({
   const [editingGuideId, setEditingGuideId] = useState(null)
   const [editingTreatmentId, setEditingTreatmentId] = useState(null)
   const [completingReminderId, setCompletingReminderId] = useState(null)
+  const [confirmDeletePondId, setConfirmDeletePondId] = useState(null)
   const [savingReminder, setSavingReminder] = useState(false)
   const completingReminderRef = useRef(null)
   const savingReminderRef = useRef(false)
@@ -317,7 +318,14 @@ export default function PondManagement({
     if (!canDelete) { denyDelete(); return }
     const pond = findPondById(ponds, pondId)
     if (!pond) return
-    if (!window.confirm(`Delete pond "${pond.name}" and all its maintenance, treatment logs, and reminders?`)) return
+    setConfirmDeletePondId(pondId)
+  }
+
+  const confirmDeletePond = () => {
+    const pondId = confirmDeletePondId
+    setConfirmDeletePondId(null)
+    const pond = findPondById(ponds, pondId)
+    if (!pond) return
     update({
       ponds: ponds.filter((p) => !samePondId(p.id, pondId)),
       maintenanceLogs: maintenanceLogs.filter((l) => !samePondId(l.pondId, pondId)),
@@ -517,7 +525,7 @@ export default function PondManagement({
     guide: canEdit ? { onClick: openAddGuide, label: 'Add Guide' } : null,
   }
   const fabAction = fabByTab[tab]
-  const pondModalOpen = showAddPond || !!editPond || !!maintModal || !!treatModal || !!remindModal || !!guideModal
+  const pondModalOpen = showAddPond || !!editPond || !!maintModal || !!treatModal || !!remindModal || !!guideModal || !!confirmDeletePondId
 
   return (
     <div className="space-y-4 pb-20 lg:pb-12">
@@ -718,13 +726,18 @@ export default function PondManagement({
               <div className="flex gap-2 shrink-0">
                 <Btn variant="success" size="sm" disabled={completingReminderId === String(r.id)} onClick={() => markReminderDone(r.id)}>Done</Btn>
                 {canDelete && (
-                  <Btn variant="ghost" size="sm" onClick={() => {
-                    if (!canDelete) { denyDelete(); return }
-                    setPondData((prev) => touchPondData({
+                  <Btn variant="ghost" size="sm" disabled={completingReminderId === String(r.id)} onClick={async () => {
+                    const id = String(r.id)
+                    const saved = await commitPondData((prev) => touchPondData({
                       ...prev,
-                      reminders: (prev.reminders || []).filter((x) => String(x.id) !== String(r.id)),
+                      reminders: (prev.reminders || []).filter((x) => String(x.id) !== id),
                     }))
-                    onSyncReminderCalendar?.('remove', { id: r.id })
+                    if (!saved) return
+                    try {
+                      await onSyncReminderCalendar?.('remove', { id })
+                    } catch {
+                      addNotification({ type: 'warning', title: 'Calendar sync skipped', message: 'Reminder deleted from pond data; calendar could not be updated.' })
+                    }
                   }}><Trash2 size={12} /></Btn>
                 )}
               </div>
@@ -823,7 +836,7 @@ export default function PondManagement({
         </label>
         <Textarea label="Notes" value={treatForm.notes} onChange={(e) => setTreatForm((f) => ({ ...f, notes: e.target.value }))} className="mt-3" />
         <div className="modal-actions mt-4 flex justify-end gap-2">
-          <Btn variant="secondary" onClick={closeTreatModal}>Cancel</Btn>
+          <Btn variant="secondary" onClick={closeTreatModal} disabled={savingPond}>Cancel</Btn>
           <Btn onClick={saveTreatment} disabled={!canEdit || savingPond}>{editingTreatmentId ? 'Save Changes' : 'Start'}</Btn>
         </div>
       </Modal>
@@ -858,6 +871,22 @@ export default function PondManagement({
           <Btn variant="secondary" onClick={() => { setGuideModal(null); setEditingGuideId(null); setGuideForm({ title: '', category: '', steps: '', warning: '' }) }}>Cancel</Btn>
           <Btn onClick={saveGuide}>{editingGuideId ? 'Save Changes' : 'Save'}</Btn>
         </div>
+      </Modal>
+
+      <Modal open={!!confirmDeletePondId} onClose={() => setConfirmDeletePondId(null)} title="Delete Pond" size="sm">
+        {confirmDeletePondId && (() => {
+          const pond = findPondById(ponds, confirmDeletePondId)
+          return pond ? (
+            <div className="space-y-4">
+              <p className="text-slate-300 text-sm">Delete <strong className="text-white">{pond.name}</strong> and all its maintenance logs, treatment logs, and reminders?</p>
+              <p className="text-red-400 text-xs">This cannot be undone.</p>
+              <div className="flex justify-end gap-2">
+                <Btn variant="secondary" onClick={() => setConfirmDeletePondId(null)}>Cancel</Btn>
+                <Btn variant="danger" onClick={confirmDeletePond}><Trash2 size={14} />Delete</Btn>
+              </div>
+            </div>
+          ) : null
+        })()}
       </Modal>
     </div>
   )
