@@ -79,6 +79,7 @@ export default function PondManagement({
   const [editingGuideId, setEditingGuideId] = useState(null)
   const [savingGuide, setSavingGuide] = useState(false)
   const [deletingGuideId, setDeletingGuideId] = useState(null)
+  const [confirmDeleteGuideId, setConfirmDeleteGuideId] = useState(null)
   const [editingTreatmentId, setEditingTreatmentId] = useState(null)
   const [completingReminderId, setCompletingReminderId] = useState(null)
   const [confirmDeletePondId, setConfirmDeletePondId] = useState(null)
@@ -477,9 +478,9 @@ export default function PondManagement({
     }
   }
 
-  const deleteGuide = async (guideId) => {
-    if (!canDelete) { denyDelete(); return }
-    if (deletingGuideId) return
+  const confirmDeleteGuide = async () => {
+    const guideId = confirmDeleteGuideId
+    if (!guideId) return
     setDeletingGuideId(guideId)
     try {
       const saved = await commitPondData((prev) => touchPondData({
@@ -488,6 +489,7 @@ export default function PondManagement({
           .filter((g) => g.id !== guideId),
       }))
       if (!saved) return
+      setConfirmDeleteGuideId(null)
       addNotification({ type: 'info', title: 'Guide Removed', message: 'Treatment guide deleted.' })
     } finally {
       setDeletingGuideId(null)
@@ -800,7 +802,7 @@ export default function PondManagement({
                     <MessageSquare size={12} />
                   </Btn>
                   {canEdit && <Btn variant="ghost" size="sm" onClick={() => openEditGuide(g)}><Edit2 size={12} /></Btn>}
-                  {canDelete && <Btn variant="danger" size="sm" disabled={!!deletingGuideId} onClick={() => deleteGuide(g.id)}><Trash2 size={12} /></Btn>}
+                  {canDelete && <Btn variant="danger" size="sm" disabled={!!deletingGuideId} onClick={() => { if (!canDelete) { denyDelete(); return } setConfirmDeleteGuideId(g.id) }}><Trash2 size={12} /></Btn>}
                 </div>
               </div>
             </Card>
@@ -908,6 +910,22 @@ export default function PondManagement({
           <Btn variant="secondary" disabled={savingGuide} onClick={() => { setGuideModal(null); setEditingGuideId(null); setGuideForm({ title: '', category: '', steps: '', warning: '' }) }}>Cancel</Btn>
           <Btn onClick={saveGuide} disabled={savingGuide}>{savingGuide ? 'Saving…' : editingGuideId ? 'Save Changes' : 'Save'}</Btn>
         </div>
+      </Modal>
+
+      <Modal open={!!confirmDeleteGuideId} onClose={() => setConfirmDeleteGuideId(null)} title="Delete Guide" size="sm">
+        {confirmDeleteGuideId && (() => {
+          const guide = displayGuides.find((g) => g.id === confirmDeleteGuideId)
+          return guide ? (
+            <div className="space-y-4">
+              <p className="text-slate-300 text-sm">Delete <strong className="text-white">{guide.title}</strong>?</p>
+              <p className="text-red-400 text-xs">This cannot be undone.</p>
+              <div className="flex justify-end gap-2">
+                <Btn variant="secondary" onClick={() => setConfirmDeleteGuideId(null)} disabled={!!deletingGuideId}>Cancel</Btn>
+                <Btn variant="danger" onClick={confirmDeleteGuide} disabled={!!deletingGuideId}><Trash2 size={14} />{deletingGuideId ? 'Deleting…' : 'Delete'}</Btn>
+              </div>
+            </div>
+          ) : null
+        })()}
       </Modal>
 
       <Modal open={!!confirmDeletePondId} onClose={() => setConfirmDeletePondId(null)} title="Delete Pond" size="sm">
