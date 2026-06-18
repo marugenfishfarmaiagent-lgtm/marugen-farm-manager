@@ -758,8 +758,8 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
           <Textarea label="Notes" value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} className="sm:col-span-2" />
         </div>
         <div className="modal-actions mt-4 flex justify-end gap-2">
-          <Btn variant="secondary" onClick={() => setShowAdd(false)}>Cancel</Btn>
-          <Btn onClick={saveRecord} disabled={customers.length === 0 || !canEdit}>Save</Btn>
+          <Btn variant="secondary" onClick={() => setShowAdd(false)} disabled={saving}>Cancel</Btn>
+          <Btn onClick={saveRecord} disabled={customers.length === 0 || !canEdit || saving}>{saving ? 'Saving…' : 'Save'}</Btn>
         </div>
       </Modal>
 
@@ -788,8 +788,8 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
             )}
             <Textarea label="Notes" value={editRec.notes} onChange={(e) => setEditRec((r) => ({ ...r, notes: e.target.value }))} className="mt-3" />
             <div className="modal-actions mt-4 flex justify-end gap-2">
-              <Btn variant="secondary" onClick={() => setEditRec(null)}>Cancel</Btn>
-              <Btn onClick={saveEdit}>Save</Btn>
+              <Btn variant="secondary" onClick={() => setEditRec(null)} disabled={saving}>Cancel</Btn>
+              <Btn onClick={saveEdit} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Btn>
             </div>
           </>
         )}
@@ -826,8 +826,8 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
             <PhotoPicker photo={deathForm.deathPhoto} onPick={(p) => setDeathForm((f) => ({ ...f, deathPhoto: p }))} onError={notifyImageError} label="Death photo" />
             <Textarea label="Death notes" value={deathForm.deathNotes} onChange={(e) => setDeathForm((f) => ({ ...f, deathNotes: e.target.value }))} />
             <div className="flex justify-end gap-2">
-              <Btn variant="secondary" onClick={() => setDeathRec(null)}>Cancel</Btn>
-              <Btn variant="danger" onClick={confirmDeath}><Skull size={14} />Record Death</Btn>
+              <Btn variant="secondary" onClick={() => setDeathRec(null)} disabled={saving}>Cancel</Btn>
+              <Btn variant="danger" onClick={confirmDeath} disabled={saving}><Skull size={14} />{saving ? 'Saving…' : 'Record Death'}</Btn>
             </div>
           </div>
         )}
