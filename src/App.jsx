@@ -3436,6 +3436,7 @@ function CustomerModule({
   const [editCustomer, setEditCustomer] = useState(null);
   const [deleteCustomer, setDeleteCustomer] = useState(null);
   const [deletingCustomer, setDeletingCustomer] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
   const [tierFilter, setTierFilter] = useState("All");
   const [form, setForm] = useState(emptyForm());
@@ -3511,9 +3512,11 @@ function CustomerModule({
       });
       return;
     }
+    if (saving) return;
     const snapshot = customers;
     const nextCustomers = [...snapshot, built.customer];
     try {
+      setSaving(true);
       await writeCloudFirst({
         snapshot,
         next: nextCustomers,
@@ -3527,6 +3530,8 @@ function CustomerModule({
         message: err?.message || "Could not save customer to cloud.",
       });
       return;
+    } finally {
+      setSaving(false);
     }
     addNotification({ type: "success", title: "Customer Added", message: `${built.customer.name} added to CRM` });
     setShowAdd(false);
@@ -3554,6 +3559,7 @@ function CustomerModule({
       });
       return;
     }
+    if (saving) return;
     const snapshot = customers;
     const updated = built.customer;
     const nextCustomers = snapshot.map((c) => (sameCustomerId(c.id, updated.id) ? updated : c));
@@ -3566,6 +3572,7 @@ function CustomerModule({
       customerKoiList,
     });
     try {
+      setSaving(true);
       await writeCloudFirst({
         snapshot,
         next: nextCustomers,
@@ -3579,6 +3586,8 @@ function CustomerModule({
         message: err?.message || "Could not save customer to cloud.",
       });
       return;
+    } finally {
+      setSaving(false);
     }
     if (related.invoices && setInvoices) setInvoices(related.invoices);
     if (related.deliveries && setDeliveries) setDeliveries(related.deliveries);
@@ -3719,8 +3728,8 @@ function CustomerModule({
         </div>
         <Textarea label="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="mt-4" rows={2} />
         <div className="modal-actions">
-          <Btn variant="secondary" onClick={() => setShowAdd(false)}>Cancel</Btn>
-          <Btn onClick={addCustomer} disabled={!canEdit}><Plus size={14} />Add Customer</Btn>
+          <Btn variant="secondary" onClick={() => setShowAdd(false)} disabled={saving}>Cancel</Btn>
+          <Btn onClick={addCustomer} disabled={!canEdit || saving}><Plus size={14} />{saving ? "Saving…" : "Add Customer"}</Btn>
         </div>
       </Modal>
 
@@ -3776,8 +3785,8 @@ function CustomerModule({
             </div>
             <Textarea label="Notes" value={editCustomer.notes || ""} onChange={(e) => setEditCustomer((c) => ({ ...c, notes: e.target.value }))} className="mt-4" rows={2} />
             <div className="modal-actions mt-4 flex justify-end gap-2">
-              <Btn variant="secondary" onClick={() => setEditCustomer(null)}>Cancel</Btn>
-              <Btn onClick={saveEdit}>Save</Btn>
+              <Btn variant="secondary" onClick={() => setEditCustomer(null)} disabled={saving}>Cancel</Btn>
+              <Btn onClick={saveEdit} disabled={saving}>{saving ? "Saving…" : "Save"}</Btn>
             </div>
           </>
         )}
