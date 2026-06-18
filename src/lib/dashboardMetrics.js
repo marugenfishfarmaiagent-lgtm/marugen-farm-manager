@@ -84,7 +84,11 @@ export function computeDashboardMetrics({
 
   const recentInvoices = [...invoices]
     .filter(isAppVisibleInvoice)
-    .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+    .sort((a, b) => {
+      const byDate = (b.date || '').localeCompare(a.date || '')
+      if (byDate !== 0) return byDate
+      return String(b.id || '').localeCompare(String(a.id || ''))
+    })
     .slice(0, 5)
 
   const recentCustomers = [...customers]

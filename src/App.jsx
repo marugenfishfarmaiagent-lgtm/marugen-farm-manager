@@ -665,7 +665,7 @@ function LoginScreen({ onLogin, users, cloudMode }) {
 
 function Dashboard({
   invoices, expenses, customers, products, events, deliveries, koiFishList, customerKoiList,
-  currentUser, onNavigate, onOpenInvoice, cloudStale,
+  currentUser, onNavigate, onOpenInvoice, onRetrySync, cloudStale,
 }) {
   const can = useCallback((perm) => hasPermission(currentUser, perm), [currentUser]);
   const go = useCallback((tab) => { if (hasPermission(currentUser, tab)) onNavigate?.(tab); }, [currentUser, onNavigate]);
@@ -731,11 +731,20 @@ function Dashboard({
         <p className="text-xs text-slate-500 shrink-0">{displayDate}</p>
       </div>
       {cloudStale && (
-        <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 flex items-start gap-2">
-          <AlertTriangle size={16} className="text-amber-400 shrink-0 mt-0.5" />
-          <p className="text-amber-100 text-xs leading-relaxed">
-            Cloud sync paused — figures reflect this device only until sync resumes.
-          </p>
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 flex items-start justify-between gap-3">
+          <div className="flex items-start gap-2 min-w-0">
+            <AlertTriangle size={16} className="text-amber-400 shrink-0 mt-0.5" />
+            <p className="text-amber-100 text-xs leading-relaxed">
+              Cloud sync paused — figures reflect this device only until sync resumes.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => onRetrySync?.()}
+            className="text-amber-300 text-xs font-semibold shrink-0 hover:text-amber-100 touch-manipulation"
+          >
+            Retry
+          </button>
         </div>
       )}
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
@@ -757,21 +766,19 @@ function Dashboard({
         ))}
       </div>
       {showPendingAccounts && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <button
-            type="button"
-            onClick={() => pendingAccountsTab && go(pendingAccountsTab)}
-            disabled={!pendingAccountsTab}
-            className={`text-left p-4 border rounded-xl transition-colors touch-manipulation bg-cyan-500/10 border-cyan-500/20 ${pendingAccountsTab ? "hover:brightness-110" : "opacity-70 cursor-default"}`}
-          >
-            <div className="w-9 h-9 rounded-lg flex items-center justify-center mb-3 bg-cyan-500/10">
-              <BookCheck size={18} className="text-cyan-400" />
-            </div>
-            <p className="text-xl font-black text-cyan-400">{pendingAccountsCount}</p>
-            <p className="text-slate-400 text-xs mt-1">Pending Accounts</p>
-            <p className="text-cyan-400/80 text-[10px] mt-1 truncate">{pendingAccountsSubtitle}</p>
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => pendingAccountsTab && go(pendingAccountsTab)}
+          disabled={!pendingAccountsTab}
+          className={`w-full sm:w-72 text-left p-4 border rounded-xl transition-colors touch-manipulation bg-cyan-500/10 border-cyan-500/20 ${pendingAccountsTab ? "hover:brightness-110" : "opacity-70 cursor-default"}`}
+        >
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center mb-3 bg-cyan-500/10">
+            <BookCheck size={18} className="text-cyan-400" />
+          </div>
+          <p className="text-xl font-black text-cyan-400">{pendingAccountsCount}</p>
+          <p className="text-slate-400 text-xs mt-1">Pending Accounts</p>
+          <p className="text-cyan-400/80 text-[10px] mt-1 truncate">{pendingAccountsSubtitle}</p>
+        </button>
       )}
       {showKoiSummary && (
         <Card className="p-4 border-cyan-500/20 bg-cyan-500/5">
@@ -782,7 +789,7 @@ function Dashboard({
               {can("customerkoi") && sectionLink("customerkoi", "Customer koi →")}
             </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className={`grid gap-3 ${(can("koifish") && can("customerkoi")) ? "grid-cols-1 sm:grid-cols-3" : "grid-cols-1 sm:grid-cols-2"}`}>
             {can("koifish") && (
               <button type="button" onClick={() => go("koifish")} className="bg-slate-900/50 rounded-xl p-4 text-center hover:bg-slate-800/80 transition-colors touch-manipulation">
                 <p className="text-2xl font-black text-emerald-400">{koiAvailable}</p>
@@ -798,7 +805,7 @@ function Dashboard({
               </button>
             )}
             {can("customerkoi") && (
-              <button type="button" onClick={() => go("customerkoi")} className="bg-slate-900/50 rounded-xl p-4 text-center hover:bg-slate-800/80 transition-colors touch-manipulation sm:col-span-1">
+              <button type="button" onClick={() => go("customerkoi")} className="bg-slate-900/50 rounded-xl p-4 text-center hover:bg-slate-800/80 transition-colors touch-manipulation">
                 <p className="text-2xl font-black text-cyan-400">{koiInPond}</p>
                 <p className="text-slate-400 text-xs mt-1">In Pond</p>
                 <p className="text-slate-500 text-[10px] mt-0.5">Customer koi</p>
@@ -902,7 +909,7 @@ function Dashboard({
                   <button key={c.id} type="button" onClick={() => go("customers")} className="w-full text-left bg-slate-800 rounded-lg p-3 border border-slate-700 touch-manipulation">
                     <div className="flex justify-between gap-2">
                       <span className="font-medium text-white truncate">{c.name}</span>
-                      <span className="text-emerald-400 font-bold shrink-0">{formatSGD(c.dashboardSpent ?? c.totalSpent)}</span>
+                      <span className="text-emerald-400 font-bold shrink-0">{formatSGD(c.dashboardSpent)}</span>
                     </div>
                     <p className="text-slate-500 text-xs mt-1">{c.area || "—"} · {c.tier || "Bronze"}</p>
                   </button>
@@ -920,7 +927,7 @@ function Dashboard({
                         <td className="py-2 text-slate-400">{c.area || "—"}</td>
                         <td className="py-2"><div className="flex flex-wrap gap-1">{(c.fishTypes || []).slice(0, 2).map((f) => <Badge key={f} className="bg-slate-700 text-slate-300">{f}</Badge>)}</div></td>
                         <td className="py-2"><span className={`font-bold ${tierColor[c.tier] || "text-slate-300"}`}>{c.tier || "—"}</span></td>
-                        <td className="py-2 text-right font-bold text-emerald-400">{formatSGD(c.dashboardSpent ?? c.totalSpent)}</td>
+                        <td className="py-2 text-right font-bold text-emerald-400">{formatSGD(c.dashboardSpent)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -9705,7 +9712,7 @@ export default function App() {
   };
 
   const renderModule = () => {
-    const props = { customers, invoices, expenses, products, deliveries, events, koiFishList, customerKoiList, currentUser, addNotification, onNavigate: goToTab };
+    const props = { customers, invoices, expenses, products, deliveries, events, koiFishList, customerKoiList, currentUser, addNotification, onNavigate: goToTab, onRetrySync: refreshFromCloud };
     const dashboardCloudStale = isSupabaseConfigured && Boolean(cloudError);
     switch (effectiveTab) {
       case "dashboard": return guard("dashboard", "Dashboard", (
