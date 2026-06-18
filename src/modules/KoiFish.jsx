@@ -174,7 +174,7 @@ export default function KoiFish({
   }), [koiList])
 
   const soldFish = koiList.filter((k) => k.status === KOI_STATUS.SOLD)
-  const stockCount = koiList.filter((k) => k.status !== KOI_STATUS.SOLD).length
+  const stockCount = koiList.filter((k) => k.status !== KOI_STATUS.SOLD && k.status !== KOI_STATUS.DECEASED).length
 
   const openRefund = (koi) => {
     if (!canRefund) {
@@ -334,6 +334,7 @@ export default function KoiFish({
   }
 
   const setKoiStatus = async (koi, status) => {
+    if (saving) return
     if (!canEdit) {
       addNotification?.({ type: 'error', title: 'Permission Denied', message: 'You need the "Edit records" permission. Contact the farm owner.' })
       return
@@ -341,6 +342,7 @@ export default function KoiFish({
     const nextList = koiList.map((k) => (sameKoiId(k.id, koi.id) ? touchUpdatedAt({ ...k, status }) : k))
     const snapshotKoi = koiList
     try {
+      setSaving(true)
       await writeListCloudFirst({
         snapshot: snapshotKoi,
         next: nextList,
@@ -360,6 +362,8 @@ export default function KoiFish({
         /* best-effort local rollback */
       }
       addNotification?.({ type: 'error', title: 'Sync Failed', message: err?.message || 'Could not save koi status to cloud.' })
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -369,7 +373,7 @@ export default function KoiFish({
   }
 
   const confirmShip = async () => {
-    if (!shipKoi) return
+    if (!shipKoi || saving) return
     if (!canEdit) {
       addNotification?.({ type: 'error', title: 'Permission Denied', message: 'You need the "Edit records" permission. Contact the farm owner.' })
       return
@@ -387,6 +391,7 @@ export default function KoiFish({
     const nextList = koiList.map((k) => (sameKoiId(k.id, shipKoi.id) ? touchUpdatedAt({ ...k, pondName: to }) : k))
     const snapshotKoi = koiList
     try {
+      setSaving(true)
       await writeListCloudFirst({
         snapshot: snapshotKoi,
         next: nextList,
@@ -404,6 +409,8 @@ export default function KoiFish({
         /* best-effort local rollback */
       }
       addNotification?.({ type: 'error', title: 'Sync Failed', message: err?.message || 'Could not save pond transfer to cloud.' })
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -742,8 +749,8 @@ export default function KoiFish({
           <Textarea label="Notes" value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} className="sm:col-span-2" />
         </div>
         <div className="modal-actions mt-4 flex justify-end gap-2">
-          <Btn variant="secondary" onClick={() => setShowAdd(false)}>Cancel</Btn>
-          <Btn onClick={addKoi}><Plus size={14} />Add Koi</Btn>
+          <Btn variant="secondary" onClick={() => setShowAdd(false)} disabled={saving}>Cancel</Btn>
+          <Btn onClick={addKoi} disabled={saving}><Plus size={14} />{saving ? 'Saving…' : 'Add Koi'}</Btn>
         </div>
       </Modal>
 
@@ -763,8 +770,8 @@ export default function KoiFish({
               <Textarea label="Notes" value={editKoi.notes} onChange={(e) => setEditKoi((k) => ({ ...k, notes: e.target.value }))} className="sm:col-span-2" />
             </div>
             <div className="modal-actions mt-4 flex justify-end gap-2">
-              <Btn variant="secondary" onClick={() => setEditKoi(null)}>Cancel</Btn>
-              <Btn onClick={saveEdit}>Save</Btn>
+              <Btn variant="secondary" onClick={() => setEditKoi(null)} disabled={saving}>Cancel</Btn>
+              <Btn onClick={saveEdit} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Btn>
             </div>
           </>
         )}
@@ -777,7 +784,7 @@ export default function KoiFish({
         size="sm"
         footer={shipKoi && (
           <ConfirmModalFooter onCancel={() => { setShipKoi(null); setShipToPond('') }}>
-            <Btn onClick={confirmShip} className="w-full sm:w-auto justify-center"><Truck size={14} />Move Fish</Btn>
+            <Btn onClick={confirmShip} disabled={saving} className="w-full sm:w-auto justify-center"><Truck size={14} />{saving ? 'Moving…' : 'Move Fish'}</Btn>
           </ConfirmModalFooter>
         )}
       >
@@ -888,8 +895,8 @@ export default function KoiFish({
             <PhotoPicker photo={deathForm.deathPhoto} onPick={(p) => setDeathForm((f) => ({ ...f, deathPhoto: p }))} onError={notifyImageError} label="Death photo (optional)" />
             <Textarea label="Notes" value={deathForm.notes} onChange={(e) => setDeathForm((f) => ({ ...f, notes: e.target.value }))} />
             <div className="flex justify-end gap-2">
-              <Btn variant="secondary" onClick={() => setDeathKoi(null)}>Cancel</Btn>
-              <Btn variant="danger" onClick={confirmDeath}><Skull size={14} />Record Death</Btn>
+              <Btn variant="secondary" onClick={() => setDeathKoi(null)} disabled={saving}>Cancel</Btn>
+              <Btn variant="danger" onClick={confirmDeath} disabled={saving}><Skull size={14} />{saving ? 'Saving…' : 'Record Death'}</Btn>
             </div>
           </div>
         )}
