@@ -82,6 +82,7 @@ export default function PondManagement({
   const [editingTreatmentId, setEditingTreatmentId] = useState(null)
   const [completingReminderId, setCompletingReminderId] = useState(null)
   const [confirmDeletePondId, setConfirmDeletePondId] = useState(null)
+  const [deletingPond, setDeletingPond] = useState(false)
   const [savingReminder, setSavingReminder] = useState(false)
   const completingReminderRef = useRef(null)
   const savingReminderRef = useRef(false)
@@ -174,7 +175,7 @@ export default function PondManagement({
     reminders: reminders.map((r) => (samePondId(r.pondId, pondId) ? { ...r, pondName } : r)),
   })
 
-  const addPond = () => {
+  const addPond = async () => {
     if (!canEdit) { denyEdit(); return }
     const check = validatePondFields(pondForm)
     if (!check.ok) {
@@ -185,7 +186,11 @@ export default function PondManagement({
       addNotification({ type: 'warning', title: 'Duplicate Pond', message: `${check.name} is already in the pond list.` })
       return
     }
-    update({ ponds: [...ponds, { ...pondForm, name: check.name, id: genId('POND'), volume: check.volume, lastpH: null, lastAmmonia: null, lastNitrite: null, lastSalt: null, lastChecked: null }] })
+    const formSnapshot = { ...pondForm, name: check.name, volume: check.volume }
+    const saved = await commitPondData((prev) =>
+      touchPondData({ ...prev, ponds: [...prev.ponds, { ...formSnapshot, id: genId('POND'), lastpH: null, lastAmmonia: null, lastNitrite: null, lastSalt: null, lastChecked: null }] }),
+    )
+    if (!saved) return
     addNotification({ type: 'success', title: 'Pond Added', message: `${check.name} added to pond list.` })
     setShowAddPond(false)
     setPondForm({ name: '', type: 'koi', volume: '', notes: '' })
@@ -323,19 +328,28 @@ export default function PondManagement({
     setConfirmDeletePondId(pondId)
   }
 
-  const confirmDeletePond = () => {
+  const confirmDeletePond = async () => {
     const pondId = confirmDeletePondId
-    setConfirmDeletePondId(null)
     const pond = findPondById(ponds, pondId)
-    if (!pond) return
-    update({
-      ponds: ponds.filter((p) => !samePondId(p.id, pondId)),
-      maintenanceLogs: maintenanceLogs.filter((l) => !samePondId(l.pondId, pondId)),
-      treatmentLogs: treatmentLogs.filter((t) => !samePondId(t.pondId, pondId)),
-      reminders: reminders.filter((r) => !samePondId(r.pondId, pondId)),
-    })
-    addNotification({ type: 'info', title: 'Pond Deleted', message: `${pond.name} removed.` })
-    if (editPond && samePondId(editPond.id, pondId)) setEditPond(null)
+    if (!pond) { setConfirmDeletePondId(null); return }
+    setDeletingPond(true)
+    try {
+      const saved = await commitPondData((prev) =>
+        touchPondData({
+          ...prev,
+          ponds: prev.ponds.filter((p) => !samePondId(p.id, pondId)),
+          maintenanceLogs: prev.maintenanceLogs.filter((l) => !samePondId(l.pondId, pondId)),
+          treatmentLogs: prev.treatmentLogs.filter((t) => !samePondId(t.pondId, pondId)),
+          reminders: prev.reminders.filter((r) => !samePondId(r.pondId, pondId)),
+        }),
+      )
+      if (!saved) return
+      setConfirmDeletePondId(null)
+      addNotification({ type: 'info', title: 'Pond Deleted', message: `${pond.name} removed.` })
+      if (editPond && samePondId(editPond.id, pondId)) setEditPond(null)
+    } finally {
+      setDeletingPond(false)
+    }
   }
 
   const saveReminder = async () => {
@@ -512,7 +526,7 @@ export default function PondManagement({
     setRemindModal('new')
   }
 
-  const saveEditPond = () => {
+  const saveEditPond = async () => {
     if (!editPond) return
     if (!canEdit) { denyEdit(); return }
     const check = validatePondFields(editPond)
@@ -524,18 +538,16 @@ export default function PondManagement({
       addNotification({ type: 'warning', title: 'Duplicate Pond', message: `${check.name} is already in the pond list.` })
       return
     }
-    const prev = findPondById(ponds, editPond.id)
-    const updated = {
-      ...editPond,
-      name: check.name,
-      volume: check.volume,
-      notes: editPond.notes?.trim() || '',
-    }
-    const patch = {
-      ponds: ponds.map((p) => (samePondId(p.id, editPond.id) ? updated : p)),
-      ...(prev && prev.name !== check.name ? syncPondNameInLogs(editPond.id, check.name) : {}),
-    }
-    update(patch)
+    const editSnapshot = { ...editPond, name: check.name, volume: check.volume, notes: editPond.notes?.trim() || '' }
+    const saved = await commitPondData((prev) => {
+      const prevPond = findPondById(prev.ponds, editSnapshot.id)
+      const patch = {
+        ponds: prev.ponds.map((p) => (samePondId(p.id, editSnapshot.id) ? editSnapshot : p)),
+        ...(prevPond && prevPond.name !== editSnapshot.name ? syncPondNameInLogs(editSnapshot.id, editSnapshot.name) : {}),
+      }
+      return touchPondData({ ...prev, ...patch })
+    })
+    if (!saved) return
     addNotification({ type: 'success', title: 'Pond Updated', message: `${check.name} saved` })
     setEditPond(null)
   }
@@ -803,7 +815,7 @@ export default function PondManagement({
           <Input label="Volume (ton)" type="number" value={pondForm.volume} onChange={(e) => setPondForm((f) => ({ ...f, volume: e.target.value }))} min="0" step="0.1" />
           <Textarea label="Notes" value={pondForm.notes} onChange={(e) => setPondForm((f) => ({ ...f, notes: e.target.value }))} className="col-span-2" />
         </div>
-        <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setShowAddPond(false)}>Cancel</Btn><Btn onClick={addPond} disabled={!canEdit}>Save</Btn></div>
+        <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setShowAddPond(false)} disabled={savingPond}>Cancel</Btn><Btn onClick={addPond} disabled={!canEdit || savingPond}>{savingPond ? 'Saving…' : 'Save'}</Btn></div>
       </Modal>
 
       <Modal open={!!editPond} onClose={() => setEditPond(null)} title="Edit Pond">
@@ -818,8 +830,8 @@ export default function PondManagement({
                 <Btn variant="danger" onClick={() => deletePond(editPond.id)}><Trash2 size={14} />Delete Pond</Btn>
               )}
               <div className="flex gap-2 ml-auto">
-                <Btn variant="secondary" onClick={() => setEditPond(null)}>Cancel</Btn>
-                <Btn onClick={saveEditPond}>Save</Btn>
+                <Btn variant="secondary" onClick={() => setEditPond(null)} disabled={savingPond}>Cancel</Btn>
+                <Btn onClick={saveEditPond} disabled={savingPond}>{savingPond ? 'Saving…' : 'Save'}</Btn>
               </div>
             </div>
           </>
@@ -906,8 +918,8 @@ export default function PondManagement({
               <p className="text-slate-300 text-sm">Delete <strong className="text-white">{pond.name}</strong> and all its maintenance logs, treatment logs, and reminders?</p>
               <p className="text-red-400 text-xs">This cannot be undone.</p>
               <div className="flex justify-end gap-2">
-                <Btn variant="secondary" onClick={() => setConfirmDeletePondId(null)}>Cancel</Btn>
-                <Btn variant="danger" onClick={confirmDeletePond}><Trash2 size={14} />Delete</Btn>
+                <Btn variant="secondary" onClick={() => setConfirmDeletePondId(null)} disabled={deletingPond}>Cancel</Btn>
+                <Btn variant="danger" onClick={confirmDeletePond} disabled={deletingPond}><Trash2 size={14} />{deletingPond ? 'Deleting…' : 'Delete'}</Btn>
               </div>
             </div>
           ) : null
