@@ -6159,6 +6159,8 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
   const [showAdd, setShowAdd] = useState(false);
   const [editUser, setEditUser] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [deletingUser, setDeletingUser] = useState(false);
+  const [togglingUserId, setTogglingUserId] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [form, setForm] = useState({ name: "", role: "staff", pin: "", permissions: defaultPermissionsForRole("staff"), active: true });
 
@@ -6330,12 +6332,13 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
   };
 
   const confirmDeleteUser = async () => {
-    if (!deleteConfirm) return;
+    if (!deleteConfirm || deletingUser) return;
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
       return;
     }
     const user = deleteConfirm;
+    setDeletingUser(true);
     try {
       if (apiEnabled) {
         await db.deleteUser(user.id);
@@ -6349,6 +6352,8 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
       setDeleteConfirm(null);
     } catch (err) {
       addNotification({ type: "error", title: "Delete Failed", message: err?.message || "Could not remove user from server." });
+    } finally {
+      setDeletingUser(false);
     }
   };
 
@@ -6357,6 +6362,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
+    if (togglingUserId) return;
     const nextActive = user.active === false;
     if (!nextActive) {
       const blockReason = getUserDeactivateBlockReason(user, { users, currentUserId: currentUser.id });
@@ -6365,6 +6371,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
         return;
       }
     }
+    setTogglingUserId(user.id);
     try {
       if (apiEnabled) {
         await db.updateUser({
@@ -6382,6 +6389,8 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
       addNotification({ type: "info", title: nextActive ? "User Activated" : "User Deactivated", message: user.name });
     } catch (err) {
       addNotification({ type: "error", title: "Update Failed", message: err?.message || "Could not update user on server." });
+    } finally {
+      setTogglingUserId(null);
     }
   };
 
@@ -6446,8 +6455,8 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
               <div className="flex gap-2">
                 {canEdit && <Btn variant="ghost" size="sm" onClick={() => openEdit(user)}><Edit2 size={12} />Edit</Btn>}
                 {canEdit && (
-                  <Btn variant={user.active === false ? "success" : "secondary"} size="sm" onClick={() => toggleActive(user)}>
-                    {user.active === false ? "Activate" : "Deactivate"}
+                  <Btn variant={user.active === false ? "success" : "secondary"} size="sm" disabled={!!togglingUserId} onClick={() => toggleActive(user)}>
+                    {togglingUserId === user.id ? "Saving…" : user.active === false ? "Activate" : "Deactivate"}
                   </Btn>
                 )}
                 {!user.isSystem && canDelete && <Btn variant="danger" size="sm" onClick={() => requestDeleteUser(user)}><Trash2 size={12} /></Btn>}
@@ -6521,8 +6530,10 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
         title="Remove User"
         size="sm"
         footer={deleteConfirm && (
-          <ConfirmModalFooter onCancel={() => setDeleteConfirm(null)}>
-            <Btn variant="danger" onClick={confirmDeleteUser} className="w-full sm:w-auto justify-center"><Trash2 size={14} />Remove</Btn>
+          <ConfirmModalFooter onCancel={() => { if (!deletingUser) setDeleteConfirm(null); }} cancelDisabled={deletingUser}>
+            <Btn variant="danger" onClick={confirmDeleteUser} disabled={deletingUser} className="w-full sm:w-auto justify-center">
+              {deletingUser ? <><Loader2 size={14} className="animate-spin" />Removing...</> : <><Trash2 size={14} />Remove</>}
+            </Btn>
           </ConfirmModalFooter>
         )}
       >
