@@ -77,6 +77,8 @@ export default function PondManagement({
   const [remindForm, setRemindForm] = useState({ pondId: '', type: 'water_test', dueDate: today(), dueTime: '09:00', note: '', repeat: 'none', assignedUserIds: [] })
   const [guideForm, setGuideForm] = useState({ title: '', category: '', steps: '', warning: '' })
   const [editingGuideId, setEditingGuideId] = useState(null)
+  const [savingGuide, setSavingGuide] = useState(false)
+  const [deletingGuideId, setDeletingGuideId] = useState(null)
   const [editingTreatmentId, setEditingTreatmentId] = useState(null)
   const [completingReminderId, setCompletingReminderId] = useState(null)
   const [confirmDeletePondId, setConfirmDeletePondId] = useState(null)
@@ -421,8 +423,9 @@ export default function PondManagement({
     setGuideModal(true)
   }
 
-  const saveGuide = () => {
+  const saveGuide = async () => {
     if (!canEdit) { denyEdit(); return }
+    if (savingGuide) return
     if (!guideForm.title?.trim()) {
       addNotification({ type: 'error', title: 'Title Required', message: 'Enter a guide title.' })
       return
@@ -433,26 +436,48 @@ export default function PondManagement({
       steps: guideForm.steps?.trim() || '',
       warning: guideForm.warning?.trim() || '',
     }
-    const guides = ensureGuidesMutable()
-    if (editingGuideId) {
-      update({
-        treatmentGuides: guides.map((g) => (g.id === editingGuideId ? { ...g, ...payload } : g)),
-      })
-      addNotification({ type: 'success', title: 'Guide Updated', message: payload.title })
-    } else {
-      update({ treatmentGuides: [...guides, { ...payload, id: genId('GUIDE') }] })
-      addNotification({ type: 'success', title: 'Guide Added', message: payload.title })
+    const currentEditId = editingGuideId
+    setSavingGuide(true)
+    try {
+      if (currentEditId) {
+        const saved = await commitPondData((prev) => touchPondData({
+          ...prev,
+          treatmentGuides: (prev.treatmentGuides.length ? prev.treatmentGuides : [...DEFAULT_TREATMENT_GUIDES])
+            .map((g) => (g.id === currentEditId ? { ...g, ...payload } : g)),
+        }))
+        if (!saved) return
+        addNotification({ type: 'success', title: 'Guide Updated', message: payload.title })
+      } else {
+        const saved = await commitPondData((prev) => touchPondData({
+          ...prev,
+          treatmentGuides: [...(prev.treatmentGuides.length ? prev.treatmentGuides : [...DEFAULT_TREATMENT_GUIDES]), { ...payload, id: genId('GUIDE') }],
+        }))
+        if (!saved) return
+        addNotification({ type: 'success', title: 'Guide Added', message: payload.title })
+      }
+      setGuideModal(null)
+      setEditingGuideId(null)
+      setGuideForm({ title: '', category: '', steps: '', warning: '' })
+    } finally {
+      setSavingGuide(false)
     }
-    setGuideModal(null)
-    setEditingGuideId(null)
-    setGuideForm({ title: '', category: '', steps: '', warning: '' })
   }
 
-  const deleteGuide = (guideId) => {
+  const deleteGuide = async (guideId) => {
     if (!canDelete) { denyDelete(); return }
-    const guides = ensureGuidesMutable().filter((g) => g.id !== guideId)
-    update({ treatmentGuides: guides })
-    addNotification({ type: 'info', title: 'Guide Removed', message: 'Treatment guide deleted.' })
+    if (deletingGuideId) return
+    setDeletingGuideId(guideId)
+    try {
+      const saved = await commitPondData((prev) => touchPondData({
+        ...prev,
+        treatmentGuides: (prev.treatmentGuides.length ? prev.treatmentGuides : [...DEFAULT_TREATMENT_GUIDES])
+          .filter((g) => g.id !== guideId),
+      }))
+      if (!saved) return
+      addNotification({ type: 'info', title: 'Guide Removed', message: 'Treatment guide deleted.' })
+    } finally {
+      setDeletingGuideId(null)
+    }
   }
 
   const shareGuideOnWhatsApp = (guide) => {
@@ -763,7 +788,7 @@ export default function PondManagement({
                     <MessageSquare size={12} />
                   </Btn>
                   {canEdit && <Btn variant="ghost" size="sm" onClick={() => openEditGuide(g)}><Edit2 size={12} /></Btn>}
-                  {canDelete && <Btn variant="danger" size="sm" onClick={() => deleteGuide(g.id)}><Trash2 size={12} /></Btn>}
+                  {canDelete && <Btn variant="danger" size="sm" disabled={!!deletingGuideId} onClick={() => deleteGuide(g.id)}><Trash2 size={12} /></Btn>}
                 </div>
               </div>
             </Card>
@@ -868,8 +893,8 @@ export default function PondManagement({
         <Textarea label="Steps" value={guideForm.steps} onChange={(e) => setGuideForm((f) => ({ ...f, steps: e.target.value }))} className="mt-3" />
         <Input label="Warning" value={guideForm.warning} onChange={(e) => setGuideForm((f) => ({ ...f, warning: e.target.value }))} className="mt-3" />
         <div className="modal-actions mt-4 flex justify-end gap-2">
-          <Btn variant="secondary" onClick={() => { setGuideModal(null); setEditingGuideId(null); setGuideForm({ title: '', category: '', steps: '', warning: '' }) }}>Cancel</Btn>
-          <Btn onClick={saveGuide}>{editingGuideId ? 'Save Changes' : 'Save'}</Btn>
+          <Btn variant="secondary" disabled={savingGuide} onClick={() => { setGuideModal(null); setEditingGuideId(null); setGuideForm({ title: '', category: '', steps: '', warning: '' }) }}>Cancel</Btn>
+          <Btn onClick={saveGuide} disabled={savingGuide}>{savingGuide ? 'Saving…' : editingGuideId ? 'Save Changes' : 'Save'}</Btn>
         </div>
       </Modal>
 
