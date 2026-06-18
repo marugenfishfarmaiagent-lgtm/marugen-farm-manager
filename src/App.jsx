@@ -1087,17 +1087,15 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
-    savingProductRef.current = true;
-    setSavingProduct(true);
     const current = products.find((p) => sameProductId(p.id, editProduct.id));
     const catalogOnly = editProduct.trackStock === false;
     const check = validateProductFields(editProduct, { catalogOnly });
     if (!check.ok) {
       addNotification({ type: "error", title: "Invalid Product", message: check.message });
-      savingProductRef.current = false;
-      setSavingProduct(false);
       return;
     }
+    savingProductRef.current = true;
+    setSavingProduct(true);
     const normalized = normalizeProductRecord(editProduct, { catalogOnly });
     const base = current
       ? { ...current, ...normalized, id: current.id }
@@ -1551,7 +1549,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
                   )}
                   {!isCatalog && (
                     <div className="flex gap-2 flex-wrap">
-                      <Btn variant="secondary" size="sm" onClick={() => setShowUse(p)} disabled={!canEdit}><Archive size={12} />Use</Btn>
+                      <Btn variant="secondary" size="sm" onClick={() => { setShowUse(p); setUseQty(1); setUseNote(""); }} disabled={!canEdit}><Archive size={12} />Use</Btn>
                       <Btn variant="ghost" size="sm" onClick={() => { setShowRestock(p); setRestockQty(1); setRestockNote(""); }} disabled={!canEdit}><Plus size={12} />Restock</Btn>
                     </div>
                   )}
