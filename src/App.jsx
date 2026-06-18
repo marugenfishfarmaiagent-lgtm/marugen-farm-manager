@@ -959,6 +959,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   const savingProductRef = useRef(false);
   const [deleteProduct, setDeleteProduct] = useState(null);
   const [deletingProduct, setDeletingProduct] = useState(false);
+  const deletingProductRef = useRef(false);
   const [showUse, setShowUse] = useState(null);
   const [showRestock, setShowRestock] = useState(null);
   const [showAdjust, setShowAdjust] = useState(null);
@@ -1144,7 +1145,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   };
 
   const confirmDeleteProduct = async () => {
-    if (!deleteProduct || deletingProduct) return;
+    if (!deleteProduct || deletingProductRef.current) return;
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
       return;
@@ -1162,6 +1163,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     const id = deleteProduct.id;
     const name = deleteProduct.name;
     const nextProducts = snapshot.filter((p) => !sameProductId(p.id, id));
+    deletingProductRef.current = true;
     setDeletingProduct(true);
     try {
       await writeCloudFirst({
@@ -1179,6 +1181,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
         message: err?.message || "Could not remove product. Try again.",
       });
     } finally {
+      deletingProductRef.current = false;
       setDeletingProduct(false);
     }
   };
@@ -1730,7 +1733,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
         footer={deleteProduct && (
           <ConfirmModalFooter onCancel={() => { if (!deletingProduct) setDeleteProduct(null); }} cancelDisabled={deletingProduct}>
             <Btn variant="danger" onClick={confirmDeleteProduct} disabled={deletingProduct} className="w-full sm:w-auto justify-center">
-              {deletingProduct ? <><Loader2 size={14} className="animate-spin" />Deleting...</> : <><Trash2 size={14} />Delete</>}
+              <><Trash2 size={14} />{deletingProduct ? 'Deleting…' : 'Delete'}</>
             </Btn>
           </ConfirmModalFooter>
         )}
@@ -3436,6 +3439,7 @@ function CustomerModule({
   const [editCustomer, setEditCustomer] = useState(null);
   const [deleteCustomer, setDeleteCustomer] = useState(null);
   const [deletingCustomer, setDeletingCustomer] = useState(false);
+  const deletingCustomerRef = useRef(false);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
   const [tierFilter, setTierFilter] = useState("All");
@@ -3599,7 +3603,7 @@ function CustomerModule({
   };
 
   const confirmDeleteCustomer = async () => {
-    if (!deleteCustomer || deletingCustomer) return;
+    if (!deleteCustomer || deletingCustomerRef.current) return;
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
       return;
@@ -3607,6 +3611,7 @@ function CustomerModule({
     const snapshot = customers;
     const id = deleteCustomer.id;
     const name = deleteCustomer.name;
+    deletingCustomerRef.current = true;
     setDeletingCustomer(true);
     const nextCustomers = snapshot.filter((c) => String(c.id) !== String(id));
     try {
@@ -3627,6 +3632,7 @@ function CustomerModule({
         message: err?.message || "Could not remove customer. Try again.",
       });
     } finally {
+      deletingCustomerRef.current = false;
       setDeletingCustomer(false);
     }
   };
@@ -3800,7 +3806,7 @@ function CustomerModule({
         footer={deleteCustomer && (
           <ConfirmModalFooter onCancel={() => { if (!deletingCustomer) setDeleteCustomer(null); }} cancelDisabled={deletingCustomer}>
             <Btn variant="danger" onClick={confirmDeleteCustomer} disabled={deletingCustomer} className="w-full sm:w-auto justify-center">
-              {deletingCustomer ? <><Loader2 size={14} className="animate-spin" />Deleting...</> : <><Trash2 size={14} />Delete</>}
+              <><Trash2 size={14} />{deletingCustomer ? 'Deleting…' : 'Delete'}</>
             </Btn>
           </ConfirmModalFooter>
         )}
@@ -3836,6 +3842,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
   const [bookedConfirm, setBookedConfirm] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [deletingExpense, setDeletingExpense] = useState(false);
+  const deletingExpenseRef = useRef(false);
   const [uploadPreview, setUploadPreview] = useState(null);
   const [uploadName, setUploadName] = useState("");
   const [uploadNote, setUploadNote] = useState("");
@@ -4019,12 +4026,13 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
   };
 
   const confirmDeleteExpense = async () => {
-    if (!deleteConfirm || deletingExpense) return;
+    if (!deleteConfirm || deletingExpenseRef.current) return;
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
       return;
     }
     const expense = deleteConfirm;
+    deletingExpenseRef.current = true;
     setDeletingExpense(true);
     markDeleted("expenses", expense.id);
     try {
@@ -4047,6 +4055,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
       addNotification({ type: "info", title: "Receipt Deleted", message: "Expense receipt removed." });
       setDeleteConfirm(null);
     } finally {
+      deletingExpenseRef.current = false;
       setDeletingExpense(false);
     }
   };
@@ -4469,7 +4478,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
         footer={deleteConfirm && (
           <ConfirmModalFooter onCancel={() => { if (!deletingExpense) setDeleteConfirm(null); }} cancelDisabled={deletingExpense}>
             <Btn variant="danger" onClick={confirmDeleteExpense} disabled={deletingExpense} className="w-full sm:w-auto justify-center">
-              {deletingExpense ? <><Loader2 size={14} className="animate-spin" />Deleting...</> : <><Trash2 size={14} />Delete</>}
+              <><Trash2 size={14} />{deletingExpense ? 'Deleting…' : 'Delete'}</>
             </Btn>
           </ConfirmModalFooter>
         )}
@@ -4537,6 +4546,7 @@ function DeliveryModule({
   const [postalLookupDelivery, setPostalLookupDelivery] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [deletingDelivery, setDeletingDelivery] = useState(false);
+  const deletingDeliveryRef = useRef(false);
   const [viewDeliveryId, setViewDeliveryId] = useState(null);
   const [photoUploading, setPhotoUploading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -4818,13 +4828,14 @@ function DeliveryModule({
   };
 
   const confirmDeleteDelivery = async () => {
-    if (!deleteConfirm || deletingDelivery) return;
+    if (!deleteConfirm || deletingDeliveryRef.current) return;
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
       return;
     }
     const d = deleteConfirm;
     const snapshot = deliveries;
+    deletingDeliveryRef.current = true;
     setDeletingDelivery(true);
     const nextDeliveries = snapshot.filter((x) => !sameDeliveryId(x.id, d.id));
     try {
@@ -4849,6 +4860,7 @@ function DeliveryModule({
         message: err?.message || "Could not remove delivery. Try again.",
       });
     } finally {
+      deletingDeliveryRef.current = false;
       setDeletingDelivery(false);
     }
   };
@@ -5536,7 +5548,7 @@ function DeliveryModule({
         footer={deleteConfirm && (
           <ConfirmModalFooter onCancel={() => { if (!deletingDelivery) setDeleteConfirm(null); }} cancelDisabled={deletingDelivery}>
             <Btn variant="danger" onClick={confirmDeleteDelivery} disabled={deletingDelivery} className="w-full sm:w-auto justify-center">
-              {deletingDelivery ? <><Loader2 size={14} className="animate-spin" />Deleting...</> : <><Trash2 size={14} />Delete</>}
+              <><Trash2 size={14} />{deletingDelivery ? 'Deleting…' : 'Delete'}</>
             </Btn>
           </ConfirmModalFooter>
         )}
@@ -5629,6 +5641,7 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
   const [showAllPast, setShowAllPast] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [deletingEvent, setDeletingEvent] = useState(false);
+  const deletingEventRef = useRef(false);
   const [savingEvent, setSavingEvent] = useState(false);
 
   const commitEventList = async (buildNext) => {
@@ -5800,13 +5813,14 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
   };
 
   const confirmDeleteEvent = async () => {
-    if (!deleteConfirm || deletingEvent) return;
+    if (!deleteConfirm || deletingEventRef.current) return;
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
       return;
     }
     const e = deleteConfirm;
     const label = e.title || "this event";
+    deletingEventRef.current = true;
     setDeletingEvent(true);
     markDeleted("events", e.id);
     try {
@@ -5829,6 +5843,7 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
       addNotification({ type: "info", title: "Event Deleted", message: `"${label}" removed.` });
       setDeleteConfirm(null);
     } finally {
+      deletingEventRef.current = false;
       setDeletingEvent(false);
     }
   };
@@ -5950,7 +5965,7 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
         footer={deleteConfirm && (
           <ConfirmModalFooter onCancel={() => { if (!deletingEvent) setDeleteConfirm(null); }} cancelDisabled={deletingEvent}>
             <Btn variant="danger" onClick={confirmDeleteEvent} disabled={deletingEvent} className="w-full sm:w-auto justify-center">
-              {deletingEvent ? <><Loader2 size={14} className="animate-spin" />Deleting...</> : <><Trash2 size={14} />Delete</>}
+              <><Trash2 size={14} />{deletingEvent ? 'Deleting…' : 'Delete'}</>
             </Btn>
           </ConfirmModalFooter>
         )}
@@ -6167,6 +6182,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
   const [editUser, setEditUser] = useState(null);
   const [saving, setSaving] = useState(false);
   const [deletingUser, setDeletingUser] = useState(false);
+  const deletingUserRef = useRef(false);
   const [togglingUserId, setTogglingUserId] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [form, setForm] = useState({ name: "", role: "staff", pin: "", permissions: defaultPermissionsForRole("staff"), active: true });
@@ -6339,12 +6355,13 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
   };
 
   const confirmDeleteUser = async () => {
-    if (!deleteConfirm || deletingUser) return;
+    if (!deleteConfirm || deletingUserRef.current) return;
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
       return;
     }
     const user = deleteConfirm;
+    deletingUserRef.current = true;
     setDeletingUser(true);
     try {
       if (apiEnabled) {
@@ -6360,6 +6377,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
     } catch (err) {
       addNotification({ type: "error", title: "Delete Failed", message: err?.message || "Could not remove user from server." });
     } finally {
+      deletingUserRef.current = false;
       setDeletingUser(false);
     }
   };
@@ -6539,7 +6557,7 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
         footer={deleteConfirm && (
           <ConfirmModalFooter onCancel={() => { if (!deletingUser) setDeleteConfirm(null); }} cancelDisabled={deletingUser}>
             <Btn variant="danger" onClick={confirmDeleteUser} disabled={deletingUser} className="w-full sm:w-auto justify-center">
-              {deletingUser ? <><Loader2 size={14} className="animate-spin" />Removing...</> : <><Trash2 size={14} />Remove</>}
+              <><Trash2 size={14} />{deletingUser ? 'Removing…' : 'Remove'}</>
             </Btn>
           </ConfirmModalFooter>
         )}
