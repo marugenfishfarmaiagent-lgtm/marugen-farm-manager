@@ -6904,7 +6904,7 @@ function ChatModule({ aiContext, messages, setMessages, isMobile = false }) {
         size="sm"
         footer={(
           <ConfirmModalFooter onCancel={handleConfirmDecline} cancelLabel="Not now">
-            <Btn onClick={handleConfirmContinue} className="w-full sm:w-auto justify-center"><Check size={14} />Yes, continue</Btn>
+            <Btn onClick={handleConfirmContinue} disabled={loading} className="w-full sm:w-auto justify-center"><Check size={14} />Yes, continue</Btn>
           </ConfirmModalFooter>
         )}
       >
@@ -6936,7 +6936,7 @@ function ChatModule({ aiContext, messages, setMessages, isMobile = false }) {
         size="sm"
         footer={(
           <ConfirmModalFooter onCancel={handleActionCancel}>
-            <Btn variant="danger" onClick={handleActionConfirm} className="w-full sm:w-auto justify-center"><Check size={14} />Yes, proceed</Btn>
+            <Btn variant="danger" onClick={handleActionConfirm} disabled={loading} className="w-full sm:w-auto justify-center"><Check size={14} />Yes, proceed</Btn>
           </ConfirmModalFooter>
         )}
       >
