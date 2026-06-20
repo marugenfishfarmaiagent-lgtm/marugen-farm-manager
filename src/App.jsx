@@ -1233,6 +1233,8 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
             title: "Low Stock",
             message: `${product.name} stock is low (${remaining} ${product.unit} remaining)`,
           });
+        } else {
+          addNotification({ type: "success", title: "Stock Used", message: `Used ${qty} ${product.unit || "unit"} of ${product.name}` });
         }
         setShowUse(null);
         setUseQty(1);
@@ -1264,6 +1266,8 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
           title: "Low Stock",
           message: `${product.name} stock is low (${remaining} ${product.unit} remaining)`,
         });
+      } else {
+        addNotification({ type: "success", title: "Stock Used", message: `Used ${qty} ${product.unit || "unit"} of ${product.name}` });
       }
       setShowUse(null);
       setUseQty(1);
@@ -1759,12 +1763,12 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
               disabled={usingStock || parseStockQty(useQty) <= 0}
               className="w-full sm:w-auto justify-center"
             >
-              {usingStock ? <><Loader2 size={14} className="animate-spin" />Saving...</> : <><Archive size={14} />Confirm Use</>}
+              <><Archive size={14} />{usingStock ? 'Saving…' : 'Confirm Use'}</>
             </Btn>
           </ConfirmModalFooter>
         )}
       >
-        <p className="text-slate-400 text-sm mb-4">Available: <span className="text-white font-bold">{showUse?.stock} {showUse?.unit}</span></p>
+        <p className="text-slate-400 text-sm mb-4">Available: <span className="text-white font-bold">{(products.find((p) => sameProductId(p.id, showUse?.id))?.stock ?? showUse?.stock)} {showUse?.unit}</span></p>
         <Input label="Quantity to Use" type="number" value={useQty} onChange={(e) => setUseQty(parseStockQty(e.target.value) || "")} min="1" className="mb-3" />
         <Textarea label="Note (optional)" value={useNote} onChange={e => setUseNote(e.target.value)} rows={2} />
       </Modal>
@@ -1782,12 +1786,12 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
               disabled={restocking || parseStockQty(restockQty) <= 0}
               className="w-full sm:w-auto justify-center"
             >
-              {restocking ? <><Loader2 size={14} className="animate-spin" />Saving...</> : <><Plus size={14} />Confirm Restock</>}
+              <><Plus size={14} />{restocking ? 'Saving…' : 'Confirm Restock'}</>
             </Btn>
           </ConfirmModalFooter>
         )}
       >
-        <p className="text-slate-400 text-sm mb-4">Current stock: <span className="text-white font-bold">{showRestock?.stock} {showRestock?.unit}</span></p>
+        <p className="text-slate-400 text-sm mb-4">Current stock: <span className="text-white font-bold">{(products.find((p) => sameProductId(p.id, showRestock?.id))?.stock ?? showRestock?.stock)} {showRestock?.unit}</span></p>
         <Input label="Quantity to Add" type="number" value={restockQty} onChange={(e) => setRestockQty(parseStockQty(e.target.value) || "")} min="1" className="mb-3" />
         <Input label="Invoice No. (optional)" value={restockNote} onChange={(e) => setRestockNote(e.target.value)} placeholder="INV20260615-01" />
       </Modal>

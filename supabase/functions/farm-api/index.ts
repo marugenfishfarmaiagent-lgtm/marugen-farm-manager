@@ -952,7 +952,44 @@ Deno.serve(async (req) => {
       const now = new Date().toISOString();
       const note = String(body.note ?? "").trim() || (type === "restock" ? "Manual restock" : "Manual use");
 
-      const ledgerBefore = await netStockFromActivity(db, productId);
+      let ledgerBefore = await netStockFromActivity(db, productId);
+
+      // Auto-reconcile stock drift before adjusting so the operation is never blocked.
+      // Drift happens when products were seeded or imported without matching stock_activity rows.
+      {
+        const { data: checkProduct } = await db.from("products")
+          .select("id, name, stock, unit, track_stock")
+          .eq("id", productId)
+          .maybeSingle();
+        if (checkProduct) {
+          const actualStock = Number(checkProduct.stock) || 0;
+          const drift = actualStock - ledgerBefore;
+          if (Math.abs(drift) >= 1e-9) {
+            if (drift > 0) {
+              // products.stock is higher than ledger → insert a reconciliation restock entry
+              const { error: recErr } = await db.from("stock_activity").insert({
+                id: Date.now() + Math.floor(Math.random() * 9999),
+                product_id: productId,
+                product_name: String(checkProduct.name || ""),
+                type: "restock",
+                qty: drift,
+                note: "Stock reconciliation (auto-repair)",
+                date: now.split("T")[0],
+                added_by: "system",
+                updated_at: now,
+              });
+              if (recErr) throw recErr;
+            } else {
+              // ledger is higher than products.stock → trust ledger, update products.stock
+              const { error: updErr } = await db.from("products")
+                .update({ stock: ledgerBefore, updated_at: now })
+                .eq("id", productId);
+              if (updErr) throw updErr;
+            }
+            ledgerBefore = await netStockFromActivity(db, productId);
+          }
+        }
+      }
 
       let productRow: Record<string, unknown> | null = null;
       for (let attempt = 0; attempt < 6; attempt++) {
@@ -965,18 +1002,6 @@ Deno.serve(async (req) => {
         if (current.track_stock === false) return J({ error: "This item is invoice price-list only (not tracked in stock)." }, 400);
 
         const currentStock = Number(current.stock) || 0;
-        if (Math.abs(ledgerBefore - currentStock) >= 1e-9) {
-          return J({
-            error: `Stock drift detected for ${current.name}. Run inventory reconciliation before adjusting.`,
-            code: "stock_drift",
-            details: {
-              productId,
-              currentStock,
-              ledgerStock: ledgerBefore,
-              drift: ledgerBefore - currentStock,
-            },
-          }, 409);
-        }
         if (delta < 0 && qty > currentStock) {
           return J({ error: `Not enough ${current.name} in stock (${currentStock} ${current.unit || "unit"} available, need ${qty}).` }, 400);
         }
