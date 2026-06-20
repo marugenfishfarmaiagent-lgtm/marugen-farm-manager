@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import {
-  Droplets, AlertTriangle, Beaker, Bell, BookOpen, Trash2, Check, Edit2, Calculator, MessageSquare,
+  Droplets, AlertTriangle, Beaker, Bell, BookOpen, Trash2, Check, Edit2, Calculator, MessageSquare, Search, X,
 } from 'lucide-react'
 import { shareTreatmentGuideOnWhatsApp } from '../lib/pondWhatsApp'
 import PondCalculator from './PondCalculator'
@@ -71,6 +71,7 @@ export default function PondManagement({
   const [remindModal, setRemindModal] = useState(null)
   const [guideModal, setGuideModal] = useState(null)
   const [pondFilter, setPondFilter] = useState('all')
+  const [pondSearch, setPondSearch] = useState('')
 
   const [maintForm, setMaintForm] = useState({ pondId: '', type: 'water_test', date: today(), notes: '', showParams: true, pH: '', ammonia: '', nitrite: '', saltLevel: '' })
   const [treatForm, setTreatForm] = useState({ pondId: '', medicine: '', dosage: '', reason: '', startDate: today(), endDate: '', waterChangeBefore: false, notes: '' })
@@ -600,52 +601,125 @@ export default function PondManagement({
         </div>
       )}
 
-      {tab === 'ponds' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {ponds.length === 0 ? (
-            <Card className="md:col-span-2 xl:col-span-3">
-              <EmptyState
-                emoji="💧"
-                title="No ponds yet"
-                hint="Register A1, B2, quarantine tanks, etc."
-                actionLabel={canEdit ? 'Add Pond' : undefined}
-                onAction={canEdit ? () => setShowAddPond(true) : undefined}
-              />
-            </Card>
-          ) : ponds.map((p) => {
-            const days = daysSince(p.lastChecked)
-            return (
-              <Card key={p.id} className="p-4">
-                <div className="flex justify-between items-start mb-2">
-                  <h3 className="text-white font-bold text-lg">{p.name}</h3>
-                  <Badge className={POND_TYPE_COLOR[p.type] || POND_TYPE_COLOR.koi}>{p.type}</Badge>
-                </div>
-                <p className="text-slate-400 text-sm">{p.volume ? `${p.volume} ton` : '— ton'}</p>
-                <div className="grid grid-cols-4 gap-2 my-3 text-center text-xs">
-                  <div><p className="text-slate-500">pH</p><p className={`font-bold ${paramColor('ph', p.lastpH)}`}>{p.lastpH ?? '—'}</p></div>
-                  <div><p className="text-slate-500">NH3</p><p className={`font-bold ${paramColor('ammonia', p.lastAmmonia)}`}>{p.lastAmmonia ?? '—'}</p></div>
-                  <div><p className="text-slate-500">NO2</p><p className={`font-bold ${paramColor('nitrite', p.lastNitrite)}`}>{p.lastNitrite ?? '—'}</p></div>
-                  <div><p className="text-slate-500">Salt</p><p className="font-bold text-white">{pondSaltLevel(p) != null ? `${pondSaltLevel(p)}%` : '—'}</p></div>
-                </div>
-                {days > 7 && <p className="text-amber-400 text-xs flex items-center gap-1 mb-2"><AlertTriangle size={12} />Last checked {days} days ago</p>}
-                <div className="flex flex-wrap gap-2">
-                  {canEdit && (
-                    <>
-                      <Btn variant="secondary" size="sm" onClick={() => { setMaintModal(p.id); setMaintForm((f) => ({ ...f, pondId: p.id, date: today() })) }}>Maintenance</Btn>
-                      <Btn variant="secondary" size="sm" onClick={() => { setTreatModal(p.id); setTreatForm((f) => ({ ...f, pondId: p.id })) }}>Treatment</Btn>
-                      <Btn variant="ghost" size="sm" onClick={() => { setRemindModal(p.id); setRemindForm((f) => ({ ...f, pondId: p.id })) }}><Bell size={12} /></Btn>
-                      <Btn variant="ghost" size="sm" onClick={() => setEditPond({ ...p })}><Edit2 size={12} />Edit</Btn>
-                      {canDelete && (
-                        <Btn variant="danger" size="sm" onClick={() => deletePond(p.id)}><Trash2 size={12} />Delete</Btn>
-                      )}
-                    </>
+      {tab === 'ponds' && (() => {
+        const q = pondSearch.trim().toLowerCase()
+        const filteredPonds = q ? ponds.filter((p) => p.name.toLowerCase().includes(q)) : ponds
+        return (
+          <div className="space-y-3">
+            {ponds.length > 0 && (
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
+                  <input
+                    type="text"
+                    placeholder="Search ponds…"
+                    value={pondSearch}
+                    onChange={(e) => setPondSearch(e.target.value)}
+                    className="w-full pl-8 pr-8 py-2 bg-slate-700/50 border border-slate-600/60 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
+                  />
+                  {pondSearch && (
+                    <button type="button" onClick={() => setPondSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white">
+                      <X size={14} />
+                    </button>
                   )}
                 </div>
-              </Card>
-            )
-          })}
-        </div>
-      )}
+                <span className="text-slate-500 text-xs whitespace-nowrap shrink-0">
+                  {filteredPonds.length}/{ponds.length}
+                </span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {ponds.length === 0 ? (
+                <Card className="sm:col-span-2 lg:col-span-3">
+                  <EmptyState
+                    emoji="💧"
+                    title="No ponds yet"
+                    hint="Register A1, B2, quarantine tanks, etc."
+                    actionLabel={canEdit ? 'Add Pond' : undefined}
+                    onAction={canEdit ? () => setShowAddPond(true) : undefined}
+                  />
+                </Card>
+              ) : filteredPonds.length === 0 ? (
+                <Card className="sm:col-span-2 lg:col-span-3">
+                  <EmptyState emoji="🔍" title={`No ponds matching "${pondSearch}"`} hint="Try a different name" />
+                </Card>
+              ) : filteredPonds.map((p) => {
+                const days = daysSince(p.lastChecked)
+                const pondActiveT = activeTreatments.filter((t) => samePondId(t.pondId, p.id))
+                const pondOverdue = overdueReminders.filter((r) => samePondId(r.pondId, p.id))
+                const pondPending = pendingReminders.filter((r) => samePondId(r.pondId, p.id))
+                return (
+                  <Card key={p.id} className="p-0 overflow-hidden flex flex-col">
+                    {/* Header */}
+                    <div className="flex items-center justify-between gap-2 px-3 pt-3 pb-2">
+                      <div className="min-w-0">
+                        <h3 className="text-white font-bold text-base leading-tight truncate">{p.name}</h3>
+                        <p className="text-slate-500 text-xs">{p.volume ? `${p.volume} ton` : '—'}</p>
+                      </div>
+                      <Badge className={`shrink-0 ${POND_TYPE_COLOR[p.type] || POND_TYPE_COLOR.koi}`}>{p.type}</Badge>
+                    </div>
+
+                    {/* Water params */}
+                    <div className="grid grid-cols-4 gap-1.5 px-3 pb-2 text-center text-xs">
+                      {[
+                        { label: 'pH', val: p.lastpH, color: paramColor('ph', p.lastpH) },
+                        { label: 'NH3', val: p.lastAmmonia, color: paramColor('ammonia', p.lastAmmonia) },
+                        { label: 'NO2', val: p.lastNitrite, color: paramColor('nitrite', p.lastNitrite) },
+                        { label: 'Salt', val: pondSaltLevel(p) != null ? `${pondSaltLevel(p)}%` : null, color: 'text-white' },
+                      ].map(({ label, val, color }) => (
+                        <div key={label} className="rounded-lg bg-slate-700/40 py-1.5">
+                          <p className="text-slate-500 text-[10px] leading-none mb-0.5">{label}</p>
+                          <p className={`font-bold text-sm leading-none ${color}`}>{val ?? '—'}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Status badges */}
+                    {(days > 7 || pondActiveT.length > 0 || pondOverdue.length > 0 || pondPending.length > 0) && (
+                      <div className="flex flex-wrap gap-1 px-3 pb-2">
+                        {days > 7 && (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-amber-400 bg-amber-500/10 rounded-full px-2 py-0.5">
+                            <AlertTriangle size={9} />{days}d ago
+                          </span>
+                        )}
+                        {pondActiveT.length > 0 && (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-500/10 rounded-full px-2 py-0.5">
+                            <Beaker size={9} />{pondActiveT.length} treatment
+                          </span>
+                        )}
+                        {pondOverdue.length > 0 && (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-red-400 bg-red-500/10 rounded-full px-2 py-0.5">
+                            <Bell size={9} />{pondOverdue.length} overdue
+                          </span>
+                        )}
+                        {pondPending.length > 0 && (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-cyan-400 bg-cyan-500/10 rounded-full px-2 py-0.5">
+                            <Bell size={9} />{pondPending.length} reminder
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Actions */}
+                    {canEdit && (
+                      <div className="flex items-center gap-1 px-2 py-2 border-t border-slate-700/50 mt-auto flex-wrap">
+                        <Btn variant="secondary" size="sm" onClick={() => { setMaintModal(p.id); setMaintForm((f) => ({ ...f, pondId: p.id, date: today() })) }}>Maint</Btn>
+                        <Btn variant="secondary" size="sm" onClick={() => { setTreatModal(p.id); setTreatForm((f) => ({ ...f, pondId: p.id })) }}>Treat</Btn>
+                        <Btn variant="ghost" size="sm" onClick={() => { setRemindModal(p.id); setRemindForm((f) => ({ ...f, pondId: p.id })) }}><Bell size={12} /></Btn>
+                        <div className="ml-auto flex gap-1">
+                          <Btn variant="ghost" size="sm" onClick={() => setEditPond({ ...p })}><Edit2 size={12} /></Btn>
+                          {canDelete && <Btn variant="danger" size="sm" onClick={() => deletePond(p.id)}><Trash2 size={12} /></Btn>}
+                        </div>
+                      </div>
+                    )}
+                  </Card>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })()}
 
       {tab === 'calculator' && <PondCalculator ponds={ponds} />}
 

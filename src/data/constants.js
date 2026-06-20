@@ -210,11 +210,11 @@ export function normalizeCustomerKoiRecord(record) {
 }
 
 export const FARM_POND_GROUPS = [
-  { label: 'A', count: 8 },
-  { label: 'B', count: 8 },
-  { label: 'C', count: 4 },
-  { label: 'D', count: 4 },
-  { label: 'Q', count: 14 },
+  { label: 'A', count: 30 },
+  { label: 'B', count: 30 },
+  { label: 'C', count: 20 },
+  { label: 'D', count: 20 },
+  { label: 'Q', count: 30 },
 ]
 
 export const FARM_POND_NAMES = FARM_POND_GROUPS.flatMap(({ label, count }) =>
