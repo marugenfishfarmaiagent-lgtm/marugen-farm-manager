@@ -171,6 +171,7 @@ export default function PondManagement({
 
   const addPond = async () => {
     if (!canEdit) { denyEdit(); return }
+    if (savingPondRef.current) return
     const check = validatePondFields(pondForm)
     if (!check.ok) {
       addNotification({ type: 'error', title: 'Invalid Pond', message: check.message })
@@ -180,14 +181,25 @@ export default function PondManagement({
       addNotification({ type: 'warning', title: 'Duplicate Pond', message: `${check.name} is already in the pond list.` })
       return
     }
-    const formSnapshot = { ...pondForm, name: check.name, volume: check.volume }
-    const saved = await commitPondData((prev) =>
-      touchPondData({ ...prev, ponds: [...prev.ponds, { ...formSnapshot, id: genId('POND'), lastpH: null, lastAmmonia: null, lastNitrite: null, lastSalt: null, lastChecked: null }] }),
-    )
-    if (!saved) return
+    const newEntry = { ...pondForm, name: check.name, volume: check.volume, id: genId('POND'), lastpH: null, lastAmmonia: null, lastNitrite: null, lastSalt: null, lastChecked: null }
+    const nextPond = touchPondData({ ...pondData, ponds: [...pondData.ponds, newEntry] })
+    // Optimistic: update local state and close modal immediately so the user
+    // isn't blocked waiting for the cloud round-trip.
+    setPondData(nextPond)
     addNotification({ type: 'success', title: 'Pond Added', message: `${check.name} added to pond list.` })
     setShowAddPond(false)
     setPondForm({ name: '', type: 'koi', volume: '', notes: '' })
+    // Background cloud sync — failure shows an error but does not revert or reopen modal.
+    if (onPersistPondData) {
+      savingPondRef.current = true
+      try {
+        await onPersistPondData(nextPond)
+      } catch {
+        addNotification({ type: 'error', title: 'Sync failed', message: `${check.name} saved locally. Cloud sync failed — will retry.` })
+      } finally {
+        savingPondRef.current = false
+      }
+    }
   }
 
   const saveMaint = async () => {
