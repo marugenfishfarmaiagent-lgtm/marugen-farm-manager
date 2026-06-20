@@ -99,20 +99,13 @@ export default function PondManagement({
 
   const commitPondData = async (buildNext) => {
     if (savingPondRef.current) return null
-    let nextPond = null
-    let snapshot = null
-    let unchanged = false
-    setPondData((prev) => {
-      snapshot = prev
-      const built = buildNext(prev)
-      if (built === prev) {
-        unchanged = true
-        return prev
-      }
-      nextPond = built
-      return nextPond
-    })
-    if (unchanged || !nextPond) return null
+    // Compute next state from the current prop value — do NOT rely on the
+    // React state updater being called synchronously (it isn't in React 19
+    // concurrent mode, so side-effect capture inside setState is unreliable).
+    const snapshot = pondData
+    const nextPond = buildNext(snapshot)
+    if (nextPond === snapshot) return null
+    setPondData(nextPond)
     if (!onPersistPondData) return nextPond
 
     savingPondRef.current = true
