@@ -84,7 +84,6 @@ export default function PondManagement({
   const [completingReminderId, setCompletingReminderId] = useState(null)
   const [confirmDeletePondId, setConfirmDeletePondId] = useState(null)
   const [deletingPond, setDeletingPond] = useState(false)
-  const [savingReminder, setSavingReminder] = useState(false)
   const completingReminderRef = useRef(null)
   const savingReminderRef = useRef(false)
   const savingPondRef = useRef(false)
@@ -127,33 +126,31 @@ export default function PondManagement({
   const markReminderDone = async (reminderId) => {
     const id = String(reminderId)
     if (completingReminderRef.current === id) return
-
     completingReminderRef.current = id
     setCompletingReminderId(id)
-    try {
-      const nextPond = await commitPondData((prev) => {
-        const result = markReminderCompleteInPondData(prev, reminderId)
-        return result.changed ? result.data : prev
-      })
-      if (!nextPond) {
-        addNotification({ type: 'error', title: 'Reminder not updated', message: 'Could not find that reminder. Refresh and try again.' })
-        return
-      }
-      try {
-        await onSyncReminderCalendar?.('remove', { id })
-      } catch {
-        addNotification({
-          type: 'warning',
-          title: 'Calendar sync skipped',
-          message: 'Reminder marked done in pond data; calendar could not be updated.',
-        })
-      }
-      addNotification({ type: 'success', title: 'Reminder completed', message: 'Marked as done.' })
-    } catch {
-      addNotification({ type: 'error', title: 'Save failed', message: 'Reminder could not be saved to cloud. Try again.' })
-    } finally {
+
+    const snapshot = pondData
+    const result = markReminderCompleteInPondData(snapshot, reminderId)
+    if (!result.changed) {
+      addNotification({ type: 'error', title: 'Reminder not updated', message: 'Could not find that reminder. Refresh and try again.' })
       completingReminderRef.current = null
       setCompletingReminderId(null)
+      return
+    }
+    const nextPond = touchPondData(result.data)
+    setPondData(nextPond)
+    completingReminderRef.current = null
+    setCompletingReminderId(null)
+    addNotification({ type: 'success', title: 'Reminder completed', message: 'Marked as done.' })
+
+    try {
+      await onSyncReminderCalendar?.('remove', { id })
+    } catch {
+      addNotification({ type: 'warning', title: 'Calendar sync skipped', message: 'Reminder marked done; calendar could not be updated.' })
+    }
+    if (onPersistPondData) {
+      try { await onPersistPondData(nextPond) }
+      catch { addNotification({ type: 'error', title: 'Sync failed', message: 'Reminder marked done locally. Cloud sync failed — will retry.' }) }
     }
   }
   const hasPonds = ponds.length > 0
@@ -381,45 +378,36 @@ export default function PondManagement({
       status: 'pending',
       assignedUserIds: remindForm.assignedUserIds,
     }))
+    const snapshot = pondData
+    const nextPond = touchPondData({ ...snapshot, reminders: [...(snapshot.reminders || []), newReminder] })
+    setPondData(nextPond)
+    savingReminderRef.current = false
     setRemindModal(null)
-    savingReminderRef.current = true
-    setSavingReminder(true)
-    try {
-      const saved = await commitPondData((prev) => touchPondData({
-        ...prev,
-        reminders: [...(prev.reminders || []), newReminder],
-      }))
-      if (!saved) return
+    setRemindForm({ pondId: '', type: 'water_test', dueDate: today(), dueTime: '09:00', note: '', repeat: 'none', assignedUserIds: [] })
 
-      const reminderMsg = `${reminderDisplayLines(newReminder).title} · ${newReminder.dueDate}`
-      try {
-        await onSyncReminderCalendar?.('upsert', newReminder)
-      } catch {
-        addNotification({
-          type: 'warning',
-          title: 'Calendar sync skipped',
-          message: 'Reminder saved to pond data; calendar could not be updated.',
-        })
-      }
-      addNotification({
-        type: 'success',
-        title: 'Reminder Set',
+    const reminderMsg = `${reminderDisplayLines(newReminder).title} · ${newReminder.dueDate}`
+    addNotification({ type: 'success', title: 'Reminder Set', message: reminderMsg })
+
+    if (hasAssignedTeam(newReminder.assignedUserIds)) {
+      notifyAssignmentChange({
+        isNew: true,
+        nextAssignedUserIds: newReminder.assignedUserIds,
+        title: 'Pond Task Assigned',
         message: reminderMsg,
+        url: '/?tab=ponds',
+        actor: currentUser?.name,
+        actorRole: currentUser?.role,
       })
-      if (hasAssignedTeam(newReminder.assignedUserIds)) {
-        notifyAssignmentChange({
-          isNew: true,
-          nextAssignedUserIds: newReminder.assignedUserIds,
-          title: 'Pond Task Assigned',
-          message: reminderMsg,
-          url: '/?tab=ponds',
-          actor: currentUser?.name,
-          actorRole: currentUser?.role,
-        })
-      }
-    } finally {
-      savingReminderRef.current = false
-      setSavingReminder(false)
+    }
+
+    try {
+      await onSyncReminderCalendar?.('upsert', newReminder)
+    } catch {
+      addNotification({ type: 'warning', title: 'Calendar sync skipped', message: 'Reminder saved; calendar could not be updated.' })
+    }
+    if (onPersistPondData) {
+      try { await onPersistPondData(nextPond) }
+      catch { addNotification({ type: 'error', title: 'Sync failed', message: 'Reminder saved locally. Cloud sync failed — will retry.' }) }
     }
   }
 
@@ -972,7 +960,7 @@ export default function PondManagement({
           onChange={(assignedUserIds) => setRemindForm((f) => ({ ...f, assignedUserIds }))}
           excludeUserId={currentUser?.id}
         />
-        <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setRemindModal(null)} disabled={savingReminder}>Cancel</Btn><Btn onClick={saveReminder} disabled={!canEdit || savingReminder}>{savingReminder ? 'Saving…' : 'Save'}</Btn></div>
+        <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setRemindModal(null)}>Cancel</Btn><Btn onClick={saveReminder} disabled={!canEdit}>Save</Btn></div>
       </Modal>
 
       <Modal

@@ -524,6 +524,14 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
       })
       return
     }
+    const deceasedRecord = records.find((r) => sameKoiId(r.koiId, koi.id) && r.status === CUSTOMER_KOI_STATUS.DECEASED)
+    if (deceasedRecord) {
+      addNotification({
+        type: 'warning',
+        title: 'Deceased History',
+        message: `${koi.id} already has a deceased record for ${deceasedRecord.customerName}. Linking anyway.`,
+      })
+    }
     const buyer = koi.soldTo
       ? customers.find((c) => String(c.id) === String(koi.soldTo))
       : null

@@ -211,6 +211,12 @@ export default function PondCalculator({ ponds = [] }) {
           </div>
         )}
 
+        {volumeSource === 'pond' && selectedPond && !selectedPond.volume && (
+          <p className="text-amber-400 text-xs mb-3 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
+            {selectedPond.name} has no volume recorded. Enter dimensions above or add volume in Pond Management.
+          </p>
+        )}
+
         {activeVolumeLitres != null && (
           <p className="text-slate-400 text-xs mb-3">
             Water volume for salt calc: <span className="text-white font-semibold">{formatVolumeNumber(activeVolumeLitres, 0)} L</span>
