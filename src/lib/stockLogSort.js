@@ -25,32 +25,41 @@ export function isTimestampStockLogId(row) {
   return id >= TIMESTAMP_ID_MIN && id <= TIMESTAMP_ID_MAX
 }
 
-/** Manual rows sort by id (creation time); invoice-linked rows sort by updatedAt. */
-export function stockLogRecency(row) {
-  if (isTimestampStockLogId(row)) return stockLogIdNum(row)
-  return stockLogTime(row) || stockLogIdNum(row)
-}
-
-/** Newest action first. */
+/** Newest action first.
+ *
+ * Sort order:
+ * 1. Transaction date (date field, YYYY-MM-DD) — a June-20 row always beats June-16
+ *    regardless of which row's updatedAt is newer.
+ * 2. Same date → precise time: timestamp-ID rows use their ID (ms creation clock);
+ *    DB rows use updatedAt.
+ * 3. Invoice-level tiebreak for rows with the same invoice note.
+ */
 export function compareStockLogDesc(a, b) {
-  const keyCmp = stockLogRecency(b) - stockLogRecency(a)
-  if (keyCmp !== 0) return keyCmp
+  // Primary: transaction date
+  const dayA = String(a?.date || '').slice(0, 10)
+  const dayB = String(b?.date || '').slice(0, 10)
+  if (dayA && dayB && dayA !== dayB) return dayB.localeCompare(dayA)
+
+  // Same day (or missing date) → precise time
+  const aIsTs = isTimestampStockLogId(a)
+  const bIsTs = isTimestampStockLogId(b)
+  const timeA = aIsTs ? stockLogIdNum(a) : stockLogTime(a) || stockLogIdNum(a)
+  const timeB = bIsTs ? stockLogIdNum(b) : stockLogTime(b) || stockLogIdNum(b)
+  const timeCmp = timeB - timeA
+  if (timeCmp !== 0) return timeCmp
+
+  // Invoice tiebreak: newer invoice number first, then restock before sell before use
   const invA = invoiceIdFromStockLogNote(a?.note)
   const invB = invoiceIdFromStockLogNote(b?.note)
-  if (invA && invB && invA !== invB) {
-    const invCmp = invB.localeCompare(invA)
-    if (invCmp !== 0) return invCmp
-  }
+  if (invA && invB && invA !== invB) return invB.localeCompare(invA)
   if (invA && invA === invB) {
     const typeRank = { restock: 3, sell: 2, use: 1 }
-    const rankA = typeRank[String(a?.type || '').toLowerCase()] || 0
-    const rankB = typeRank[String(b?.type || '').toLowerCase()] || 0
-    const rankCmp = rankB - rankA
+    const rankCmp = (typeRank[String(b?.type || '').toLowerCase()] || 0) -
+                    (typeRank[String(a?.type || '').toLowerCase()] || 0)
     if (rankCmp !== 0) return rankCmp
   }
-  const idCmp = stockLogIdNum(b) - stockLogIdNum(a)
-  if (idCmp !== 0) return idCmp
-  return String(b?.id || '').localeCompare(String(a?.id || ''))
+
+  return stockLogIdNum(b) - stockLogIdNum(a)
 }
 
 export function sortStockLog(list = []) {
