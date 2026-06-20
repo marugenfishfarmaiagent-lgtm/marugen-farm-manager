@@ -476,7 +476,7 @@ function actorLabel(n) {
 function NotificationPanel({ notifications, onDismiss, onClear, onMarkRead }) {
   const unread = notifications.filter(n => !n.read).length;
   return (
-    <div className="space-y-2 w-full max-w-[min(100vw-2rem,320px)] sm:min-w-[320px]">
+    <div className="space-y-2 w-full">
       {notifications.length === 0 ? (
         <div className="text-center py-8 text-slate-500">
           <Bell size={32} className="mx-auto mb-2 opacity-40" />
