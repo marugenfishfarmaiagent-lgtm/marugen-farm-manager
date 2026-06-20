@@ -7233,7 +7233,7 @@ export default function App() {
   const [stockLog, setStockLog] = useState(() => (isSupabaseConfigured ? [] : loadStockLog()));
   const [koiFishList, setKoiFishList] = useState(() => (isSupabaseConfigured ? [] : loadKoiFish()));
   const [customerKoiList, setCustomerKoiList] = useState(() => (isSupabaseConfigured ? [] : loadCustomerKoi()));
-  const [pondData, setPondData] = useState(() => (isSupabaseConfigured ? emptyPondData() : loadPondData()));
+  const [pondData, setPondData] = useState(() => loadPondData());
   const setPondDataWithRef = useCallback((updater) => {
     setPondData((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
@@ -7381,7 +7381,7 @@ export default function App() {
       : customerKoiList
     saveCustomerKoi(list)
   }, [customerKoiList]);
-  useEffect(() => { if (!isSupabaseConfigured) savePondData(pondData) }, [pondData]);
+  useEffect(() => { savePondData(pondData) }, [pondData]);
   useEffect(() => { if (!isSupabaseConfigured) saveProducts(products) }, [products]);
   useEffect(() => { if (!isSupabaseConfigured) saveStockLog(stockLog) }, [stockLog]);
 
@@ -7493,7 +7493,7 @@ export default function App() {
       setInvoices(mergedInvoices);
       setExpenses((prev) => mergeRecords(prev, cleaned.expenses, peekDeletions("expenses"), resolveExpenseConflict));
       setDeliveries((prev) => mergeRecords(prev, cleaned.deliveries, peekDeletions("deliveries")));
-      const mergedPond = mergePondData(syncStateRef.current.pondData || emptyPondData(), cleaned.pondData);
+      const mergedPond = mergePondData(syncStateRef.current.pondData || loadPondData(), cleaned.pondData);
       const mergedEvents = mergeRecords(
         syncStateRef.current.events || [],
         cleaned.events,
@@ -8295,7 +8295,11 @@ export default function App() {
           throw new Error("Could not save pond reminder — cloud data was newer. Refresh and try again.");
         }
 
-        setPondDataWithRef(payload);
+        // State was already set optimistically before sync started.
+        // Only the skipped/merge path (above) needs a state update.
+        // Calling setPondDataWithRef here would cause a redundant second
+        // render (React sees a new object due to touchPondData's updatedAt)
+        // which manifests as a visible flicker in the UI.
         resetSyncHealth();
         touchLastSync();
       } catch (err) {

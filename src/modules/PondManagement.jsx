@@ -78,8 +78,7 @@ export default function PondManagement({
   const [remindForm, setRemindForm] = useState({ pondId: '', type: 'water_test', dueDate: today(), dueTime: '09:00', note: '', repeat: 'none', assignedUserIds: [] })
   const [guideForm, setGuideForm] = useState({ title: '', category: '', steps: '', warning: '' })
   const [editingGuideId, setEditingGuideId] = useState(null)
-  const [savingGuide, setSavingGuide] = useState(false)
-  const [deletingGuideId, setDeletingGuideId] = useState(null)
+  const savingGuideRef = useRef(false)
   const [confirmDeleteGuideId, setConfirmDeleteGuideId] = useState(null)
   const [editingTreatmentId, setEditingTreatmentId] = useState(null)
   const [completingReminderId, setCompletingReminderId] = useState(null)
@@ -89,6 +88,7 @@ export default function PondManagement({
   const completingReminderRef = useRef(null)
   const savingReminderRef = useRef(false)
   const savingPondRef = useRef(false)
+  const addingPondRef = useRef(false)
   const [savingPond, setSavingPond] = useState(false)
 
   const todayStr = today()
@@ -160,8 +160,6 @@ export default function PondManagement({
 
   const displayGuides = treatmentGuides?.length ? treatmentGuides : (treatmentGuides == null ? DEFAULT_TREATMENT_GUIDES : [])
 
-  const ensureGuidesMutable = () => (treatmentGuides != null ? treatmentGuides : [...DEFAULT_TREATMENT_GUIDES])
-
   const pondSaltLevel = (pond) => pond.lastSalt
 
   const syncPondNameInLogs = (pondId, pondName) => ({
@@ -172,7 +170,7 @@ export default function PondManagement({
 
   const addPond = async () => {
     if (!canEdit) { denyEdit(); return }
-    if (savingPondRef.current) return
+    if (addingPondRef.current) return
     const check = validatePondFields(pondForm)
     if (!check.ok) {
       addNotification({ type: 'error', title: 'Invalid Pond', message: check.message })
@@ -182,23 +180,23 @@ export default function PondManagement({
       addNotification({ type: 'warning', title: 'Duplicate Pond', message: `${check.name} is already in the pond list.` })
       return
     }
+    addingPondRef.current = true
     const newEntry = { ...pondForm, name: check.name, volume: check.volume, id: genId('POND'), lastpH: null, lastAmmonia: null, lastNitrite: null, lastSalt: null, lastChecked: null }
     const nextPond = touchPondData({ ...pondData, ponds: [...pondData.ponds, newEntry] })
     // Optimistic: update local state and close modal immediately so the user
     // isn't blocked waiting for the cloud round-trip.
     setPondData(nextPond)
     addNotification({ type: 'success', title: 'Pond Added', message: `${check.name} added to pond list.` })
+    // Reset guard before closing so next add is not blocked
+    addingPondRef.current = false
     setShowAddPond(false)
     setPondForm({ name: '', type: 'koi', volume: '', notes: '' })
     // Background cloud sync — failure shows an error but does not revert or reopen modal.
     if (onPersistPondData) {
-      savingPondRef.current = true
       try {
         await onPersistPondData(nextPond)
       } catch {
         addNotification({ type: 'error', title: 'Sync failed', message: `${check.name} saved locally. Cloud sync failed — will retry.` })
-      } finally {
-        savingPondRef.current = false
       }
     }
   }
@@ -446,11 +444,12 @@ export default function PondManagement({
 
   const saveGuide = async () => {
     if (!canEdit) { denyEdit(); return }
-    if (savingGuide) return
+    if (savingGuideRef.current) return
     if (!guideForm.title?.trim()) {
       addNotification({ type: 'error', title: 'Title Required', message: 'Enter a guide title.' })
       return
     }
+    savingGuideRef.current = true
     const payload = {
       title: guideForm.title.trim(),
       category: guideForm.category?.trim() || '',
@@ -458,47 +457,47 @@ export default function PondManagement({
       warning: guideForm.warning?.trim() || '',
     }
     const currentEditId = editingGuideId
-    setSavingGuide(true)
-    try {
-      if (currentEditId) {
-        const saved = await commitPondData((prev) => touchPondData({
-          ...prev,
-          treatmentGuides: (prev.treatmentGuides != null ? prev.treatmentGuides : [...DEFAULT_TREATMENT_GUIDES])
-            .map((g) => (g.id === currentEditId ? { ...g, ...payload } : g)),
-        }))
-        if (!saved) return
-        addNotification({ type: 'success', title: 'Guide Updated', message: payload.title })
-      } else {
-        const saved = await commitPondData((prev) => touchPondData({
-          ...prev,
-          treatmentGuides: [...(prev.treatmentGuides != null ? prev.treatmentGuides : [...DEFAULT_TREATMENT_GUIDES]), { ...payload, id: genId('GUIDE') }],
-        }))
-        if (!saved) return
-        addNotification({ type: 'success', title: 'Guide Added', message: payload.title })
+    const snapshot = pondData
+    const currentGuides = snapshot.treatmentGuides != null ? snapshot.treatmentGuides : [...DEFAULT_TREATMENT_GUIDES]
+    const nextGuides = currentEditId
+      ? currentGuides.map((g) => (g.id === currentEditId ? { ...g, ...payload } : g))
+      : [...currentGuides, { ...payload, id: genId('GUIDE') }]
+    const nextPond = touchPondData({ ...snapshot, treatmentGuides: nextGuides })
+    // Optimistic: update list and close modal immediately
+    setPondData(nextPond)
+    // Reset guard before modal closes so the next guide add is never blocked
+    savingGuideRef.current = false
+    setGuideModal(null)
+    setEditingGuideId(null)
+    setGuideForm({ title: '', category: '', steps: '', warning: '' })
+    addNotification({ type: 'success', title: currentEditId ? 'Guide Updated' : 'Guide Added', message: payload.title })
+    // Background cloud sync — keep local state on failure (auto-retry via syncDebounced)
+    if (onPersistPondData) {
+      try {
+        await onPersistPondData(nextPond)
+      } catch {
+        addNotification({ type: 'warning', title: 'Sync delayed', message: 'Guide saved locally. Will sync when connection is restored.' })
       }
-      setGuideModal(null)
-      setEditingGuideId(null)
-      setGuideForm({ title: '', category: '', steps: '', warning: '' })
-    } finally {
-      setSavingGuide(false)
     }
   }
 
   const confirmDeleteGuide = async () => {
     const guideId = confirmDeleteGuideId
     if (!guideId) return
-    setDeletingGuideId(guideId)
-    try {
-      const saved = await commitPondData((prev) => touchPondData({
-        ...prev,
-        treatmentGuides: (prev.treatmentGuides != null ? prev.treatmentGuides : [...DEFAULT_TREATMENT_GUIDES])
-          .filter((g) => g.id !== guideId),
-      }))
-      if (!saved) return
-      setConfirmDeleteGuideId(null)
-      addNotification({ type: 'info', title: 'Guide Removed', message: 'Treatment guide deleted.' })
-    } finally {
-      setDeletingGuideId(null)
+    const snapshot = pondData
+    const currentGuides = snapshot.treatmentGuides != null ? snapshot.treatmentGuides : [...DEFAULT_TREATMENT_GUIDES]
+    const nextPond = touchPondData({ ...snapshot, treatmentGuides: currentGuides.filter((g) => g.id !== guideId) })
+    // Optimistic: remove guide and close dialog immediately
+    setPondData(nextPond)
+    setConfirmDeleteGuideId(null)
+    addNotification({ type: 'info', title: 'Guide Removed', message: 'Treatment guide deleted.' })
+    if (onPersistPondData) {
+      try {
+        await onPersistPondData(nextPond)
+      } catch {
+        setPondData(snapshot)
+        addNotification({ type: 'error', title: 'Delete failed', message: 'Could not sync guide deletion. The guide has been restored.' })
+      }
     }
   }
 
@@ -881,7 +880,7 @@ export default function PondManagement({
                     <MessageSquare size={12} />
                   </Btn>
                   {canEdit && <Btn variant="ghost" size="sm" onClick={() => openEditGuide(g)}><Edit2 size={12} /></Btn>}
-                  {canDelete && <Btn variant="danger" size="sm" disabled={!!deletingGuideId} onClick={() => { if (!canDelete) { denyDelete(); return } setConfirmDeleteGuideId(g.id) }}><Trash2 size={12} /></Btn>}
+                  {canDelete && <Btn variant="danger" size="sm" onClick={() => { if (!canDelete) { denyDelete(); return } setConfirmDeleteGuideId(g.id) }}><Trash2 size={12} /></Btn>}
                 </div>
               </div>
             </Card>
@@ -986,8 +985,8 @@ export default function PondManagement({
         <Textarea label="Steps" value={guideForm.steps} onChange={(e) => setGuideForm((f) => ({ ...f, steps: e.target.value }))} className="mt-3" />
         <Input label="Warning" value={guideForm.warning} onChange={(e) => setGuideForm((f) => ({ ...f, warning: e.target.value }))} className="mt-3" />
         <div className="modal-actions mt-4 flex justify-end gap-2">
-          <Btn variant="secondary" disabled={savingGuide} onClick={() => { setGuideModal(null); setEditingGuideId(null); setGuideForm({ title: '', category: '', steps: '', warning: '' }) }}>Cancel</Btn>
-          <Btn onClick={saveGuide} disabled={savingGuide}>{savingGuide ? 'Saving…' : editingGuideId ? 'Save Changes' : 'Save'}</Btn>
+          <Btn variant="secondary" onClick={() => { setGuideModal(null); setEditingGuideId(null); setGuideForm({ title: '', category: '', steps: '', warning: '' }) }}>Cancel</Btn>
+          <Btn onClick={saveGuide}>{editingGuideId ? 'Save Changes' : 'Save'}</Btn>
         </div>
       </Modal>
 
@@ -999,8 +998,8 @@ export default function PondManagement({
               <p className="text-slate-300 text-sm">Delete <strong className="text-white">{guide.title}</strong>?</p>
               <p className="text-red-400 text-xs">This cannot be undone.</p>
               <div className="flex justify-end gap-2">
-                <Btn variant="secondary" onClick={() => setConfirmDeleteGuideId(null)} disabled={!!deletingGuideId}>Cancel</Btn>
-                <Btn variant="danger" onClick={confirmDeleteGuide} disabled={!!deletingGuideId}><Trash2 size={14} />{deletingGuideId ? 'Deleting…' : 'Delete'}</Btn>
+                <Btn variant="secondary" onClick={() => setConfirmDeleteGuideId(null)}>Cancel</Btn>
+                <Btn variant="danger" onClick={confirmDeleteGuide}><Trash2 size={14} />Delete</Btn>
               </div>
             </div>
           ) : null

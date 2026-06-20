@@ -341,7 +341,12 @@ export function mergePondData(local, remote) {
     maintenanceLogs: mergePondRecords(local.maintenanceLogs, remote.maintenanceLogs),
     treatmentLogs: mergePondRecords(local.treatmentLogs, remote.treatmentLogs),
     reminders: mergedReminders,
-    treatmentGuides: mergePondRecords(local.treatmentGuides, remote.treatmentGuides),
+    // Last-writer-wins for treatmentGuides so intentional deletions are not
+    // resurrected by the additive union that mergePondRecords performs.
+    // Fall back to the other side only if the winner has null (never saved).
+    treatmentGuides: localNewer
+      ? (local.treatmentGuides ?? remote.treatmentGuides)
+      : (remote.treatmentGuides ?? local.treatmentGuides),
     updatedAt: localDoneWins || localNewer ? local.updatedAt : remote.updatedAt,
   }
 }
