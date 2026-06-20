@@ -2,8 +2,8 @@ import { sortInvoices } from './invoiceDesign'
 import { sortStockLog } from './stockLogSort'
 import { CUSTOMER_KOI_STATUS } from '../data/constants'
 import { pickPersistedImageRef } from './farmImage'
-import { normalizeReminderRecord } from './pondOps'
 import { resolveKoiConflict } from './koiConflict'
+export { mergePondRecords, mergePondData } from './pondMerge'
 
 function ts(record) {
   if (!record?.updatedAt) return 0
@@ -286,67 +286,5 @@ export function mergeKoiFish(local = [], remote = [], pendingDeleteIds = []) {
   return merged
 }
 
-function reminderIsDone(row) {
-  if (!row) return false
-  return String(row.status || 'pending').toLowerCase() === 'done'
-}
-
-const POND_RECORD_MERGE_GRACE_MS = 15000
-
-function mergePondRecords(local = [], remote = [], { preferDone = false } = {}) {
-  const map = new Map()
-  const pick = (a, b) => {
-    if (!a) return b
-    if (!b) return a
-    if (preferDone) {
-      const aDone = reminderIsDone(a)
-      const bDone = reminderIsDone(b)
-      if (aDone && !bDone) return a
-      if (bDone && !aDone) return b
-    }
-    const lt = ts(a)
-    const rt = ts(b)
-    if (lt >= rt) return a
-    if (rt - lt < POND_RECORD_MERGE_GRACE_MS) return a
-    return b
-  }
-
-  for (const row of remote || []) {
-    if (row?.id == null) continue
-    map.set(String(row.id), row)
-  }
-  for (const row of local || []) {
-    if (row?.id == null) continue
-    const id = String(row.id)
-    const existing = map.get(id)
-    map.set(id, existing ? pick(row, existing) : row)
-  }
-  const merged = [...map.values()]
-  return preferDone ? merged.map(normalizeReminderRecord) : merged
-}
-
-/** Merge pond blob field-by-field so reminder "done" and log edits are not wiped by cloud pull. */
-export function mergePondData(local, remote) {
-  if (!remote || typeof remote !== 'object') return local
-  if (!local || typeof local !== 'object') return remote
-  const localNewer = ts(local) >= ts(remote)
-  const mergedReminders = mergePondRecords(local.reminders, remote.reminders, { preferDone: true })
-  const localDoneWins = (local.reminders || []).some((row) => {
-    const remoteRow = (remote.reminders || []).find((r) => String(r.id) === String(row.id))
-    return reminderIsDone(row) && !reminderIsDone(remoteRow)
-  })
-  return {
-    ...(localNewer ? local : remote),
-    ponds: mergePondRecords(local.ponds, remote.ponds),
-    maintenanceLogs: mergePondRecords(local.maintenanceLogs, remote.maintenanceLogs),
-    treatmentLogs: mergePondRecords(local.treatmentLogs, remote.treatmentLogs),
-    reminders: mergedReminders,
-    // Last-writer-wins for treatmentGuides so intentional deletions are not
-    // resurrected by the additive union that mergePondRecords performs.
-    // Fall back to the other side only if the winner has null (never saved).
-    treatmentGuides: localNewer
-      ? (local.treatmentGuides ?? remote.treatmentGuides)
-      : (remote.treatmentGuides ?? local.treatmentGuides),
-    updatedAt: localDoneWins || localNewer ? local.updatedAt : remote.updatedAt,
-  }
-}
+// mergePondRecords and mergePondData live in ./pondMerge (re-exported above)
+// so the pond merge logic can be unit-tested without bundler transforms.
