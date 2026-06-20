@@ -470,30 +470,37 @@ export default function KoiFish({
       discountType: 'none',
       discountValue: '',
     } : null
-    let newInvoiceId = null
+    setSaving(true)
     try {
-      setSaving(true)
-      if (saleDraft) {
-        newInvoiceId = await onCreateInvoiceFromSale?.(saleDraft)
-      }
+      // Step 1 (keep only): create customer koi record first — if this fails, nothing else ran
       if (sellForm.disposition === 'keep') {
         await onKoiSold?.(currentKoi, customer, soldPrice, soldDate, {
           disposition: sellForm.disposition,
           keepPondName,
         })
       }
-      if (isSupabaseConfigured) {
-        await writeListCloudFirst({
-          snapshot: snapshotKoi,
-          next: nextList,
-          setState: setKoiList,
-          flush: onSyncKoiFish,
-          isCloudConfigured: true,
-        })
-      } else {
-        setKoiList(nextList)
+
+      // Step 2: mark koi as sold — if this fails, revert the customer koi record above
+      try {
+        if (isSupabaseConfigured) {
+          await writeListCloudFirst({
+            snapshot: snapshotKoi,
+            next: nextList,
+            setState: setKoiList,
+            flush: onSyncKoiFish,
+            isCloudConfigured: true,
+          })
+        } else {
+          setKoiList(nextList)
+        }
+      } catch (koiErr) {
+        if (sellForm.disposition === 'keep') {
+          try { await onKoiRefund?.(soldPatch, { reason: 'Koi list sync failed during sale' }) } catch {}
+        }
+        throw koiErr
       }
-      setStatusFilter('sold')
+
+      // Sale is complete — close modal and notify before the optional invoice step
       const dispositionNote = sellForm.disposition === 'keep'
         ? `kept at ${keepPondName} — added to Customer Koi`
         : 'taken away by customer'
@@ -502,23 +509,17 @@ export default function KoiFish({
         title: 'Koi Sold',
         message: `${currentKoi.id} sold to ${customer?.name || 'customer'} for ${formatSGD(soldPrice)} (${dispositionNote})`,
       })
+      setStatusFilter('sold')
       setSellKoi(null)
+
+      // Step 3 (optional): create invoice — runs after sale is confirmed.
+      // If this fails, the sale is already complete; handleCreateInvoiceFromSale
+      // saves the draft and opens it in the invoice tab for the user to finish.
+      if (saleDraft) {
+        try { await onCreateInvoiceFromSale?.(saleDraft) } catch {}
+      }
     } catch (err) {
       setKoiList(snapshotKoi)
-      if (newInvoiceId && onAbortKoiSaleInvoice) {
-        try {
-          await onAbortKoiSaleInvoice(newInvoiceId)
-        } catch {
-          /* best-effort invoice rollback */
-        }
-      }
-      if (sellForm.disposition === 'keep' && isSupabaseConfigured) {
-        try {
-          await onKoiRefund?.(soldPatch, { reason: 'Cloud sync failed' })
-        } catch {
-          /* best-effort rollback of keep-at-farm customer koi */
-        }
-      }
       addNotification({
         type: 'error',
         title: 'Sale Not Completed',
