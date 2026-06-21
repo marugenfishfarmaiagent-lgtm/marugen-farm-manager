@@ -5572,20 +5572,18 @@ function DeliveryModule({
 
       <Modal
         open={!!deleteConfirm}
-        onClose={() => setDeleteConfirm(null)}
+        onClose={() => { if (!deletingDelivery) setDeleteConfirm(null); }}
         title="Delete Delivery"
         size="sm"
-        footer={deleteConfirm && (
-          <ConfirmModalFooter onCancel={() => { if (!deletingDelivery) setDeleteConfirm(null); }} cancelDisabled={deletingDelivery}>
-            <Btn variant="danger" onClick={confirmDeleteDelivery} disabled={deletingDelivery} className="w-full sm:w-auto justify-center">
-              <><Trash2 size={14} />{deletingDelivery ? 'Deleting…' : 'Delete'}</>
-            </Btn>
-          </ConfirmModalFooter>
-        )}
       >
         {deleteConfirm && (
           <div className="space-y-4">
-            <p className="text-slate-300 text-sm">
+            <div className="flex justify-center">
+              <div className="w-14 h-14 rounded-full bg-red-500/15 flex items-center justify-center">
+                <Trash2 size={26} className="text-red-400" />
+              </div>
+            </div>
+            <p className="text-slate-300 text-sm text-center">
               Delete <strong className="text-white font-mono">{deleteConfirm.id}</strong> for {deleteConfirm.customerName}? This cannot be undone.
             </p>
             {deleteConfirm.invoiceId && (
@@ -5598,6 +5596,12 @@ function DeliveryModule({
                 This delivery is still {deleteConfirm.status === "transit" ? "in transit" : "scheduled"}.
               </p>
             )}
+            <div className="flex flex-col gap-2">
+              <Btn variant="danger" onClick={confirmDeleteDelivery} disabled={deletingDelivery} className="w-full justify-center">
+                <Trash2 size={14} />{deletingDelivery ? 'Deleting…' : 'Delete Delivery'}
+              </Btn>
+              <Btn variant="secondary" onClick={() => { if (!deletingDelivery) setDeleteConfirm(null); }} disabled={deletingDelivery} className="w-full justify-center">Cancel</Btn>
+            </div>
           </div>
         )}
       </Modal>
@@ -5992,17 +5996,15 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
         title="Delete Event"
         size="sm"
         backdropClose={!deletingEvent}
-        footer={deleteConfirm && (
-          <ConfirmModalFooter onCancel={() => { if (!deletingEvent) setDeleteConfirm(null); }} cancelDisabled={deletingEvent}>
-            <Btn variant="danger" onClick={confirmDeleteEvent} disabled={deletingEvent} className="w-full sm:w-auto justify-center">
-              <><Trash2 size={14} />{deletingEvent ? 'Deleting…' : 'Delete'}</>
-            </Btn>
-          </ConfirmModalFooter>
-        )}
       >
         {deleteConfirm && (
           <div className="space-y-4">
-            <p className="text-slate-300 text-sm">
+            <div className="flex justify-center">
+              <div className="w-14 h-14 rounded-full bg-red-500/15 flex items-center justify-center">
+                <Trash2 size={26} className="text-red-400" />
+              </div>
+            </div>
+            <p className="text-slate-300 text-sm text-center">
               Delete <strong className="text-white">&quot;{deleteConfirm.title}&quot;</strong> on {deleteConfirm.date}? This cannot be undone.
             </p>
             {deleteConfirm.date >= todayStr && (
@@ -6010,6 +6012,12 @@ function CalendarModule({ events, setEvents, onNavigateToPonds, addNotification,
                 This event is scheduled for today or in the future.
               </p>
             )}
+            <div className="flex flex-col gap-2">
+              <Btn variant="danger" onClick={confirmDeleteEvent} disabled={deletingEvent} className="w-full justify-center">
+                <Trash2 size={14} />{deletingEvent ? 'Deleting…' : 'Delete Event'}
+              </Btn>
+              <Btn variant="secondary" onClick={() => { if (!deletingEvent) setDeleteConfirm(null); }} disabled={deletingEvent} className="w-full justify-center">Cancel</Btn>
+            </div>
           </div>
         )}
       </Modal>
@@ -6581,20 +6589,18 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
 
       <Modal
         open={!!deleteConfirm}
-        onClose={() => setDeleteConfirm(null)}
+        onClose={() => { if (!deletingUser) setDeleteConfirm(null); }}
         title="Remove User"
         size="sm"
-        footer={deleteConfirm && (
-          <ConfirmModalFooter onCancel={() => { if (!deletingUser) setDeleteConfirm(null); }} cancelDisabled={deletingUser}>
-            <Btn variant="danger" onClick={confirmDeleteUser} disabled={deletingUser} className="w-full sm:w-auto justify-center">
-              <><Trash2 size={14} />{deletingUser ? 'Removing…' : 'Remove'}</>
-            </Btn>
-          </ConfirmModalFooter>
-        )}
       >
         {deleteConfirm && (
           <div className="space-y-4">
-            <p className="text-slate-300 text-sm">
+            <div className="flex justify-center">
+              <div className="w-14 h-14 rounded-full bg-red-500/15 flex items-center justify-center">
+                <Trash2 size={26} className="text-red-400" />
+              </div>
+            </div>
+            <p className="text-slate-300 text-sm text-center">
               Remove <strong className="text-white">{deleteConfirm.name}</strong> permanently? Their login sessions will be revoked.
             </p>
             {deleteConfirm.role === "owner" && (
@@ -6602,6 +6608,12 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
                 This user is an owner. Ensure another active owner remains before removing them.
               </p>
             )}
+            <div className="flex flex-col gap-2">
+              <Btn variant="danger" onClick={confirmDeleteUser} disabled={deletingUser} className="w-full justify-center">
+                <Trash2 size={14} />{deletingUser ? 'Removing…' : 'Remove User'}
+              </Btn>
+              <Btn variant="secondary" onClick={() => { if (!deletingUser) setDeleteConfirm(null); }} disabled={deletingUser} className="w-full justify-center">Cancel</Btn>
+            </div>
           </div>
         )}
       </Modal>
@@ -6968,17 +6980,25 @@ function ChatModule({ aiContext, messages, setMessages, isMobile = false }) {
         onClose={handleConfirmDecline}
         title="Continue AI Usage?"
         size="sm"
-        footer={(
-          <ConfirmModalFooter onCancel={handleConfirmDecline} cancelLabel="Not now">
-            <Btn onClick={handleConfirmContinue} disabled={loading} className="w-full sm:w-auto justify-center"><Check size={14} />Yes, continue</Btn>
-          </ConfirmModalFooter>
-        )}
       >
-        <p className="text-slate-300 text-sm mb-3">{confirmMsg}</p>
-        <p className="text-slate-500 text-xs">
-          Used today: <span className="text-amber-400 font-bold">{formatTokens(usage?.tokens ?? AI_DAILY_FREE_TOKENS)}/{formatTokens(AI_DAILY_FREE_TOKENS)}</span> tokens.
-          Extra usage may incur API costs.
-        </p>
+        <div className="space-y-4">
+          <div className="flex justify-center">
+            <div className="w-14 h-14 rounded-full bg-amber-500/15 flex items-center justify-center">
+              <Zap size={26} className="text-amber-400" />
+            </div>
+          </div>
+          <div className="text-center space-y-1.5">
+            <p className="text-slate-300 text-sm">{confirmMsg}</p>
+            <p className="text-slate-500 text-xs">
+              Used today: <span className="text-amber-400 font-bold">{formatTokens(usage?.tokens ?? AI_DAILY_FREE_TOKENS)}/{formatTokens(AI_DAILY_FREE_TOKENS)}</span> tokens.
+              Extra usage may incur API costs.
+            </p>
+          </div>
+          <div className="flex flex-col gap-2">
+            <Btn onClick={handleConfirmContinue} disabled={loading} className="w-full justify-center"><Check size={14} />Yes, continue</Btn>
+            <Btn variant="secondary" onClick={handleConfirmDecline} className="w-full justify-center">Not now</Btn>
+          </div>
+        </div>
       </Modal>
 
       <Modal
@@ -6986,13 +7006,19 @@ function ChatModule({ aiContext, messages, setMessages, isMobile = false }) {
         onClose={() => setClearConfirmOpen(false)}
         title="Clear Chat"
         size="sm"
-        footer={(
-          <ConfirmModalFooter onCancel={() => setClearConfirmOpen(false)}>
-            <Btn variant="danger" onClick={clearChat} className="w-full sm:w-auto justify-center"><Trash2 size={14} />Clear</Btn>
-          </ConfirmModalFooter>
-        )}
       >
-        <p className="text-slate-300 text-sm">Clear this chat history? This cannot be undone.</p>
+        <div className="space-y-5">
+          <div className="flex justify-center">
+            <div className="w-14 h-14 rounded-full bg-red-500/15 flex items-center justify-center">
+              <Trash2 size={26} className="text-red-400" />
+            </div>
+          </div>
+          <p className="text-slate-300 text-sm text-center">Clear this chat history? This cannot be undone.</p>
+          <div className="flex flex-col gap-2">
+            <Btn variant="danger" onClick={clearChat} className="w-full justify-center"><Trash2 size={14} />Clear Chat</Btn>
+            <Btn variant="secondary" onClick={() => setClearConfirmOpen(false)} className="w-full justify-center">Cancel</Btn>
+          </div>
+        </div>
       </Modal>
 
       <Modal
@@ -7000,24 +7026,30 @@ function ChatModule({ aiContext, messages, setMessages, isMobile = false }) {
         onClose={handleActionCancel}
         title="Confirm Action"
         size="sm"
-        footer={(
-          <ConfirmModalFooter onCancel={handleActionCancel}>
-            <Btn variant="danger" onClick={handleActionConfirm} disabled={loading} className="w-full sm:w-auto justify-center"><Check size={14} />Yes, proceed</Btn>
-          </ConfirmModalFooter>
-        )}
       >
-        <p className="text-slate-300 text-sm mb-4 whitespace-pre-wrap">{actionConfirmMsg}</p>
-        {pendingActionExecuted.length > 0 && (
-          <div className="mb-4 p-3 rounded-lg bg-slate-800/80 border border-slate-600 text-xs space-y-1">
-            <p className="text-slate-400 font-semibold mb-1">Already completed:</p>
-            {pendingActionExecuted.map((a, idx) => (
-              <p key={idx} className={a.success ? "text-emerald-400" : "text-red-400"}>
-                {a.success ? "✓" : "✗"} {a.message || a.error || a.name}
-              </p>
-            ))}
+        <div className="space-y-4">
+          <div className="flex justify-center">
+            <div className="w-14 h-14 rounded-full bg-amber-500/15 flex items-center justify-center">
+              <AlertTriangle size={26} className="text-amber-400" />
+            </div>
           </div>
-        )}
-        <p className="text-amber-400/90 text-xs">This may change or delete data. Only proceed if you intend to do this.</p>
+          <p className="text-slate-300 text-sm whitespace-pre-wrap">{actionConfirmMsg}</p>
+          {pendingActionExecuted.length > 0 && (
+            <div className="p-3 rounded-lg bg-slate-800/80 border border-slate-600 text-xs space-y-1">
+              <p className="text-slate-400 font-semibold mb-1">Already completed:</p>
+              {pendingActionExecuted.map((a, idx) => (
+                <p key={idx} className={a.success ? "text-emerald-400" : "text-red-400"}>
+                  {a.success ? "✓" : "✗"} {a.message || a.error || a.name}
+                </p>
+              ))}
+            </div>
+          )}
+          <p className="text-amber-400/90 text-xs">This may change or delete data. Only proceed if you intend to do this.</p>
+          <div className="flex flex-col gap-2">
+            <Btn variant="danger" onClick={handleActionConfirm} disabled={loading} className="w-full justify-center"><Check size={14} />Yes, proceed</Btn>
+            <Btn variant="secondary" onClick={handleActionCancel} className="w-full justify-center">Cancel</Btn>
+          </div>
+        </div>
       </Modal>
 
       <Card className={`flex-1 overflow-hidden flex flex-col min-h-0 ${isMobile ? "rounded-none border-x-0 border-b-0" : ""}`}>
