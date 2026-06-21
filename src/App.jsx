@@ -161,25 +161,24 @@ function AccountsMarkConfirmModal({ open, recordLabel, currentlyBooked, onCancel
       title={currentlyBooked ? "Remove accounts mark?" : "Mark in accounts?"}
       size="sm"
       priority
-      footer={(
-        <ConfirmModalFooter onCancel={onCancel}>
-          <Btn variant={currentlyBooked ? "danger" : "success"} onClick={onSubmit} className="w-full sm:w-auto justify-center">
-            <BookCheck size={14} />{currentlyBooked ? "Remove mark" : "Submit"}
-          </Btn>
-        </ConfirmModalFooter>
-      )}
     >
-      <div className="space-y-3 text-center">
+      <div className="space-y-5">
         <div className="flex justify-center">
           <div className={`w-14 h-14 rounded-full flex items-center justify-center ${currentlyBooked ? 'bg-red-500/15' : 'bg-emerald-500/15'}`}>
             <BookCheck size={26} className={currentlyBooked ? 'text-red-400' : 'text-emerald-400'} />
           </div>
         </div>
-        <p className="text-slate-300 text-sm">
+        <p className="text-slate-300 text-sm text-center">
           {currentlyBooked
             ? <>Remove <strong className="text-white">{recordLabel}</strong> from accounts? It will show as <span className="text-amber-300">Pending accounts</span> again.</>
             : <>Confirm <strong className="text-white">{recordLabel}</strong> has been entered in your external accounting app.</>}
         </p>
+        <div className="flex flex-col gap-2">
+          <Btn variant={currentlyBooked ? "danger" : "success"} onClick={onSubmit} className="w-full justify-center">
+            <BookCheck size={14} />{currentlyBooked ? "Remove mark" : "Submit"}
+          </Btn>
+          <Btn variant="secondary" onClick={onCancel} className="w-full justify-center">Cancel</Btn>
+        </div>
       </div>
     </Modal>
   );
@@ -199,24 +198,23 @@ function InvoiceCancelConfirmModal({ open, invoiceId, customerName, onCancel, on
       size="sm"
       priority
       backdropClose={!loading}
-      footer={(
-        <ConfirmModalFooter onCancel={handleKeep} cancelLabel="Keep invoice" cancelDisabled={loading}>
-          <Btn variant="danger" onClick={onConfirm} disabled={loading} className="w-full sm:w-auto justify-center">
-            {loading ? <><Loader2 size={14} className="animate-spin" />Cancelling...</> : <><XCircle size={14} />Cancel invoice</>}
-          </Btn>
-        </ConfirmModalFooter>
-      )}
     >
-      <div className="space-y-3 text-center">
+      <div className="space-y-5">
         <div className="flex justify-center">
           <div className="w-14 h-14 rounded-full bg-red-500/15 flex items-center justify-center">
             <XCircle size={26} className="text-red-400" />
           </div>
         </div>
-        <p className="text-slate-300 text-sm">
+        <p className="text-slate-300 text-sm text-center">
           Cancel <strong className="text-white">{invoiceId}</strong> for <strong className="text-white">{customerName}</strong>?
           Inventory and fish stock will be restored where applicable. This cannot be undone.
         </p>
+        <div className="flex flex-col gap-2">
+          <Btn variant="danger" onClick={onConfirm} disabled={loading} className="w-full justify-center">
+            {loading ? <><Loader2 size={14} className="animate-spin" />Cancelling…</> : <><XCircle size={14} />Cancel invoice</>}
+          </Btn>
+          <Btn variant="secondary" onClick={handleKeep} disabled={loading} className="w-full justify-center">Keep invoice</Btn>
+        </div>
       </div>
     </Modal>
   );
@@ -1745,28 +1743,27 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       {/* Delete Product Modal */}
       <Modal
         open={!!deleteProduct}
-        onClose={() => setDeleteProduct(null)}
+        onClose={() => { if (!deletingProduct) setDeleteProduct(null); }}
         title="Delete Product"
         size="sm"
-        footer={deleteProduct && (
-          <ConfirmModalFooter onCancel={() => { if (!deletingProduct) setDeleteProduct(null); }} cancelDisabled={deletingProduct}>
-            <Btn variant="danger" onClick={confirmDeleteProduct} disabled={deletingProduct} className="w-full sm:w-auto justify-center">
-              <><Trash2 size={14} />{deletingProduct ? 'Deleting…' : 'Delete'}</>
-            </Btn>
-          </ConfirmModalFooter>
-        )}
       >
         {deleteProduct && (
-          <div className="space-y-3 text-center">
+          <div className="space-y-5">
             <div className="flex justify-center">
               <div className="w-14 h-14 rounded-full bg-red-500/15 flex items-center justify-center">
                 <Trash2 size={26} className="text-red-400" />
               </div>
             </div>
-            <p className="text-slate-300 text-sm">
+            <p className="text-slate-300 text-sm text-center">
               Remove <strong className="text-white">{deleteProduct.name}</strong> from inventory?
               Activity log history for this product will be kept.
             </p>
+            <div className="flex flex-col gap-2">
+              <Btn variant="danger" onClick={confirmDeleteProduct} disabled={deletingProduct} className="w-full justify-center">
+                <Trash2 size={14} />{deletingProduct ? 'Deleting…' : 'Delete Product'}
+              </Btn>
+              <Btn variant="secondary" onClick={() => { if (!deletingProduct) setDeleteProduct(null); }} disabled={deletingProduct} className="w-full justify-center">Cancel</Btn>
+            </div>
           </div>
         )}
       </Modal>
@@ -3825,16 +3822,9 @@ function CustomerModule({
 
       <Modal
         open={!!deleteCustomer}
-        onClose={() => setDeleteCustomer(null)}
+        onClose={() => { if (!deletingCustomer) setDeleteCustomer(null); }}
         title="Delete Customer"
         size="sm"
-        footer={deleteCustomer && (
-          <ConfirmModalFooter onCancel={() => { if (!deletingCustomer) setDeleteCustomer(null); }} cancelDisabled={deletingCustomer}>
-            <Btn variant="danger" onClick={confirmDeleteCustomer} disabled={deletingCustomer} className="w-full sm:w-auto justify-center">
-              <><Trash2 size={14} />{deletingCustomer ? 'Deleting…' : 'Delete'}</>
-            </Btn>
-          </ConfirmModalFooter>
-        )}
       >
         {deleteCustomer && (
           <div className="space-y-4">
@@ -3851,6 +3841,12 @@ function CustomerModule({
                 {warning} — past records may still reference this customer.
               </p>
             ))}
+            <div className="flex flex-col gap-2">
+              <Btn variant="danger" onClick={confirmDeleteCustomer} disabled={deletingCustomer} className="w-full justify-center">
+                <Trash2 size={14} />{deletingCustomer ? 'Deleting…' : 'Delete Customer'}
+              </Btn>
+              <Btn variant="secondary" onClick={() => { if (!deletingCustomer) setDeleteCustomer(null); }} disabled={deletingCustomer} className="w-full justify-center">Cancel</Btn>
+            </div>
           </div>
         )}
       </Modal>
@@ -4505,13 +4501,6 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
         size="sm"
         priority
         backdropClose={!deletingExpense}
-        footer={deleteConfirm && (
-          <ConfirmModalFooter onCancel={() => { if (!deletingExpense) setDeleteConfirm(null); }} cancelDisabled={deletingExpense}>
-            <Btn variant="danger" onClick={confirmDeleteExpense} disabled={deletingExpense} className="w-full sm:w-auto justify-center">
-              <><Trash2 size={14} />{deletingExpense ? 'Deleting…' : 'Delete'}</>
-            </Btn>
-          </ConfirmModalFooter>
-        )}
       >
         {deleteConfirm && (
           <div className="space-y-4">
@@ -4528,6 +4517,12 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
                 This receipt is marked as entered in accounts. Delete only if it was uploaded by mistake.
               </p>
             )}
+            <div className="flex flex-col gap-2">
+              <Btn variant="danger" onClick={confirmDeleteExpense} disabled={deletingExpense} className="w-full justify-center">
+                <Trash2 size={14} />{deletingExpense ? 'Deleting…' : 'Delete Receipt'}
+              </Btn>
+              <Btn variant="secondary" onClick={() => { if (!deletingExpense) setDeleteConfirm(null); }} disabled={deletingExpense} className="w-full justify-center">Cancel</Btn>
+            </div>
           </div>
         )}
       </Modal>
