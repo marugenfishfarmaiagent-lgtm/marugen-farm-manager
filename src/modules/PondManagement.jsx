@@ -915,14 +915,14 @@ export default function PondManagement({
             <Select label="Type" value={editPond.type} onChange={(e) => setEditPond((p) => ({ ...p, type: e.target.value }))} options={POND_TYPES} className="mt-3" />
             <Input label="Volume (ton)" type="number" value={editPond.volume} onChange={(e) => setEditPond((p) => ({ ...p, volume: e.target.value }))} className="mt-3" min="0" step="0.1" />
             <Textarea label="Notes" value={editPond.notes || ''} onChange={(e) => setEditPond((p) => ({ ...p, notes: e.target.value }))} className="mt-3" />
-            <div className="modal-actions mt-4 flex justify-between gap-2">
-              {canDelete && (
-                <Btn variant="danger" onClick={() => deletePond(editPond.id)}><Trash2 size={14} />Delete Pond</Btn>
-              )}
-              <div className="flex gap-2 ml-auto">
-                <Btn variant="secondary" onClick={() => setEditPond(null)} disabled={savingPond}>Cancel</Btn>
-                <Btn onClick={saveEditPond} disabled={savingPond}>{savingPond ? 'Saving…' : 'Save'}</Btn>
+            <div className="modal-actions mt-4 flex flex-col gap-2 sm:flex-row sm:justify-between">
+              <div className="flex gap-2 sm:order-last">
+                <Btn variant="secondary" onClick={() => setEditPond(null)} disabled={savingPond} className="flex-1 sm:flex-none justify-center">Cancel</Btn>
+                <Btn onClick={saveEditPond} disabled={savingPond} className="flex-1 sm:flex-none justify-center">{savingPond ? 'Saving…' : 'Save'}</Btn>
               </div>
+              {canDelete && (
+                <Btn variant="danger" onClick={() => deletePond(editPond.id)} className="w-full sm:w-auto justify-center"><Trash2 size={14} />Delete Pond</Btn>
+              )}
             </div>
           </>
         )}
@@ -1004,12 +1004,19 @@ export default function PondManagement({
         {confirmDeleteGuideId && (() => {
           const guide = displayGuides.find((g) => g.id === confirmDeleteGuideId)
           return guide ? (
-            <div className="space-y-4">
-              <p className="text-slate-300 text-sm">Delete <strong className="text-white">{guide.title}</strong>?</p>
-              <p className="text-red-400 text-xs">This cannot be undone.</p>
-              <div className="flex justify-end gap-2">
-                <Btn variant="secondary" onClick={() => setConfirmDeleteGuideId(null)}>Cancel</Btn>
-                <Btn variant="danger" onClick={confirmDeleteGuide}><Trash2 size={14} />Delete</Btn>
+            <div className="space-y-5">
+              <div className="flex justify-center">
+                <div className="w-14 h-14 rounded-full bg-red-500/15 flex items-center justify-center">
+                  <Trash2 size={26} className="text-red-400" />
+                </div>
+              </div>
+              <div className="text-center space-y-1.5">
+                <p className="text-slate-200 text-sm">Delete <strong className="text-white">{guide.title}</strong>?</p>
+                <p className="text-red-400 text-xs">This cannot be undone.</p>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Btn variant="danger" onClick={confirmDeleteGuide} className="w-full justify-center"><Trash2 size={14} />Delete Guide</Btn>
+                <Btn variant="secondary" onClick={() => setConfirmDeleteGuideId(null)} className="w-full justify-center">Cancel</Btn>
               </div>
             </div>
           ) : null
@@ -1020,12 +1027,20 @@ export default function PondManagement({
         {confirmDeletePondId && (() => {
           const pond = findPondById(ponds, confirmDeletePondId)
           return pond ? (
-            <div className="space-y-4">
-              <p className="text-slate-300 text-sm">Delete <strong className="text-white">{pond.name}</strong> and all its maintenance logs, treatment logs, and reminders?</p>
-              <p className="text-red-400 text-xs">This cannot be undone.</p>
-              <div className="flex justify-end gap-2">
-                <Btn variant="secondary" onClick={() => setConfirmDeletePondId(null)} disabled={deletingPond}>Cancel</Btn>
-                <Btn variant="danger" onClick={confirmDeletePond} disabled={deletingPond}><Trash2 size={14} />{deletingPond ? 'Deleting…' : 'Delete'}</Btn>
+            <div className="space-y-5">
+              <div className="flex justify-center">
+                <div className="w-14 h-14 rounded-full bg-red-500/15 flex items-center justify-center">
+                  <Trash2 size={26} className="text-red-400" />
+                </div>
+              </div>
+              <div className="text-center space-y-1.5">
+                <p className="text-slate-200 text-sm">Delete <strong className="text-white">{pond.name}</strong>?</p>
+                <p className="text-slate-400 text-xs">All maintenance logs, treatment logs, and reminders will be removed.</p>
+                <p className="text-red-400 text-xs">This cannot be undone.</p>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Btn variant="danger" onClick={confirmDeletePond} disabled={deletingPond} className="w-full justify-center"><Trash2 size={14} />{deletingPond ? 'Deleting…' : 'Delete Pond'}</Btn>
+                <Btn variant="secondary" onClick={() => setConfirmDeletePondId(null)} disabled={deletingPond} className="w-full justify-center">Cancel</Btn>
               </div>
             </div>
           ) : null

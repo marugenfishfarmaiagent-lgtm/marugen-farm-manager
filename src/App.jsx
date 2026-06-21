@@ -169,11 +169,18 @@ function AccountsMarkConfirmModal({ open, recordLabel, currentlyBooked, onCancel
         </ConfirmModalFooter>
       )}
     >
-      <p className="text-slate-300 text-sm">
-        {currentlyBooked
-          ? <>Remove <strong className="text-white">{recordLabel}</strong> from accounts? It will show as <span className="text-amber-300">Pending accounts</span> again.</>
-          : <>Confirm <strong className="text-white">{recordLabel}</strong> has been entered in your external accounting app.</>}
-      </p>
+      <div className="space-y-3 text-center">
+        <div className="flex justify-center">
+          <div className={`w-14 h-14 rounded-full flex items-center justify-center ${currentlyBooked ? 'bg-red-500/15' : 'bg-emerald-500/15'}`}>
+            <BookCheck size={26} className={currentlyBooked ? 'text-red-400' : 'text-emerald-400'} />
+          </div>
+        </div>
+        <p className="text-slate-300 text-sm">
+          {currentlyBooked
+            ? <>Remove <strong className="text-white">{recordLabel}</strong> from accounts? It will show as <span className="text-amber-300">Pending accounts</span> again.</>
+            : <>Confirm <strong className="text-white">{recordLabel}</strong> has been entered in your external accounting app.</>}
+        </p>
+      </div>
     </Modal>
   );
 }
@@ -200,10 +207,17 @@ function InvoiceCancelConfirmModal({ open, invoiceId, customerName, onCancel, on
         </ConfirmModalFooter>
       )}
     >
-      <p className="text-slate-300 text-sm">
-        Cancel <strong className="text-white">{invoiceId}</strong> for <strong className="text-white">{customerName}</strong>?
-        Inventory and fish stock will be restored where applicable. This cannot be undone.
-      </p>
+      <div className="space-y-3 text-center">
+        <div className="flex justify-center">
+          <div className="w-14 h-14 rounded-full bg-red-500/15 flex items-center justify-center">
+            <XCircle size={26} className="text-red-400" />
+          </div>
+        </div>
+        <p className="text-slate-300 text-sm">
+          Cancel <strong className="text-white">{invoiceId}</strong> for <strong className="text-white">{customerName}</strong>?
+          Inventory and fish stock will be restored where applicable. This cannot be undone.
+        </p>
+      </div>
     </Modal>
   );
 }
@@ -357,12 +371,12 @@ function Modal({ open, onClose, title, children, size = "md", priority = false, 
       )}
       {open && (
         <div
-          className={`fixed inset-0 ${zClass} flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm touch-manipulation`}
+          className={`fixed inset-0 ${zClass} flex ${isCompact ? 'items-center p-4' : 'items-end sm:items-center p-0 sm:p-4'} justify-center bg-black/70 backdrop-blur-sm touch-manipulation`}
           onPointerDown={handleBackdropPointerDown}
           onPointerUp={handleBackdropPointerUp}
         >
           <div
-            className={`bg-slate-800 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full ${sizes[size]} ${panelHeightClass} flex flex-col shadow-2xl overflow-hidden`}
+            className={`bg-slate-800 border border-slate-700 ${isCompact ? 'rounded-2xl' : 'rounded-t-2xl sm:rounded-2xl'} w-full ${sizes[size]} ${panelHeightClass} flex flex-col shadow-2xl overflow-hidden`}
             onPointerDown={(e) => e.stopPropagation()}
             onPointerUp={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
@@ -1743,10 +1757,17 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
         )}
       >
         {deleteProduct && (
-          <p className="text-slate-300 text-sm">
-            Remove <strong className="text-white">{deleteProduct.name}</strong> from inventory?
-            Activity log history for this product will be kept.
-          </p>
+          <div className="space-y-3 text-center">
+            <div className="flex justify-center">
+              <div className="w-14 h-14 rounded-full bg-red-500/15 flex items-center justify-center">
+                <Trash2 size={26} className="text-red-400" />
+              </div>
+            </div>
+            <p className="text-slate-300 text-sm">
+              Remove <strong className="text-white">{deleteProduct.name}</strong> from inventory?
+              Activity log history for this product will be kept.
+            </p>
+          </div>
         )}
       </Modal>
 
@@ -3817,7 +3838,12 @@ function CustomerModule({
       >
         {deleteCustomer && (
           <div className="space-y-4">
-            <p className="text-slate-300 text-sm">
+            <div className="flex justify-center">
+              <div className="w-14 h-14 rounded-full bg-red-500/15 flex items-center justify-center">
+                <Trash2 size={26} className="text-red-400" />
+              </div>
+            </div>
+            <p className="text-slate-300 text-sm text-center">
               Remove <strong className="text-white">{deleteCustomer.name}</strong> from your customer list? This cannot be undone.
             </p>
             {getCustomerDeleteWarnings(deleteCustomer, { invoices, deliveries }).map((warning) => (
@@ -4489,7 +4515,12 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
       >
         {deleteConfirm && (
           <div className="space-y-4">
-            <p className="text-slate-300 text-sm">
+            <div className="flex justify-center">
+              <div className="w-14 h-14 rounded-full bg-red-500/15 flex items-center justify-center">
+                <Trash2 size={26} className="text-red-400" />
+              </div>
+            </div>
+            <p className="text-slate-300 text-sm text-center">
               Delete <strong className="text-white">{deleteConfirm.imageName || deleteConfirm.date || "this receipt"}</strong>? This cannot be undone.
             </p>
             {deleteConfirm.booked && (

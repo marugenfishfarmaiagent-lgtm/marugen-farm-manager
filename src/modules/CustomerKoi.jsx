@@ -634,7 +634,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
 
         <div className="flex-1 min-w-0 space-y-4">
           {selectedCustomerId === 'all' ? (
-            <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
               {[
                 ['all', 'Total', stats.total, 'text-white'],
                 [CUSTOMER_KOI_STATUS.IN_POND, 'In pond', stats.inPond, 'text-emerald-400'],
@@ -833,9 +833,9 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
               options={CUSTOMER_KOI_DEATH_CAUSES.map((c) => ({ value: c, label: c }))} />
             <PhotoPicker photo={deathForm.deathPhoto} onPick={(p) => setDeathForm((f) => ({ ...f, deathPhoto: p }))} onError={notifyImageError} label="Death photo" />
             <Textarea label="Death notes" value={deathForm.deathNotes} onChange={(e) => setDeathForm((f) => ({ ...f, deathNotes: e.target.value }))} />
-            <div className="flex justify-end gap-2">
-              <Btn variant="secondary" onClick={() => setDeathRec(null)} disabled={saving}>Cancel</Btn>
-              <Btn variant="danger" onClick={confirmDeath} disabled={saving}><Skull size={14} />{saving ? 'Saving…' : 'Record Death'}</Btn>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Btn variant="secondary" onClick={() => setDeathRec(null)} disabled={saving} className="justify-center">Cancel</Btn>
+              <Btn variant="danger" onClick={confirmDeath} disabled={saving} className="justify-center"><Skull size={14} />{saving ? 'Saving…' : 'Record Death'}</Btn>
             </div>
           </div>
         )}

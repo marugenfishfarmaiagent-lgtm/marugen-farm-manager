@@ -895,9 +895,9 @@ export default function KoiFish({
               options={KOI_DEATH_CAUSES.map((c) => ({ value: c, label: c }))} />
             <PhotoPicker photo={deathForm.deathPhoto} onPick={(p) => setDeathForm((f) => ({ ...f, deathPhoto: p }))} onError={notifyImageError} label="Death photo (optional)" />
             <Textarea label="Notes" value={deathForm.notes} onChange={(e) => setDeathForm((f) => ({ ...f, notes: e.target.value }))} />
-            <div className="flex justify-end gap-2">
-              <Btn variant="secondary" onClick={() => setDeathKoi(null)} disabled={saving}>Cancel</Btn>
-              <Btn variant="danger" onClick={confirmDeath} disabled={saving}><Skull size={14} />{saving ? 'Saving…' : 'Record Death'}</Btn>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Btn variant="secondary" onClick={() => setDeathKoi(null)} disabled={saving} className="justify-center">Cancel</Btn>
+              <Btn variant="danger" onClick={confirmDeath} disabled={saving} className="justify-center"><Skull size={14} />{saving ? 'Saving…' : 'Record Death'}</Btn>
             </div>
           </div>
         )}
@@ -939,9 +939,9 @@ export default function KoiFish({
               placeholder="e.g. Customer returned fish, wrong sale recorded"
               rows={2}
             />
-            <div className="modal-actions flex justify-end gap-2">
-              <Btn variant="secondary" onClick={() => { setRefundKoi(null); setRefundReason('') }}>Cancel</Btn>
-              <Btn variant="danger" onClick={confirmRefund} disabled={saving}><Undo2 size={14} />Confirm Refund</Btn>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Btn variant="secondary" onClick={() => { setRefundKoi(null); setRefundReason('') }} className="justify-center">Cancel</Btn>
+              <Btn variant="danger" onClick={confirmRefund} disabled={saving} className="justify-center"><Undo2 size={14} />Confirm Refund</Btn>
             </div>
           </div>
         )}
