@@ -91,6 +91,9 @@ export default function PondManagement({
   const savingPondRef = useRef(false)
   const addingPondRef = useRef(false)
   const [savingPond, setSavingPond] = useState(false)
+  const [savingMaint, setSavingMaint] = useState(false)
+  const [savingTreat, setSavingTreat] = useState(false)
+  const [savingReminder, setSavingReminder] = useState(false)
 
   const todayStr = today()
   const activeTreatments = visiblePond.treatmentLogs.filter((t) => t.startDate <= todayStr && (!t.endDate || t.endDate >= todayStr))
@@ -219,26 +222,31 @@ export default function PondManagement({
       return
     }
     savingMaintRef.current = true
-    const formSnapshot = { ...maintForm }
-    const log = buildMaintenanceLogEntry(
-      { ...formSnapshot, id: genId('MAINT') },
-      { pond, performedBy: currentUser?.name || '' },
-    )
-    const nextPonds = (snapshot.ponds || []).map((row) => (
-      samePondId(row.id, pond.id) ? applyMaintenanceToPond(row, formSnapshot) : row
-    ))
-    const nextPond = touchPondData({
-      ...snapshot,
-      ponds: nextPonds,
-      maintenanceLogs: [log, ...(snapshot.maintenanceLogs || [])],
-    })
-    setPondData(nextPond)
-    savingMaintRef.current = false
-    setMaintModal(null)
-    addNotification({ type: 'success', title: 'Logged', message: `Maintenance recorded for ${pond.name}` })
-    if (onPersistPondData) {
-      try { await onPersistPondData(nextPond) }
-      catch { addNotification({ type: 'error', title: 'Sync failed', message: 'Maintenance saved locally. Cloud sync failed — will retry.' }) }
+    setSavingMaint(true)
+    try {
+      const formSnapshot = { ...maintForm }
+      const log = buildMaintenanceLogEntry(
+        { ...formSnapshot, id: genId('MAINT') },
+        { pond, performedBy: currentUser?.name || '' },
+      )
+      const nextPonds = (snapshot.ponds || []).map((row) => (
+        samePondId(row.id, pond.id) ? applyMaintenanceToPond(row, formSnapshot) : row
+      ))
+      const nextPond = touchPondData({
+        ...snapshot,
+        ponds: nextPonds,
+        maintenanceLogs: [log, ...(snapshot.maintenanceLogs || [])],
+      })
+      setPondData(nextPond)
+      if (onPersistPondData) await onPersistPondData(nextPond)
+      addNotification({ type: 'success', title: 'Logged', message: `Maintenance recorded for ${pond.name}` })
+      setMaintModal(null)
+    } catch {
+      setPondData(snapshot)
+      addNotification({ type: 'error', title: 'Save failed', message: 'Could not save maintenance to cloud. Try again.' })
+    } finally {
+      savingMaintRef.current = false
+      setSavingMaint(false)
     }
   }
 
@@ -261,43 +269,48 @@ export default function PondManagement({
       return
     }
     savingTreatRef.current = true
-    const formSnapshot = {
-      ...treatForm,
-      medicine: treatForm.medicine.trim(),
-      reason: treatForm.reason?.trim() || '',
-      notes: treatForm.notes?.trim() || '',
-    }
-    const editingId = editingTreatmentId
-    const payload = { ...formSnapshot, pondName: pond.name, performedBy: currentUser?.name || '' }
-    let nextPond
-    if (editingId) {
-      nextPond = touchPondData({
-        ...snapshot,
-        treatmentLogs: (snapshot.treatmentLogs || []).map((t) => (
-          String(t.id) === String(editingId)
-            ? touchUpdatedAt({ ...t, ...payload, id: editingId })
-            : t
-        )),
-      })
-    } else {
-      const log = touchUpdatedAt({ ...payload, id: genId('TREAT') })
-      nextPond = touchPondData({
-        ...snapshot,
-        treatmentLogs: [log, ...(snapshot.treatmentLogs || [])],
-      })
-    }
-    setPondData(nextPond)
-    savingTreatRef.current = false
-    setTreatModal(null)
-    setEditingTreatmentId(null)
-    if (editingId) {
-      addNotification({ type: 'success', title: 'Treatment Updated', message: `${formSnapshot.medicine} — ${pond.name}` })
-    } else {
-      addNotification({ type: 'info', title: 'Treatment Started', message: `${formSnapshot.medicine} in ${pond.name}` })
-    }
-    if (onPersistPondData) {
-      try { await onPersistPondData(nextPond) }
-      catch { addNotification({ type: 'error', title: 'Sync failed', message: 'Treatment saved locally. Cloud sync failed — will retry.' }) }
+    setSavingTreat(true)
+    try {
+      const formSnapshot = {
+        ...treatForm,
+        medicine: treatForm.medicine.trim(),
+        reason: treatForm.reason?.trim() || '',
+        notes: treatForm.notes?.trim() || '',
+      }
+      const editingId = editingTreatmentId
+      const payload = { ...formSnapshot, pondName: pond.name, performedBy: currentUser?.name || '' }
+      let nextPond
+      if (editingId) {
+        nextPond = touchPondData({
+          ...snapshot,
+          treatmentLogs: (snapshot.treatmentLogs || []).map((t) => (
+            String(t.id) === String(editingId)
+              ? touchUpdatedAt({ ...t, ...payload, id: editingId })
+              : t
+          )),
+        })
+      } else {
+        const log = touchUpdatedAt({ ...payload, id: genId('TREAT') })
+        nextPond = touchPondData({
+          ...snapshot,
+          treatmentLogs: [log, ...(snapshot.treatmentLogs || [])],
+        })
+      }
+      setPondData(nextPond)
+      if (onPersistPondData) await onPersistPondData(nextPond)
+      if (editingId) {
+        addNotification({ type: 'success', title: 'Treatment Updated', message: `${formSnapshot.medicine} — ${pond.name}` })
+      } else {
+        addNotification({ type: 'info', title: 'Treatment Started', message: `${formSnapshot.medicine} in ${pond.name}` })
+      }
+      setTreatModal(null)
+      setEditingTreatmentId(null)
+    } catch {
+      setPondData(snapshot)
+      addNotification({ type: 'error', title: 'Save failed', message: 'Could not save treatment to cloud. Try again.' })
+    } finally {
+      savingTreatRef.current = false
+      setSavingTreat(false)
     }
   }
 
@@ -377,6 +390,8 @@ export default function PondManagement({
       addNotification({ type: 'error', title: 'Pond Not Found', message: 'Selected pond is no longer in the list.' })
       return
     }
+    savingReminderRef.current = true
+    setSavingReminder(true)
     const newReminder = touchUpdatedAt(normalizeReminderRecord({
       ...remindForm,
       id: genId('REM'),
@@ -386,34 +401,35 @@ export default function PondManagement({
     }))
     const snapshot = pondData
     const nextPond = touchPondData({ ...snapshot, reminders: [...(snapshot.reminders || []), newReminder] })
-    setPondData(nextPond)
-    savingReminderRef.current = false
-    setRemindModal(null)
-    setRemindForm({ pondId: '', type: 'water_test', dueDate: today(), dueTime: '09:00', note: '', repeat: 'none', assignedUserIds: [] })
-
-    const reminderMsg = `${reminderDisplayLines(newReminder).title} · ${newReminder.dueDate}`
-    addNotification({ type: 'success', title: 'Reminder Set', message: reminderMsg })
-
-    if (hasAssignedTeam(newReminder.assignedUserIds)) {
-      notifyAssignmentChange({
-        isNew: true,
-        nextAssignedUserIds: newReminder.assignedUserIds,
-        title: 'Pond Task Assigned',
-        message: reminderMsg,
-        url: '/?tab=ponds',
-        actor: currentUser?.name,
-        actorRole: currentUser?.role,
-      })
-    }
-
     try {
-      await onSyncReminderCalendar?.('upsert', newReminder)
+      setPondData(nextPond)
+      if (onPersistPondData) await onPersistPondData(nextPond)
+      const reminderMsg = `${reminderDisplayLines(newReminder).title} · ${newReminder.dueDate}`
+      addNotification({ type: 'success', title: 'Reminder Set', message: reminderMsg })
+      if (hasAssignedTeam(newReminder.assignedUserIds)) {
+        notifyAssignmentChange({
+          isNew: true,
+          nextAssignedUserIds: newReminder.assignedUserIds,
+          title: 'Pond Task Assigned',
+          message: reminderMsg,
+          url: '/?tab=ponds',
+          actor: currentUser?.name,
+          actorRole: currentUser?.role,
+        })
+      }
+      try {
+        await onSyncReminderCalendar?.('upsert', newReminder)
+      } catch {
+        addNotification({ type: 'warning', title: 'Calendar sync skipped', message: 'Reminder saved; calendar could not be updated.' })
+      }
+      setRemindModal(null)
+      setRemindForm({ pondId: '', type: 'water_test', dueDate: today(), dueTime: '09:00', note: '', repeat: 'none', assignedUserIds: [] })
     } catch {
-      addNotification({ type: 'warning', title: 'Calendar sync skipped', message: 'Reminder saved; calendar could not be updated.' })
-    }
-    if (onPersistPondData) {
-      try { await onPersistPondData(nextPond) }
-      catch { addNotification({ type: 'error', title: 'Sync failed', message: 'Reminder saved locally. Cloud sync failed — will retry.' }) }
+      setPondData(snapshot)
+      addNotification({ type: 'error', title: 'Save failed', message: 'Could not save reminder to cloud. Try again.' })
+    } finally {
+      savingReminderRef.current = false
+      setSavingReminder(false)
     }
   }
 
@@ -929,7 +945,7 @@ export default function PondManagement({
             <Input label="Salt level (%)" type="number" step="0.1" value={maintForm.saltLevel} onChange={(e) => setMaintForm((f) => ({ ...f, saltLevel: e.target.value }))} placeholder="e.g. 0.3" />
           </div>
         )}
-        <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setMaintModal(null)}>Cancel</Btn><Btn onClick={saveMaint} disabled={!canEdit}>Save</Btn></div>
+        <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setMaintModal(null)} disabled={savingMaint}>Cancel</Btn><Btn onClick={saveMaint} disabled={!canEdit || savingMaint}>{savingMaint ? 'Saving…' : 'Save'}</Btn></div>
       </Modal>
 
       <Modal open={!!treatModal} onClose={closeTreatModal} title={editingTreatmentId ? 'Edit Treatment' : 'Log Treatment'} size="lg">
@@ -947,8 +963,8 @@ export default function PondManagement({
         </label>
         <Textarea label="Notes" value={treatForm.notes} onChange={(e) => setTreatForm((f) => ({ ...f, notes: e.target.value }))} className="mt-3" />
         <div className="modal-actions mt-4 flex justify-end gap-2">
-          <Btn variant="secondary" onClick={closeTreatModal}>Cancel</Btn>
-          <Btn onClick={saveTreatment} disabled={!canEdit}>{editingTreatmentId ? 'Save Changes' : 'Start'}</Btn>
+          <Btn variant="secondary" onClick={closeTreatModal} disabled={savingTreat}>Cancel</Btn>
+          <Btn onClick={saveTreatment} disabled={!canEdit || savingTreat}>{savingTreat ? 'Saving…' : (editingTreatmentId ? 'Save Changes' : 'Start')}</Btn>
         </div>
       </Modal>
 
@@ -966,7 +982,7 @@ export default function PondManagement({
           onChange={(assignedUserIds) => setRemindForm((f) => ({ ...f, assignedUserIds }))}
           excludeUserId={currentUser?.id}
         />
-        <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setRemindModal(null)}>Cancel</Btn><Btn onClick={saveReminder} disabled={!canEdit}>Save</Btn></div>
+        <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setRemindModal(null)} disabled={savingReminder}>Cancel</Btn><Btn onClick={saveReminder} disabled={!canEdit || savingReminder}>{savingReminder ? 'Saving…' : 'Save'}</Btn></div>
       </Modal>
 
       <Modal
