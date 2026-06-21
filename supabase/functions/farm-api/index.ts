@@ -1084,8 +1084,9 @@ Deno.serve(async (req) => {
       }
 
       const now = new Date().toISOString();
+      const paidBy = String(body.paidBy ?? body.paid_by ?? user.name ?? "Staff").trim();
       const { data, error } = await db.from("invoices")
-        .update({ status: "paid", updated_at: now })
+        .update({ status: "paid", paid_by: paidBy, paid_at: now, updated_at: now })
         .eq("id", id)
         .select("*")
         .single();

@@ -117,6 +117,8 @@ export function sanitizeInvoiceForSync(inv) {
     bookedAt: bookedAt || null,
     bookedBy: inv.bookedBy ?? inv.booked_by ?? '',
     createdBy: inv.createdBy ?? inv.created_by ?? '',
+    paidBy: inv.paidBy ?? inv.paid_by ?? '',
+    paidAt: inv.paidAt ?? inv.paid_at ?? null,
   }
   const updatedAt = inv.updatedAt ?? inv.updated_at
   if (updatedAt) clean.updatedAt = updatedAt
@@ -145,6 +147,8 @@ function mapInvoice(row) {
     bookedAt: row.booked_at ?? row.bookedAt ?? null,
     bookedBy: row.booked_by ?? row.bookedBy ?? '',
     createdBy: row.created_by ?? row.createdBy ?? '',
+    paidBy: row.paid_by ?? row.paidBy ?? '',
+    paidAt: row.paid_at ?? row.paidAt ?? null,
     updated_at: row.updated_at,
   }))
 }
@@ -446,9 +450,9 @@ export async function syncInvoices(invoices, options) {
 }
 
 /** Atomically mark one invoice paid on the server (avoids full-list sync timestamp races). */
-export async function markInvoicePaidCloud(id) {
+export async function markInvoicePaidCloud(id, { paidBy = '' } = {}) {
   if (!isSupabaseConfigured) throw new Error('Cloud sync is not configured')
-  const data = await apiCall({ action: 'mark_invoice_paid', id: String(id) })
+  const data = await apiCall({ action: 'mark_invoice_paid', id: String(id), paidBy: paidBy || '' })
   return {
     invoice: mapInvoice(data.invoice),
     customer: data.customer ? mapCustomer(data.customer) : null,

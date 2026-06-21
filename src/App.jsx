@@ -142,6 +142,16 @@ import {
 import { ensurePushSubscription } from "./lib/webPush";
 import StaffAssignPicker, { AssigneeBadges } from "./components/StaffAssignPicker";
 
+function PaidByBadge({ paidBy, paidAt }) {
+  if (!paidBy) return null;
+  const dateStr = paidAt ? new Date(paidAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : null;
+  return (
+    <Badge className="bg-emerald-500/15 text-emerald-300 text-[10px]" title={dateStr ? `Paid on ${dateStr}` : undefined}>
+      <Check size={10} className="inline mr-0.5" />Paid by {paidBy}
+    </Badge>
+  );
+}
+
 function BookedBadge({ booked, bookedBy }) {
   if (booked) {
     return (
@@ -2649,7 +2659,7 @@ function InvoiceModule({
       await onMarkInvoicePaid?.(inv, paidTotal);
       const paidInv = touchUpdatedAt(db.sanitizeInvoiceForSync({ ...inv, status: "paid" }));
       setViewInv((prev) => (prev && String(prev.id) === invId ? paidInv : prev));
-      addNotification({ type: "success", title: "Payment Received", message: `${invId} marked as paid - ${formatSGD(paidTotal)}` });
+      addNotification({ type: "success", title: "Payment Received", message: `${invId} marked as paid by ${currentUser?.name || "Staff"} · ${formatSGD(paidTotal)}` });
     } catch (err) {
       setViewInv((prev) => (prev && String(prev.id) === invId ? inv : prev));
       addNotification({
@@ -2820,6 +2830,7 @@ function InvoiceModule({
                   {isRefundCreditNoteInvoice(inv) ? "refund" : status}
                 </Badge>
                 <BookedBadge booked={inv.booked} bookedBy={inv.bookedBy} />
+                <PaidByBadge paidBy={inv.paidBy} paidAt={inv.paidAt} />
               </div>
             </div>
             <div className="mb-3">
@@ -2912,6 +2923,7 @@ function InvoiceModule({
                         {isRefundCreditNoteInvoice(inv) ? "refund" : getInvoiceStatus(inv)}
                       </Badge>
                       <BookedBadge booked={inv.booked} bookedBy={inv.bookedBy} />
+                      <PaidByBadge paidBy={inv.paidBy} paidAt={inv.paidAt} />
                     </div>
                   </td>
                   <td className="p-3">
@@ -3260,6 +3272,7 @@ function InvoiceModule({
             <div className="no-print relative z-20 flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2 text-sm">
                 <Badge className={statusColor[getInvoiceStatus(activeViewInv)]}>{getInvoiceStatus(activeViewInv)}</Badge>
+                {activeViewInv.paidBy && <PaidByBadge paidBy={activeViewInv.paidBy} paidAt={activeViewInv.paidAt} />}
                 <span className="text-slate-400">{activeViewInv.customerName}</span>
                 <span className="text-cyan-400 font-bold">{formatSGD(viewAmounts.total)}</span>
                 {viewAmounts.discountAmount > 0 && (
@@ -8434,7 +8447,8 @@ export default function App() {
 
   const markInvoicePaidCloud = useCallback(async (inv, paidTotal) => {
     const invId = String(inv.id);
-    const optimistic = touchUpdatedAt(db.sanitizeInvoiceForSync({ ...inv, status: "paid" }));
+    const paidBy = currentUser?.name || "Staff";
+    const optimistic = touchUpdatedAt(db.sanitizeInvoiceForSync({ ...inv, status: "paid", paidBy, paidAt: new Date().toISOString() }));
 
     const timerKey = "invoices:Invoices";
     if (syncTimersRef.current[timerKey]) {
@@ -8489,7 +8503,7 @@ export default function App() {
         ...inv,
         total: paidTotal,
       })));
-      const { invoice: confirmed, customer: confirmedCustomer } = await db.markInvoicePaidCloud(invId);
+      const { invoice: confirmed, customer: confirmedCustomer } = await db.markInvoicePaidCloud(invId, { paidBy });
       const confirmedRow = touchUpdatedAt(db.sanitizeInvoiceForSync(confirmed));
       const localRow = syncStateRef.current.invoices.find((i) => String(i.id) === invId);
       const mergedRow = localRow ? resolveInvoiceConflict(localRow, confirmedRow) : confirmedRow;
