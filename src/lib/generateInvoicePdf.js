@@ -250,10 +250,37 @@ export async function getInvoicePdfFile(invoice) {
   return new File([blob], invoicePdfFilename(invoice), { type: 'application/pdf' })
 }
 
+function isIosSafari() {
+  const ua = navigator.userAgent
+  return /iP(hone|ad|od)/.test(ua) && /WebKit/.test(ua) && !/CriOS|FxiOS|EdgiOS/.test(ua)
+}
+
 export async function downloadInvoicePdf(invoice) {
-  const doc = await generateInvoicePdf(invoice)
   const filename = invoicePdfFilename(invoice)
-  doc.save(filename)
+  const doc = await generateInvoicePdf(invoice)
+  const blob = doc.output('blob')
+
+  // iOS Safari blocks programmatic <a> downloads — use Web Share API instead
+  if (isIosSafari() && navigator.canShare) {
+    const file = new File([blob], filename, { type: 'application/pdf' })
+    if (navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: filename })
+      return filename
+    }
+  }
+
+  // Standard browsers: click a temporary <a> to trigger download
+  const url = URL.createObjectURL(blob)
+  try {
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 10000)
+  }
   return filename
 }
 

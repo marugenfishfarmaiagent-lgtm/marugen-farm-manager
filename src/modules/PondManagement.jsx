@@ -73,7 +73,7 @@ export default function PondManagement({
   const [pondFilter, setPondFilter] = useState('all')
   const [pondSearch, setPondSearch] = useState('')
 
-  const [maintForm, setMaintForm] = useState({ pondId: '', type: 'water_test', date: today(), notes: '', showParams: true, pH: '', ammonia: '', nitrite: '', saltLevel: '' })
+  const [maintForm, setMaintForm] = useState({ pondId: '', type: 'water_test', date: today(), notes: '', showParams: false, pH: '', ammonia: '', nitrite: '', saltLevel: '', washFilter: false, waterChange: false, medicineTypes: [], unilight: false })
   const [treatForm, setTreatForm] = useState({ pondId: '', medicine: '', dosage: '', reason: '', startDate: today(), endDate: '', waterChangeBefore: false, notes: '' })
   const [remindForm, setRemindForm] = useState({ pondId: '', type: 'water_test', dueDate: today(), dueTime: '09:00', note: '', repeat: 'none', assignedUserIds: [] })
   const [guideForm, setGuideForm] = useState({ title: '', category: '', steps: '', warning: '' })
@@ -82,6 +82,8 @@ export default function PondManagement({
   const [confirmDeleteGuideId, setConfirmDeleteGuideId] = useState(null)
   const [editingTreatmentId, setEditingTreatmentId] = useState(null)
   const [completingReminderId, setCompletingReminderId] = useState(null)
+  const [undoReminder, setUndoReminder] = useState(null)
+  const undoTimerRef = useRef(null)
   const [confirmDeletePondId, setConfirmDeletePondId] = useState(null)
   const [deletingPond, setDeletingPond] = useState(false)
   const completingReminderRef = useRef(null)
@@ -128,6 +130,26 @@ export default function PondManagement({
     }
   }
 
+  const clearUndoReminder = () => {
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current)
+    undoTimerRef.current = null
+    setUndoReminder(null)
+  }
+
+  const undoMarkDone = async () => {
+    if (!undoReminder) return
+    const { pondSnapshot } = undoReminder
+    clearUndoReminder()
+    // Restore the pre-done snapshot with a fresh timestamp so the pending status
+    // wins over any cloud-persisted done state via the merge undo grace window.
+    const restored = touchPondData({ ...pondSnapshot })
+    setPondData(restored)
+    if (onPersistPondData) {
+      try { await onPersistPondData(restored) }
+      catch { addNotification({ type: 'error', title: 'Undo failed', message: 'Could not restore reminder to pending. Try again.' }) }
+    }
+  }
+
   const markReminderDone = async (reminderId) => {
     const id = String(reminderId)
     if (completingReminderRef.current === id) return
@@ -135,6 +157,7 @@ export default function PondManagement({
     setCompletingReminderId(id)
 
     const snapshot = pondData
+    const reminderToUndo = (snapshot.reminders || []).find((r) => String(r.id) === id)
     const result = markReminderCompleteInPondData(snapshot, reminderId)
     if (!result.changed) {
       addNotification({ type: 'error', title: 'Reminder not updated', message: 'Could not find that reminder. Refresh and try again.' })
@@ -146,7 +169,13 @@ export default function PondManagement({
     setPondData(nextPond)
     completingReminderRef.current = null
     setCompletingReminderId(null)
-    addNotification({ type: 'success', title: 'Reminder completed', message: 'Marked as done.' })
+
+    // Show undo option for 8 seconds instead of a plain success toast.
+    clearUndoReminder()
+    if (reminderToUndo) {
+      setUndoReminder({ reminder: reminderToUndo, pondSnapshot: snapshot })
+      undoTimerRef.current = setTimeout(clearUndoReminder, 8000)
+    }
 
     try {
       await onSyncReminderCalendar?.('remove', { id })
@@ -523,7 +552,7 @@ export default function PondManagement({
   const filteredLogs = visiblePond.maintenanceLogs.filter((l) => pondFilter === 'all' || samePondId(l.pondId, pondFilter))
 
   const openNewMaint = () => {
-    setMaintForm({ pondId: ponds[0]?.id || '', type: 'water_test', date: today(), notes: '', showParams: true, pH: '', ammonia: '', nitrite: '', saltLevel: '' })
+    setMaintForm({ pondId: ponds[0]?.id || '', type: 'water_test', date: today(), notes: '', showParams: false, pH: '', ammonia: '', nitrite: '', saltLevel: '', washFilter: false, waterChange: false, medicineTypes: [], unilight: false })
     setMaintModal('new')
   }
 
@@ -658,6 +687,7 @@ export default function PondManagement({
                 const pondActiveT = activeTreatments.filter((t) => samePondId(t.pondId, p.id))
                 const pondOverdue = overdueReminders.filter((r) => samePondId(r.pondId, p.id))
                 const pondPending = pendingReminders.filter((r) => samePondId(r.pondId, p.id))
+                const fmtDate = (d) => d ? new Date(`${d}T12:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : null
                 return (
                   <Card key={p.id} className="p-0 overflow-hidden flex flex-col">
                     {/* Header */}
@@ -669,19 +699,48 @@ export default function PondManagement({
                       <Badge className={`shrink-0 ${POND_TYPE_COLOR[p.type] || POND_TYPE_COLOR.koi}`}>{p.type}</Badge>
                     </div>
 
-                    {/* Water params */}
-                    <div className="grid grid-cols-4 gap-1.5 px-3 pb-2 text-center text-xs">
-                      {[
-                        { label: 'pH', val: p.lastpH, color: paramColor('ph', p.lastpH) },
-                        { label: 'NH3', val: p.lastAmmonia, color: paramColor('ammonia', p.lastAmmonia) },
-                        { label: 'NO2', val: p.lastNitrite, color: paramColor('nitrite', p.lastNitrite) },
-                        { label: 'Salt', val: pondSaltLevel(p) != null ? `${pondSaltLevel(p)}%` : null, color: 'text-white' },
-                      ].map(({ label, val, color }) => (
-                        <div key={label} className="rounded-lg bg-slate-700/40 py-1.5">
-                          <p className="text-slate-500 text-[10px] leading-none mb-0.5">{label}</p>
-                          <p className={`font-bold text-sm leading-none ${color}`}>{val ?? '—'}</p>
-                        </div>
-                      ))}
+                    {/* Maintenance status grid */}
+                    <div className="grid grid-cols-3 gap-1 px-3 pb-2 text-center text-xs">
+                      {/* Salt */}
+                      <div className="rounded-lg bg-slate-700/40 px-1.5 py-1.5">
+                        <p className="text-slate-500 text-[10px] leading-none mb-0.5">Salt</p>
+                        <p className="font-bold text-sm leading-none text-white">
+                          {p.lastSalt != null ? `${p.lastSalt}%` : '—'}
+                        </p>
+                        {p.lastSaltDate && <p className="text-slate-500 text-[9px] mt-0.5">{fmtDate(p.lastSaltDate)}</p>}
+                      </div>
+                      {/* Wash Filter */}
+                      <div className="rounded-lg bg-slate-700/40 px-1.5 py-1.5">
+                        <p className="text-slate-500 text-[10px] leading-none mb-0.5">Wash Filter</p>
+                        <p className={`font-bold text-sm leading-none ${p.lastWashFilter ? 'text-cyan-400' : 'text-slate-500'}`}>
+                          {p.lastWashFilter ? '✓' : '—'}
+                        </p>
+                        {p.lastWashFilter && <p className="text-slate-500 text-[9px] mt-0.5">{fmtDate(p.lastWashFilter)}</p>}
+                      </div>
+                      {/* Water Change */}
+                      <div className="rounded-lg bg-slate-700/40 px-1.5 py-1.5">
+                        <p className="text-slate-500 text-[10px] leading-none mb-0.5">Water Chg</p>
+                        <p className={`font-bold text-sm leading-none ${p.lastWaterChange ? 'text-cyan-400' : 'text-slate-500'}`}>
+                          {p.lastWaterChange ? '✓' : '—'}
+                        </p>
+                        {p.lastWaterChange && <p className="text-slate-500 text-[9px] mt-0.5">{fmtDate(p.lastWaterChange)}</p>}
+                      </div>
+                      {/* Medicine */}
+                      <div className="rounded-lg bg-slate-700/40 px-1.5 py-1.5 col-span-2">
+                        <p className="text-slate-500 text-[10px] leading-none mb-0.5">Medicine</p>
+                        <p className={`font-bold text-sm leading-none ${p.lastMedicineDate ? 'text-amber-400' : 'text-slate-500'}`}>
+                          {p.lastMedicineTypes?.length ? p.lastMedicineTypes.join(', ') : '—'}
+                        </p>
+                        {p.lastMedicineDate && <p className="text-slate-500 text-[9px] mt-0.5">{fmtDate(p.lastMedicineDate)}</p>}
+                      </div>
+                      {/* Unilight */}
+                      <div className="rounded-lg bg-slate-700/40 px-1.5 py-1.5">
+                        <p className="text-slate-500 text-[10px] leading-none mb-0.5">Unilight</p>
+                        <p className={`font-bold text-sm leading-none ${p.lastUnilight ? 'text-purple-400' : 'text-slate-500'}`}>
+                          {p.lastUnilight ? '✓' : '—'}
+                        </p>
+                        {p.lastUnilight && <p className="text-slate-500 text-[9px] mt-0.5">{fmtDate(p.lastUnilight)}</p>}
+                      </div>
                     </div>
 
                     {/* Status badges */}
@@ -833,6 +892,12 @@ export default function PondManagement({
 
       {tab === 'reminders' && (
         <>
+          {undoReminder && (
+            <div className="flex items-center justify-between gap-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-3 py-2 text-sm">
+              <span className="text-emerald-300 truncate">✓ &ldquo;{undoReminder.reminder?.task || 'Reminder'}&rdquo; marked done.</span>
+              <Btn variant="secondary" size="sm" className="shrink-0" onClick={undoMarkDone}>Undo</Btn>
+            </div>
+          )}
           {overdueReminders.length > 0 && (
             <Card className="p-4 border-red-500/40">
               <p className="text-red-300 font-bold text-sm mb-2">Overdue</p>
@@ -898,7 +963,7 @@ export default function PondManagement({
         </div>
       )}
 
-      <Modal open={showAddPond} onClose={() => setShowAddPond(false)} title="Add Pond">
+      <Modal open={showAddPond} onClose={() => setShowAddPond(false)} title="Add Pond" confirmClose>
         <div className="grid grid-cols-2 gap-3">
           <PondNameInput value={pondForm.name} onChange={(e) => setPondForm((f) => ({ ...f, name: e.target.value }))} extraNames={ponds.map((p) => p.name)} className="col-span-2" required />
           <Select label="Type" value={pondForm.type} onChange={(e) => setPondForm((f) => ({ ...f, type: e.target.value }))} options={POND_TYPES} />
@@ -908,7 +973,7 @@ export default function PondManagement({
         <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setShowAddPond(false)} disabled={savingPond}>Cancel</Btn><Btn onClick={addPond} disabled={!canEdit || savingPond}>{savingPond ? 'Saving…' : 'Save'}</Btn></div>
       </Modal>
 
-      <Modal open={!!editPond} onClose={() => setEditPond(null)} title="Edit Pond">
+      <Modal open={!!editPond} onClose={() => setEditPond(null)} title="Edit Pond" confirmClose>
         {editPond && (
           <>
             <PondNameInput value={editPond.name} onChange={(e) => setEditPond((p) => ({ ...p, name: e.target.value }))} extraNames={ponds.map((p) => p.name)} required />
@@ -928,27 +993,88 @@ export default function PondManagement({
         )}
       </Modal>
 
-      <Modal open={!!maintModal} onClose={() => setMaintModal(null)} title="Log Maintenance" size="lg">
+      <Modal open={!!maintModal} onClose={() => setMaintModal(null)} title="Log Maintenance" size="lg" confirmClose>
         <Select label="Pond" value={maintForm.pondId} onChange={(e) => setMaintForm((f) => ({ ...f, pondId: e.target.value }))}
           options={hasPonds ? ponds.map((p) => ({ value: p.id, label: p.name })) : [{ value: '', label: 'No ponds — add one first' }]} />
         <Select label="Type" value={maintForm.type} onChange={(e) => setMaintForm((f) => ({ ...f, type: e.target.value }))} options={MAINTENANCE_TYPES} className="mt-3" />
         <Input label="Date" type="date" value={maintForm.date} onChange={(e) => setMaintForm((f) => ({ ...f, date: e.target.value }))} className="mt-3" />
-        <Textarea label="Notes" value={maintForm.notes} onChange={(e) => setMaintForm((f) => ({ ...f, notes: e.target.value }))} className="mt-3" />
-        <label className="flex items-center gap-2 mt-3 text-sm text-slate-300">
-          <input type="checkbox" checked={maintForm.showParams} onChange={(e) => setMaintForm((f) => ({ ...f, showParams: e.target.checked }))} />Record water test params
+
+        {/* Quick toggles */}
+        <p className="text-slate-400 text-xs uppercase tracking-wide mt-4 mb-2">Done today</p>
+        <div className="grid grid-cols-2 gap-2">
+          {[
+            { key: 'washFilter', label: 'Wash Filter' },
+            { key: 'waterChange', label: 'Water Change' },
+            { key: 'unilight', label: 'Unilight' },
+          ].map(({ key, label }) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setMaintForm((f) => ({ ...f, [key]: !f[key] }))}
+              className={`flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors touch-manipulation ${
+                maintForm[key]
+                  ? 'border-cyan-500/60 bg-cyan-500/15 text-cyan-300'
+                  : 'border-slate-600 bg-slate-700/40 text-slate-400'
+              }`}
+            >
+              <span className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${maintForm[key] ? 'bg-cyan-500 border-cyan-500' : 'border-slate-500'}`}>
+                {maintForm[key] && <Check size={11} className="text-slate-900" />}
+              </span>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <p className="text-slate-400 text-xs uppercase tracking-wide mt-4 mb-2">Medicine</p>
+        <div className="flex gap-2 flex-wrap">
+          {['D', 'F', 'A', 'P'].map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setMaintForm((f) => {
+                const types = f.medicineTypes.includes(t)
+                  ? f.medicineTypes.filter((x) => x !== t)
+                  : [...f.medicineTypes, t]
+                return { ...f, medicineTypes: types }
+              })}
+              className={`w-12 h-12 rounded-xl border text-base font-bold transition-colors touch-manipulation ${
+                maintForm.medicineTypes.includes(t)
+                  ? 'border-amber-500/60 bg-amber-500/20 text-amber-300'
+                  : 'border-slate-600 bg-slate-700/40 text-slate-400'
+              }`}
+            >
+              {t}
+            </button>
+          ))}
+          {maintForm.medicineTypes.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setMaintForm((f) => ({ ...f, medicineTypes: [] }))}
+              className="px-3 h-12 rounded-xl border border-slate-600 bg-slate-700/40 text-slate-500 text-xs touch-manipulation"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+
+        <label className="flex items-center gap-2 mt-4 text-sm text-slate-300 cursor-pointer">
+          <input type="checkbox" checked={maintForm.showParams} onChange={(e) => setMaintForm((f) => ({ ...f, showParams: e.target.checked }))} />
+          Record water test (pH / salt / NH3 / NO2)
         </label>
         {maintForm.showParams && (
           <div className="grid grid-cols-2 gap-3 mt-3">
             <Input label="pH" type="number" step="0.1" value={maintForm.pH} onChange={(e) => setMaintForm((f) => ({ ...f, pH: e.target.value }))} />
+            <Input label="Salt (%)" type="number" step="0.1" value={maintForm.saltLevel} onChange={(e) => setMaintForm((f) => ({ ...f, saltLevel: e.target.value }))} placeholder="e.g. 0.3" />
             <Input label="Ammonia" type="number" step="0.01" value={maintForm.ammonia} onChange={(e) => setMaintForm((f) => ({ ...f, ammonia: e.target.value }))} />
             <Input label="Nitrite" type="number" step="0.01" value={maintForm.nitrite} onChange={(e) => setMaintForm((f) => ({ ...f, nitrite: e.target.value }))} />
-            <Input label="Salt level (%)" type="number" step="0.1" value={maintForm.saltLevel} onChange={(e) => setMaintForm((f) => ({ ...f, saltLevel: e.target.value }))} placeholder="e.g. 0.3" />
           </div>
         )}
+
+        <Textarea label="Notes" value={maintForm.notes} onChange={(e) => setMaintForm((f) => ({ ...f, notes: e.target.value }))} className="mt-3" />
         <div className="modal-actions mt-4 flex justify-end gap-2"><Btn variant="secondary" onClick={() => setMaintModal(null)} disabled={savingMaint}>Cancel</Btn><Btn onClick={saveMaint} disabled={!canEdit || savingMaint}>{savingMaint ? 'Saving…' : 'Save'}</Btn></div>
       </Modal>
 
-      <Modal open={!!treatModal} onClose={closeTreatModal} title={editingTreatmentId ? 'Edit Treatment' : 'Log Treatment'} size="lg">
+      <Modal open={!!treatModal} onClose={closeTreatModal} title={editingTreatmentId ? 'Edit Treatment' : 'Log Treatment'} size="lg" confirmClose>
         <Select label="Pond" value={treatForm.pondId} onChange={(e) => setTreatForm((f) => ({ ...f, pondId: e.target.value }))}
           options={hasPonds ? ponds.map((p) => ({ value: p.id, label: p.name })) : [{ value: '', label: 'No ponds — add one first' }]} />
         <Input label="Medicine" value={treatForm.medicine} onChange={(e) => setTreatForm((f) => ({ ...f, medicine: e.target.value }))} className="mt-3" placeholder="Melafix" />
@@ -968,7 +1094,7 @@ export default function PondManagement({
         </div>
       </Modal>
 
-      <Modal open={!!remindModal} onClose={() => setRemindModal(null)} title="Add Reminder">
+      <Modal open={!!remindModal} onClose={() => setRemindModal(null)} title="Add Reminder" confirmClose>
         <Select label="Pond" value={remindForm.pondId} onChange={(e) => setRemindForm((f) => ({ ...f, pondId: e.target.value }))}
           options={hasPonds ? ponds.map((p) => ({ value: p.id, label: p.name })) : [{ value: '', label: 'No ponds — add one first' }]} />
         <Select label="Reminder type" value={remindForm.type} onChange={(e) => setRemindForm((f) => ({ ...f, type: e.target.value }))} options={MAINTENANCE_TYPES} className="mt-3" />

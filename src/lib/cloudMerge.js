@@ -150,7 +150,7 @@ export function resolveProductConflict(local, remote) {
   const lt = ts(local)
   const rt = ts(remote)
   if (lt >= rt) return local
-  if (rt - lt < 5000 && productCatalogFieldsDiffer(local, remote)) {
+  if (rt - lt < 1000 && productCatalogFieldsDiffer(local, remote)) {
     return { ...remote, ...pickProductCatalogFields(local), updatedAt: local.updatedAt }
   }
   return remote
@@ -220,7 +220,7 @@ export function resolveCustomerKoiConflict(local, remote) {
   if (TERMINAL_CUSTOMER_KOI_STATUSES.has(ls) && rs === CUSTOMER_KOI_STATUS.IN_POND) return local
   if (TERMINAL_CUSTOMER_KOI_STATUSES.has(rs) && ls === CUSTOMER_KOI_STATUS.IN_POND) return remote
   if (lt >= rt) return local
-  if (rt - lt < 5000 && ls !== rs) {
+  if (rt - lt < 1000 && ls !== rs) {
     return {
       ...remote,
       status: local.status,
@@ -233,7 +233,7 @@ export function resolveCustomerKoiConflict(local, remote) {
       updatedAt: local.updatedAt,
     }
   }
-  if (rt - lt < 15000 && customerKoiEditFieldsDiffer(local, remote)) {
+  if (rt - lt < 3000 && customerKoiEditFieldsDiffer(local, remote)) {
     return { ...remote, ...pickCustomerKoiEditFields(local), updatedAt: local.updatedAt }
   }
   return remote

@@ -121,21 +121,38 @@ export function buildMaintenanceLogEntry(form, { pond, performedBy }) {
     if (nitrite != null) entry.nitrite = nitrite
     if (saltLevel != null) entry.saltLevel = saltLevel
   }
+  if (form.washFilter) entry.washFilter = true
+  if (form.waterChange) entry.waterChange = true
+  if (form.unilight) entry.unilight = true
+  const medTypes = (form.medicineTypes || []).filter(Boolean)
+  if (medTypes.length > 0) entry.medicineTypes = medTypes
   return entry
 }
 
 export function applyMaintenanceToPond(pond, form) {
-  if (!form.showParams) return pond
-  const hasParams = [form.pH, form.ammonia, form.nitrite, form.saltLevel].some((v) => v !== '' && v != null)
-  if (!hasParams) return pond
-  return {
-    ...pond,
-    lastpH: form.pH !== '' && form.pH != null ? parseWaterParam(form.pH, { min: 0, max: 14 }) : pond.lastpH,
-    lastAmmonia: form.ammonia !== '' && form.ammonia != null ? parseWaterParam(form.ammonia, { min: 0 }) : pond.lastAmmonia,
-    lastNitrite: form.nitrite !== '' && form.nitrite != null ? parseWaterParam(form.nitrite, { min: 0 }) : pond.lastNitrite,
-    lastSalt: form.saltLevel !== '' && form.saltLevel != null ? parseWaterParam(form.saltLevel, { min: 0, max: 10 }) : pond.lastSalt,
-    lastChecked: form.date || today(),
+  const date = form.date || today()
+  const patch = { lastChecked: date }
+
+  if (form.showParams) {
+    const saltLevel = parseWaterParam(form.saltLevel, { min: 0, max: 10 })
+    if (saltLevel != null) { patch.lastSalt = saltLevel; patch.lastSaltDate = date }
+    // keep existing pH/NH3/NO2 in pond data for backward-compat even though not shown on card
+    const pH = parseWaterParam(form.pH, { min: 0, max: 14 })
+    const ammonia = parseWaterParam(form.ammonia, { min: 0 })
+    const nitrite = parseWaterParam(form.nitrite, { min: 0 })
+    if (pH != null) patch.lastpH = pH
+    if (ammonia != null) patch.lastAmmonia = ammonia
+    if (nitrite != null) patch.lastNitrite = nitrite
   }
+  if (form.washFilter) patch.lastWashFilter = date
+  if (form.waterChange) patch.lastWaterChange = date
+  if (form.unilight) patch.lastUnilight = date
+  const medTypes = (form.medicineTypes || []).filter(Boolean)
+  if (medTypes.length > 0) { patch.lastMedicineTypes = medTypes; patch.lastMedicineDate = date }
+
+  const hasAnyUpdate = Object.keys(patch).length > 1 // more than just lastChecked
+  if (!hasAnyUpdate && !form.showParams) return pond
+  return { ...pond, ...patch }
 }
 
 export function findPondById(ponds, pondId) {

@@ -304,11 +304,12 @@ export function genInvoiceId(invoices = [], issueDate, { reservedIds = [] } = {}
     const num = parseInt(id.slice(prefix.length), 10)
     if (!Number.isNaN(num) && num > maxSeq) maxSeq = num
   }
+  const pad = (n) => String(n).padStart(n < 100 ? 2 : String(n).length, '0')
   let seq = maxSeq + 1
-  let candidate = `${prefix}${String(seq).padStart(2, '0')}`
+  let candidate = `${prefix}${pad(seq)}`
   while (reserved.has(candidate)) {
     seq += 1
-    candidate = `${prefix}${String(seq).padStart(2, '0')}`
+    candidate = `${prefix}${pad(seq)}`
   }
   return candidate
 }

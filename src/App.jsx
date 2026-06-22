@@ -123,6 +123,7 @@ import EmptyState from "./components/ui/EmptyState";
 import ModuleSkeleton from "./components/ui/ModuleSkeleton";
 import PaginationControls from "./components/ui/PaginationControls";
 import { usePagination } from "./hooks/usePagination";
+import { useSessionState } from "./hooks/useSessionState";
 import { useTeamSyncPoll } from "./hooks/useTeamSyncPoll";
 import { buildTeamNotification, buildToastNotification, isTeamNotification } from "./lib/notifications";
 import { getConnectionState, onConnectionChange, isTransientSyncError } from "./lib/connectionManager";
@@ -332,8 +333,9 @@ function ConfirmModalFooter({ onCancel, cancelLabel = "Cancel", cancelDisabled =
   );
 }
 
-function Modal({ open, onClose, title, children, size = "md", priority = false, footer = null, backdropClose = true }) {
+function Modal({ open, onClose, title, children, size = "md", priority = false, footer = null, backdropClose = true, confirmClose = false }) {
   const [guardActive, setGuardActive] = useState(false);
+  const [confirmingClose, setConfirmingClose] = useState(false);
   const guardTimerRef = useRef(null);
   const prevOpenRef = useRef(open);
   const backdropDownRef = useRef(false);
@@ -341,6 +343,7 @@ function Modal({ open, onClose, title, children, size = "md", priority = false, 
   useEffect(() => {
     if (prevOpenRef.current && !open) {
       setGuardActive(true);
+      setConfirmingClose(false);
       if (guardTimerRef.current) clearTimeout(guardTimerRef.current);
       guardTimerRef.current = window.setTimeout(() => setGuardActive(false), MODAL_CLICK_GUARD_MS);
     }
@@ -368,7 +371,13 @@ function Modal({ open, onClose, title, children, size = "md", priority = false, 
 
   const handleBackdropPointerUp = (e) => {
     if (!backdropClose || !onClose) return;
-    if (e.target === e.currentTarget && backdropDownRef.current) onClose();
+    if (e.target === e.currentTarget && backdropDownRef.current) {
+      if (confirmClose) {
+        setConfirmingClose(true);
+      } else {
+        onClose();
+      }
+    }
     backdropDownRef.current = false;
   };
 
@@ -391,10 +400,19 @@ function Modal({ open, onClose, title, children, size = "md", priority = false, 
           >
             <div className="sticky top-0 z-10 flex items-center justify-between gap-3 p-4 sm:p-5 border-b border-slate-700 shrink-0 bg-slate-800 pt-[max(1rem,env(safe-area-inset-top,0px))]">
               <h3 className="text-base sm:text-lg font-bold text-white pr-2 min-w-0 truncate">{title}</h3>
-              {onClose && backdropClose && (
+              {onClose && backdropClose && !confirmingClose && (
                 <button type="button" onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white p-2 -mr-1 rounded-lg hover:bg-slate-700 transition-colors touch-manipulation shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center"><X size={20} /></button>
               )}
             </div>
+            {confirmingClose && (
+              <div className="flex items-center justify-between gap-3 bg-amber-500/10 border-b border-amber-500/30 px-4 py-2.5 shrink-0">
+                <span className="text-amber-300 text-sm font-medium">Discard unsaved changes?</span>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setConfirmingClose(false)} className="text-sm px-3 py-1.5 rounded-lg bg-slate-700 text-white hover:bg-slate-600 touch-manipulation">Keep editing</button>
+                  <button type="button" onClick={() => { setConfirmingClose(false); onClose?.(); }} className="text-sm px-3 py-1.5 rounded-lg bg-red-600 text-white hover:bg-red-500 touch-manipulation">Discard</button>
+                </div>
+              </div>
+            )}
             <div className="overflow-y-auto overflow-x-hidden overscroll-contain min-w-0 flex-1 min-h-0 p-4 sm:p-5">{children}</div>
             {footer && (
               <div className="relative z-20 sticky bottom-0 shrink-0 border-t border-slate-700 bg-slate-800/95 backdrop-blur-sm p-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))]">
@@ -989,8 +1007,8 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   const [adjustReason, setAdjustReason] = useState("");
   const [restockQty, setRestockQty] = useState(1);
   const [restockNote, setRestockNote] = useState("");
-  const [search, setSearch] = useState("");
-  const [catFilter, setCatFilter] = useState("All");
+  const [search, setSearch] = useSessionState("inventory-search", "");
+  const [catFilter, setCatFilter] = useSessionState("inventory-catFilter", "All");
   const [useQty, setUseQty] = useState(1);
   const [useNote, setUseNote] = useState("");
   const [usingStock, setUsingStock] = useState(false);
@@ -1648,7 +1666,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       )}
 
       {/* Add Product Modal */}
-      <Modal open={showAdd} onClose={() => { if (!addingProduct) { setShowAdd(false); setAddCatalogOnly(false); } }} title={addCatalogOnly ? "Add Price List Item" : "Add New Product"} size="lg">
+      <Modal open={showAdd} onClose={() => { if (!addingProduct) { setShowAdd(false); setAddCatalogOnly(false); } }} title={addCatalogOnly ? "Add Price List Item" : "Add New Product"} size="lg" confirmClose>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {addCatalogOnly && (
             <p className="sm:col-span-2 text-violet-300 text-xs bg-violet-500/10 border border-violet-500/30 rounded-lg p-2">
@@ -1679,7 +1697,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       </Modal>
 
       {/* Edit Product Modal */}
-      <Modal open={!!editProduct} onClose={() => { if (!savingProduct) setEditProduct(null); }} title={editProduct?.trackStock === false ? "Edit Price List Item" : "Edit Product"} size="lg">
+      <Modal open={!!editProduct} onClose={() => { if (!savingProduct) setEditProduct(null); }} title={editProduct?.trackStock === false ? "Edit Price List Item" : "Edit Product"} size="lg" confirmClose>
         {editProduct && (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1858,8 +1876,8 @@ function InvoiceModule({
 
   const [showNew, setShowNew] = useState(!!openDraft);
   const [viewInv, setViewInv] = useState(null);
-  const [filter, setFilter] = useState("all");
-  const [bookedFilter, setBookedFilter] = useState("all");
+  const [filter, setFilter] = useSessionState("invoices-filter", "all");
+  const [bookedFilter, setBookedFilter] = useSessionState("invoices-bookedFilter", "all");
   const [showOlderInvoices, setShowOlderInvoices] = useState(false);
   const [bookedConfirm, setBookedConfirm] = useState(null);
   const [cancelConfirm, setCancelConfirm] = useState(null);
@@ -2957,6 +2975,7 @@ function InvoiceModule({
         onClose={() => { if (!creatingInvoice) { setShowNew(false); setFormError(""); } }}
         title="Create Invoice"
         size="lg"
+        confirmClose
         footer={(
           <div className="modal-actions">
             <Btn variant="secondary" onClick={() => { setShowNew(false); setFormError(""); }} disabled={creatingInvoice}>Cancel</Btn>
@@ -3476,8 +3495,8 @@ function CustomerModule({
   const [deletingCustomer, setDeletingCustomer] = useState(false);
   const deletingCustomerRef = useRef(false);
   const [saving, setSaving] = useState(false);
-  const [search, setSearch] = useState("");
-  const [tierFilter, setTierFilter] = useState("All");
+  const [search, setSearch] = useSessionState("customers-search", "");
+  const [tierFilter, setTierFilter] = useSessionState("customers-tierFilter", "All");
   const [form, setForm] = useState(emptyForm());
   const [postalLookupAdd, setPostalLookupAdd] = useState(false);
   const [postalLookupEdit, setPostalLookupEdit] = useState(false);
@@ -3750,7 +3769,7 @@ function CustomerModule({
       <PaginationControls {...customerPage} />
 
       {/* Add Customer */}
-      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Customer" size="lg">
+      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Customer" size="lg" confirmClose>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input label="Full Name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required className="sm:col-span-2" />
           <Input label="WhatsApp" value={form.whatsapp} onChange={e => setForm(f => ({ ...f, whatsapp: e.target.value }))} placeholder="+65 9XXX XXXX" required className="sm:col-span-2" />
@@ -3801,7 +3820,7 @@ function CustomerModule({
       </Modal>
 
       {/* Edit Customer */}
-      <Modal open={!!editCustomer} onClose={() => setEditCustomer(null)} title="Edit Customer" size="lg">
+      <Modal open={!!editCustomer} onClose={() => setEditCustomer(null)} title="Edit Customer" size="lg" confirmClose>
         {editCustomer && (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -3876,7 +3895,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
   const lastExpenseSaveErrorRef = useRef("");
   const [showAdd, setShowAdd] = useState(false);
   const [viewExpenseId, setViewExpenseId] = useState(null);
-  const [bookedFilter, setBookedFilter] = useState("all");
+  const [bookedFilter, setBookedFilter] = useSessionState("expenses-bookedFilter", "all");
   const [showOlderExpenses, setShowOlderExpenses] = useState(false);
   const [bookedConfirm, setBookedConfirm] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
@@ -4137,21 +4156,27 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
     try {
       setUploading(true);
       let e = built.expense;
-      if (isSupabaseConfigured && e.imageData?.startsWith?.("data:image")) {
-        const { imageUrl } = await db.uploadExpenseReceipt(e.id, e.imageData, e.imageName);
-        e = { ...e, imageUrl: imageUrl || "", imageData: "" };
-      }
+      // Save record FIRST (with inline imageData) so a failed photo upload never orphans a cloud image.
       const saved = await commitExpenseList((prev) => [...prev, e]);
       if (!saved) return;
-      addNotification({
-        type: "success",
-        title: "Receipt Saved",
-        message: isSupabaseConfigured
-          ? "Receipt saved — photo stored in cloud."
-          : "Expense invoice photo recorded.",
-      });
       setShowAdd(false);
       resetUpload();
+      // Upload photo to cloud after record exists — if this fails the record still has inline imageData.
+      if (isSupabaseConfigured && e.imageData?.startsWith?.("data:image")) {
+        try {
+          const { imageUrl } = await db.uploadExpenseReceipt(e.id, e.imageData, e.imageName);
+          if (imageUrl) {
+            await commitExpenseList((prev) =>
+              prev.map((x) => sameExpenseId(x.id, e.id) ? { ...x, imageUrl, imageData: "" } : x)
+            );
+          }
+          addNotification({ type: "success", title: "Receipt Saved", message: "Receipt saved — photo stored in cloud." });
+        } catch {
+          addNotification({ type: "warning", title: "Receipt Saved", message: "Saved locally. Cloud photo upload failed — will retry on next sync." });
+        }
+      } else {
+        addNotification({ type: "success", title: "Receipt Saved", message: "Expense invoice photo recorded." });
+      }
     } catch (err) {
       addNotification({ type: "error", title: "Save Failed", message: err?.message || "Could not save receipt photo." });
     } finally {
@@ -4341,7 +4366,7 @@ function ExpenseModule({ expenses, setExpenses, addNotification, currentUser, on
         </>
       )}
 
-      <Modal open={showAdd} onClose={() => { setShowAdd(false); resetUpload(); }} title="Upload Expense Receipt" size="md">
+      <Modal open={showAdd} onClose={() => { setShowAdd(false); resetUpload(); }} title="Upload Expense Receipt" size="md" confirmClose>
         <div className="space-y-4">
           <p className="text-slate-400 text-sm">Take a photo or choose an invoice image — large files are auto-compressed before upload. Set the receipt date before saving.</p>
           <input
@@ -4574,8 +4599,8 @@ function DeliveryModule({
   });
   const [showAdd, setShowAdd] = useState(false);
   const [editDeliveryId, setEditDeliveryId] = useState(null);
-  const [filter, setFilter] = useState("all");
-  const [viewMode, setViewMode] = useState("list");
+  const [filter, setFilter] = useSessionState("deliveries-filter", "all");
+  const [viewMode, setViewMode] = useSessionState("deliveries-viewMode", "list");
   const [form, setForm] = useState(emptyDeliveryForm());
   const isEditing = editDeliveryId != null;
   const formOpen = showAdd || isEditing;
@@ -4803,13 +4828,7 @@ function DeliveryModule({
     const deliveriesSnapshot = deliveries;
     try {
       setSaving(true);
-      if (d.photoData?.startsWith?.("data:image")) {
-        setPhotoUploading(true);
-        if (isSupabaseConfigured) {
-          const result = await db.uploadDeliveryPhoto(d.id, d.photoData, d.photoName);
-          d = { ...d, photo: result?.photo || result?.photoPath || "", photoData: "" };
-        }
-      }
+      // Persist delivery FIRST (with inline photoData) so a failed photo upload never orphans a cloud image.
       const nextDeliveries = isEditing
         ? deliveriesSnapshot.map((row) => (sameDeliveryId(row.id, editDeliveryId) ? d : row))
         : [...deliveriesSnapshot, d];
@@ -4817,6 +4836,26 @@ function DeliveryModule({
         await onPersistDeliveries(nextDeliveries);
       }
       setDeliveries(nextDeliveries);
+      // Upload photo to cloud after delivery exists — if this fails the record still has inline photoData.
+      if (d.photoData?.startsWith?.("data:image") && isSupabaseConfigured) {
+        setPhotoUploading(true);
+        try {
+          const result = await db.uploadDeliveryPhoto(d.id, d.photoData, d.photoName);
+          const photoUrl = result?.photo || result?.photoPath || "";
+          if (photoUrl) {
+            const withUrl = { ...d, photo: photoUrl, photoData: "" };
+            const updatedList = nextDeliveries.map((row) =>
+              sameDeliveryId(row.id, d.id) ? withUrl : row
+            );
+            if (cloudMode && onPersistDeliveries) await onPersistDeliveries(updatedList);
+            setDeliveries(updatedList);
+          }
+        } catch {
+          addNotification({ type: "warning", title: "Photo Upload Failed", message: "Delivery saved but photo could not be uploaded to cloud." });
+        } finally {
+          setPhotoUploading(false);
+        }
+      }
       if (isEditing) {
         addNotification({ type: "success", title: "Delivery Updated", message: `${editDeliveryId} saved.` });
         if (newlyAssignedUserIds(existing.assignedUserIds, d.assignedUserIds).length) {

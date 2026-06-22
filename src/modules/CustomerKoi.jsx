@@ -22,6 +22,7 @@ import StoredImage from '../components/StoredImage'
 import EmptyState from '../components/ui/EmptyState'
 import PaginationControls from '../components/ui/PaginationControls'
 import { usePagination } from '../hooks/usePagination'
+import { useSessionState } from '../hooks/useSessionState'
 import { LIST_PAGE_SIZE } from '../data/constants'
 import * as db from '../lib/database'
 import { isSupabaseConfigured } from '../lib/supabase'
@@ -242,13 +243,14 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
     addNotification({ type: 'error', title: 'Photo Upload Failed', message })
   }
   const [selectedCustomerId, setSelectedCustomerId] = useState('all')
-  const [statusFilter, setStatusFilter] = useState('all')
-  const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useSessionState('customerkoi-statusFilter', 'all')
+  const [search, setSearch] = useSessionState('customerkoi-search', '')
   const [showAdd, setShowAdd] = useState(false)
   const [form, setForm] = useState(emptyRecord())
   const [editRec, setEditRec] = useState(null)
   const [viewRec, setViewRec] = useState(null)
   const [photoZoom, setPhotoZoom] = useState(null)
+  const [cardZoomRec, setCardZoomRec] = useState(null)
   const [deathRec, setDeathRec] = useState(null)
   const [collectRec, setCollectRec] = useState(null)
   const [collectDate, setCollectDate] = useState(today())
@@ -605,7 +607,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
         <p className="text-slate-400 text-sm">Sold koi — track pond, taken away, or deceased</p>
       </div>
       {canEdit && (
-        <Fab onClick={openAdd} label="Add Koi Record" hidden={showAdd || !!editRec || !!viewRec || !!photoZoom || !!deathRec || !!collectRec} />
+        <Fab onClick={openAdd} label="Add Koi Record" hidden={showAdd || !!editRec || !!viewRec || !!photoZoom || !!cardZoomRec || !!deathRec || !!collectRec} />
       )}
 
       <div className="flex flex-col lg:flex-row gap-4 min-h-[480px]">
@@ -685,17 +687,24 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
               </Card>
             ) : recordsPage.paginatedItems.map((r) => (
               <Card key={r.id} className={`overflow-hidden ${STATUS_STYLE[r.status]?.border || ''}`}>
-                <div className="aspect-video bg-slate-900 relative">
+                <div className="aspect-square bg-slate-900 relative">
                   {r.photo ? (
-                    <StoredImage
-                      src={r.photo}
-                      alt=""
-                      className={`w-full h-full object-cover ${r.status === CUSTOMER_KOI_STATUS.DECEASED ? 'grayscale' : ''}`}
-                      entity="customer_koi"
-                      recordId={r.id}
-                      field="photo"
-                      onRefresh={refreshCustomerKoiImage}
-                    />
+                    <button
+                      type="button"
+                      className="w-full h-full cursor-zoom-in focus:outline-none"
+                      onClick={() => setCardZoomRec(r)}
+                      aria-label="View full photo"
+                    >
+                      <StoredImage
+                        src={r.photo}
+                        alt=""
+                        className={`w-full h-full object-contain ${r.status === CUSTOMER_KOI_STATUS.DECEASED ? 'grayscale' : ''}`}
+                        entity="customer_koi"
+                        recordId={r.id}
+                        field="photo"
+                        onRefresh={refreshCustomerKoiImage}
+                      />
+                    </button>
                   ) : <div className="w-full h-full flex items-center justify-center"><Fish size={40} className="text-slate-600" /></div>}
                   {statusBadge(r)}
                 </div>
@@ -731,7 +740,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
         </div>
       </div>
 
-      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Customer Koi" size="lg">
+      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Customer Koi" size="lg" confirmClose>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {customers.length === 0 ? (
             <p className="text-amber-300 text-sm bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 sm:col-span-2">
@@ -771,7 +780,7 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
         </div>
       </Modal>
 
-      <Modal open={!!editRec} onClose={() => setEditRec(null)} title="Edit Record" size="md">
+      <Modal open={!!editRec} onClose={() => setEditRec(null)} title="Edit Record" size="md" confirmClose>
         {editRec && (
           <>
             <PhotoPicker photo={editRec.photo} onPick={(p) => setEditRec((r) => ({ ...r, photo: p }))} onError={notifyImageError} />
@@ -961,6 +970,17 @@ export default function CustomerKoi({ records, setRecords, customers, farmKoiLis
           field={photoZoom === 'death_photo' ? 'death_photo' : 'photo'}
           onRefresh={refreshCustomerKoiImage}
           onClose={() => setPhotoZoom(null)}
+        />
+      )}
+      {cardZoomRec && (
+        <PhotoLightbox
+          src={cardZoomRec.photo}
+          alt={displayFishName(cardZoomRec)}
+          entity="customer_koi"
+          recordId={cardZoomRec.id}
+          field="photo"
+          onRefresh={refreshCustomerKoiImage}
+          onClose={() => setCardZoomRec(null)}
         />
       )}
     </div>

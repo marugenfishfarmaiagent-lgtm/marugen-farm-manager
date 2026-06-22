@@ -12,6 +12,7 @@ import StoredImage from '../components/StoredImage'
 import EmptyState from '../components/ui/EmptyState'
 import PaginationControls from '../components/ui/PaginationControls'
 import { usePagination } from '../hooks/usePagination'
+import { useSessionState } from '../hooks/useSessionState'
 import { LIST_PAGE_SIZE } from '../data/constants'
 import * as db from '../lib/database'
 import { isSupabaseConfigured } from '../lib/supabase'
@@ -126,10 +127,10 @@ export default function KoiFish({
       /* signed URL refresh failed */
     }
   }, [setKoiList])
-  const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState('stock')
-  const [varietyFilter, setVarietyFilter] = useState('all')
-  const [pondFilter, setPondFilter] = useState('all')
+  const [search, setSearch] = useSessionState('koifish-search', '')
+  const [statusFilter, setStatusFilter] = useSessionState('koifish-statusFilter', 'stock')
+  const [varietyFilter, setVarietyFilter] = useSessionState('koifish-varietyFilter', 'all')
+  const [pondFilter, setPondFilter] = useSessionState('koifish-pondFilter', 'all')
   const [showAdd, setShowAdd] = useState(false)
   const [form, setForm] = useState(emptyKoiForm())
   const [editKoi, setEditKoi] = useState(null)
@@ -739,7 +740,7 @@ export default function KoiFish({
       </div>
       <PaginationControls {...koiPage} />
 
-      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Koi" size="lg">
+      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Koi" size="lg" confirmClose>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <PhotoPicker photo={form.photo} onPick={(p) => setForm((f) => ({ ...f, photo: p }))} onError={notifyImageError} className="sm:col-span-2" />
           <Input label="Fish name (optional)" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
@@ -755,7 +756,7 @@ export default function KoiFish({
         </div>
       </Modal>
 
-      <Modal open={!!editKoi} onClose={() => setEditKoi(null)} title={`Edit ${editKoi?.id}`} size="lg">
+      <Modal open={!!editKoi} onClose={() => setEditKoi(null)} title={`Edit ${editKoi?.id}`} size="lg" confirmClose>
         {editKoi && (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

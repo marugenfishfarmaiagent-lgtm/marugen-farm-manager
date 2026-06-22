@@ -36,6 +36,8 @@ function normalizeReminderRecord(reminder) {
 }
 
 const POND_RECORD_MERGE_GRACE_MS = 15000
+// If a pending record is this much newer than a done record, treat it as a deliberate undo.
+const REMINDER_UNDO_GRACE_MS = 5000
 
 export function mergePondRecords(local = [], remote = [], { preferDone = false } = {}) {
   const map = new Map()
@@ -48,12 +50,13 @@ export function mergePondRecords(local = [], remote = [], { preferDone = false }
       if (aDone !== bDone) {
         const doneRecord = aDone ? a : b
         const pendingRecord = aDone ? b : a
-        // "done" is terminal — it always wins on status.
-        // But if the pending record is newer (e.g. a note or assignee was edited
-        // after the reminder was marked done), preserve those field edits while
-        // forcing the done status. Keep the pending record's updatedAt so this
-        // merged result is newer than the pending version and propagates forward.
         if (ts(pendingRecord) > ts(doneRecord)) {
+          // Deliberate undo: the pending record is significantly newer than the done record.
+          // Respect the user's intent to reopen the reminder.
+          if (ts(pendingRecord) - ts(doneRecord) > REMINDER_UNDO_GRACE_MS) {
+            return pendingRecord
+          }
+          // Close-timestamp race (sync lag): keep done status but preserve field edits.
           return {
             ...pendingRecord,
             status: 'done',
