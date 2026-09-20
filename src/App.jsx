@@ -596,10 +596,10 @@ function Dashboard({
         {can("ponds") && (
           <Card className="p-4">
             <div className="flex items-center justify-between mb-3 gap-2">
-              <h3 className="text-sm font-bold text-white flex items-center gap-2"><Droplets size={14} className="text-cyan-400" />Pond Management</h3>
+              <h3 className="text-sm font-bold text-white flex items-center gap-2"><Droplets size={14} className="text-cyan-400" />Pond Calculator</h3>
               {sectionLink("ponds", "Open →")}
             </div>
-            <p className="text-slate-500 text-xs">Track pond water quality and run pond calculations.</p>
+            <p className="text-slate-500 text-xs">Calculate pond water volume and salt dosing.</p>
           </Card>
         )}
         {can("users") && (
@@ -2112,7 +2112,7 @@ function ChangePinModal({ open, onClose, currentUser, users, setUsers, addNotifi
 const ALL_NAV_ITEMS = [
   { id: "dashboard", label: "Dashboard", icon: Home },
   { id: "inventory", label: "Inventory", icon: Boxes },
-  { id: "ponds", label: "Pond Mgmt", icon: Droplets },
+  { id: "ponds", label: "Pond Calc", icon: Droplets },
   { id: "users", label: "Team", icon: UserCog },
 ];
 
@@ -2162,7 +2162,6 @@ export default function App() {
   const syncTimersRef = useRef({});
   const syncInFlightRef = useRef(0);
   const explicitFlushAtRef = useRef({ expenses: 0, invoices: 0, calendar: 0, customerkoi: 0, koifish: 0 });
-  const pondSyncChainRef = useRef(Promise.resolve());
   const syncStateRef = useRef({});
   const inventorySyncPendingRef = useRef(false);
   const currentUserRef = useRef(currentUser);
@@ -2844,79 +2843,6 @@ export default function App() {
     }
   }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth]);
 
-  const syncPondDataNow = useCallback(async (pondOverride) => {
-    if (!isSupabaseConfigured) return;
-    if (!cloudHydrated || !auth.hasCloudSession() || !currentUser) {
-      throw new Error("Cloud sync is not ready.");
-    }
-    if (!hasPermission(currentUser, "ponds")) {
-      throw new Error("Permission denied (ponds).");
-    }
-
-    if (pondOverride) {
-      const touched = touchPondData(pondOverride);
-      syncStateRef.current = { ...syncStateRef.current, pondData: touched };
-    }
-
-    const timerKey = "ponds:Pond data";
-    if (syncTimersRef.current[timerKey]) {
-      clearTimeout(syncTimersRef.current[timerKey]);
-      delete syncTimersRef.current[timerKey];
-    }
-
-    const runPondSync = async () => {
-      let waited = 0;
-      while (syncInFlightRef.current > 0 && waited < 3000) {
-        await new Promise((r) => setTimeout(r, 100));
-        waited += 100;
-      }
-
-      let payload = touchPondData(syncStateRef.current.pondData);
-      syncStateRef.current = { ...syncStateRef.current, pondData: payload };
-
-      syncInFlightRef.current += 1;
-      try {
-        if (!(await ensureCloudSyncReady())) {
-          throw new Error("Session needs refresh. Log out and log in again.");
-        }
-
-        let result = await db.syncPondData(payload);
-        if (result?.skipped) {
-          const remote = await db.fetchAllData();
-          if (remote?.pondData) {
-            const latest = syncStateRef.current.pondData;
-            payload = touchPondData(mergePondData(latest, remote.pondData));
-            syncStateRef.current = { ...syncStateRef.current, pondData: payload };
-            setPondDataWithRef(payload);
-            result = await db.syncPondData(payload);
-          }
-          if (result?.skipped) {
-            result = await db.syncPondData(payload, { force: true });
-          }
-        }
-        if (result?.skipped) {
-          throw new Error("Could not save pond reminder — cloud data was newer. Refresh and try again.");
-        }
-
-        // State was already set optimistically before sync started.
-        // Only the skipped/merge path (above) needs a state update.
-        // Calling setPondDataWithRef here would cause a redundant second
-        // render (React sees a new object due to touchPondData's updatedAt)
-        // which manifests as a visible flicker in the UI.
-        resetSyncHealth();
-        touchLastSync();
-      } catch (err) {
-        handleSyncFailure(err);
-        throw err;
-      } finally {
-        syncInFlightRef.current -= 1;
-      }
-    };
-
-    pondSyncChainRef.current = pondSyncChainRef.current.then(runPondSync, runPondSync);
-    return pondSyncChainRef.current;
-  }, [cloudHydrated, currentUser, ensureCloudSyncReady, handleSyncFailure, touchLastSync, resetSyncHealth, setPondDataWithRef]);
-
   const syncDebounced = useCallback((perm, label, fn, data) => {
     if (!dataReady || !cloudHydrated || !isSupabaseConfigured || !auth.hasCloudSession() || !currentUser) return;
     if (!hasPermission(currentUser, perm)) return;
@@ -3387,7 +3313,7 @@ export default function App() {
         />
       ));
       case "inventory": return guard("inventory", "Inventory", <InventoryModule products={products} setProducts={setProducts} stockLog={stockLog} setStockLog={setStockLog} addNotification={addNotification} currentUser={currentUser} onProductsSaved={flushProductSync} onInventorySaved={flushInventorySync} onAdjustStockCloud={isSupabaseConfigured ? adjustInventoryStockCloud : undefined} />);
-      case "ponds": return guard("ponds", "Pond Management", <PondManagement pondData={pondData} setPondData={setPondDataWithRef} addNotification={addNotification} currentUser={currentUser} users={users} canEdit={canEditRecords(currentUser)} canDelete={canDeleteRecords(currentUser)} onPersistPondData={syncPondDataNow} />);
+      case "ponds": return guard("ponds", "Pond Calculator", <PondManagement />);
       case "users": return guard("users", "Team & Permissions", <TeamModule users={users} setUsers={setUsers} currentUser={currentUser} addNotification={addNotification} onCurrentUserUpdate={handleUserUpdate} cloudMode={isSupabaseConfigured && cloudSync} apiEnabled={isSupabaseConfigured} onOpenChangePin={() => setShowChangePin(true)} />);
       default: return null;
     }
