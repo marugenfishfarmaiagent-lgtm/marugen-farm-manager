@@ -20,7 +20,7 @@ export const A4_HEIGHT_PX = A4_WIDTH_PX * (297 / 210)
 export function compareInvoicesDesc(a, b) {
   const dateCmp = String(b?.date || '').localeCompare(String(a?.date || ''))
   if (dateCmp !== 0) return dateCmp
-  return String(b?.id || '').localeCompare(String(a?.id || ''), undefined, { numeric: true })
+  return String(b?.id || '').localeCompare(String(a?.id || ''))
 }
 
 export function sortInvoices(list = []) {

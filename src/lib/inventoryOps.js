@@ -72,9 +72,22 @@ export function normalizeProductRecord(raw, { catalogOnly = false } = {}) {
     minStock: catalogOnly ? 0 : Number(raw.minStock) || 0,
     trackStock: !catalogOnly,
     sku: String(raw.sku ?? '').trim(),
+    barcode: String(raw.barcode ?? '').trim(),
     description: String(raw.description ?? '').trim(),
     unit: String(raw.unit ?? 'unit').trim() || 'unit',
   }
+}
+
+/** Normalize a scanned/typed barcode for comparison (trim + uppercase, ignore separators). */
+export function normalizeBarcode(value) {
+  return String(value ?? '').trim().toUpperCase()
+}
+
+/** Find the product whose barcode matches the scanned code, if any. */
+export function findProductByBarcode(products, code) {
+  const target = normalizeBarcode(code)
+  if (!target) return null
+  return (products || []).find((p) => p.barcode && normalizeBarcode(p.barcode) === target) || null
 }
 
 /** Build activity-log note for manual restock (optional supplier invoice no.). */

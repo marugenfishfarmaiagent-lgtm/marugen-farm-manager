@@ -94,25 +94,15 @@ export function formatDateTime(dateStr) {
 export const ALL_PERMISSIONS = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'inventory', label: 'Inventory' },
-  { id: 'koifish', label: 'Koi Fish' },
-  { id: 'customerkoi', label: 'Customer Koi' },
   { id: 'ponds', label: 'Pond Management' },
-  { id: 'invoices', label: 'Invoices' },
-  { id: 'customers', label: 'Customers' },
-  { id: 'expenses', label: 'Expenses' },
-  { id: 'accounting', label: 'Accounting marks' },
   { id: 'edit', label: 'Edit records' },
   { id: 'delete', label: 'Delete records' },
-  { id: 'refund', label: 'Refund sales' },
-  { id: 'deliveries', label: 'Deliveries' },
-  { id: 'calendar', label: 'Calendar' },
-  { id: 'chat', label: 'AI Chat' },
   { id: 'users', label: 'Team & Permissions' },
 ]
 
 export const DEFAULT_PERMISSIONS = {
   owner: ALL_PERMISSIONS.map((p) => p.id),
-  staff: ['dashboard', 'inventory', 'koifish', 'customerkoi', 'ponds', 'invoices', 'customers', 'deliveries', 'calendar', 'chat'],
+  staff: ['dashboard', 'inventory', 'ponds'],
 }
 
 export const KOI_VARIETIES = [
@@ -304,12 +294,11 @@ export function genInvoiceId(invoices = [], issueDate, { reservedIds = [] } = {}
     const num = parseInt(id.slice(prefix.length), 10)
     if (!Number.isNaN(num) && num > maxSeq) maxSeq = num
   }
-  const pad = (n) => String(n).padStart(n < 100 ? 2 : String(n).length, '0')
   let seq = maxSeq + 1
-  let candidate = `${prefix}${pad(seq)}`
+  let candidate = `${prefix}${String(seq).padStart(2, '0')}`
   while (reserved.has(candidate)) {
     seq += 1
-    candidate = `${prefix}${pad(seq)}`
+    candidate = `${prefix}${String(seq).padStart(2, '0')}`
   }
   return candidate
 }
