@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 /** Portaled to body so the bar stays pinned to the viewport while main content scrolls. */
 export default function MobileBottomNav({ items, activeTab, onSelect }) {
@@ -14,6 +14,17 @@ export default function MobileBottomNav({ items, activeTab, onSelect }) {
 function BottomNavInner({ items, activeTab, onSelect }) {
   const scrollRef = useRef(null)
   const activeRef = useRef(null)
+  const [overflowing, setOverflowing] = useState(false)
+
+  useEffect(() => {
+    const container = scrollRef.current
+    if (!container || typeof ResizeObserver === 'undefined') return undefined
+    const checkOverflow = () => setOverflowing(container.scrollWidth > container.clientWidth + 1)
+    checkOverflow()
+    const observer = new ResizeObserver(checkOverflow)
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [items.length])
 
   useEffect(() => {
     const el = activeRef.current
@@ -38,7 +49,7 @@ function BottomNavInner({ items, activeTab, onSelect }) {
       <div className="relative">
         <div
           ref={scrollRef}
-          className="flex overflow-x-auto scrollbar-hide gap-0.5 px-1 py-1.5"
+          className={`flex gap-0.5 px-1 py-1.5 ${overflowing ? 'overflow-x-auto scrollbar-hide' : 'justify-around'}`}
         >
           {items.map((item) => (
             <button
@@ -53,8 +64,10 @@ function BottomNavInner({ items, activeTab, onSelect }) {
             </button>
           ))}
         </div>
-        {/* Right-edge fade — signals more items exist */}
-        <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-slate-900/95 to-transparent" />
+        {/* Right-edge fade — only when items overflow and scrolling reveals more */}
+        {overflowing && (
+          <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-slate-900/95 to-transparent" />
+        )}
       </div>
     </nav>
   )
