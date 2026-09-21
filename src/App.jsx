@@ -1711,6 +1711,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
                   <span>{l.date}</span>
                   <span className="text-white font-bold">×{l.qty}</span>
                 </div>
+                <div className="text-slate-500 text-xs mt-1">By: <span className="text-slate-300">{l.by || "Staff"}</span></div>
                 {l.note && <p className="text-slate-500 text-xs mt-1">{l.note}</p>}
               </div>
             ))}
