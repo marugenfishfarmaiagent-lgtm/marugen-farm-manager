@@ -1,13 +1,13 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { format } from "date-fns";
-import { Droplets, FileText, TrendingUp, Bell, LogOut, Plus, Search, X, Check, AlertTriangle, Home, Menu, Boxes, Clock, CheckCircle, XCircle, Info, Archive, Shield, Edit2, Trash2, Lock, RefreshCw, Loader2, UserCog, UserPlus, ScanBarcode } from "lucide-react";
+import { Droplets, TrendingUp, Bell, LogOut, Plus, Search, X, Check, AlertTriangle, Home, Menu, Boxes, Clock, CheckCircle, XCircle, Info, Archive, Shield, Edit2, Trash2, Lock, RefreshCw, Loader2, UserCog, UserPlus, ScanBarcode } from "lucide-react";
 import PondManagement from "./modules/PondManagement";
 import { loadKoiFish, saveKoiFish, loadCustomerKoi, saveCustomerKoi, loadPondData, savePondData } from "./lib/koiStorage";
 import { loadProducts, saveProducts, loadStockLog, saveStockLog } from "./lib/farmStorage";
 import { markLowStockAlertShownToday, wasLowStockAlertShownToday } from "./lib/lowStockAlert";
 import { clearLocalOnlyStorage, emptyPondData, resolveCloudKoiPayload, resolveCloudWhatsappGroups } from "./lib/cloudData";
-import { adjustProductStockInList, buildStockLogEntry, findProductByBarcode, formatRestockLogNote, genStockLogId, getLowStockProducts, isProductOnActiveInvoice, normalizeProductRecord, parseStockQty, sameProductId, sortStockLog, validateProductFields } from "./lib/inventoryOps";
-import { isStockTracked, priceListProducts, stockProducts } from "./lib/productCatalog";
+import { adjustProductStockInList, buildStockLogEntry, findProductByBarcode, formatRestockLogNote, genStockLogId, getLowStockProducts, normalizeProductRecord, parseStockQty, sameProductId, sortStockLog, validateProductFields } from "./lib/inventoryOps";
+import { stockProducts } from "./lib/productCatalog";
 import { reconcileKoiSoldFromInvoices } from "./lib/koiInvoice";
 import { sortInvoices } from './lib/invoiceDesign';
 import { computeDashboardMetrics } from './lib/dashboardMetrics';
@@ -1047,14 +1047,13 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
 // ─────────────────────────────────────────────
 const EMPTY_PRODUCT_FORM = { name: "", category: "Fish Food", sku: "", barcode: "", price: "", unit: "kg", stock: "", minStock: "", description: "", trackStock: true };
 
-function InventoryModule({ products, setProducts, stockLog, setStockLog, invoices = [], addNotification, currentUser, onProductsSaved, onInventorySaved, onAdjustStockCloud }) {
+function InventoryModule({ products, setProducts, stockLog, setStockLog, addNotification, currentUser, onProductsSaved, onInventorySaved, onAdjustStockCloud }) {
   const canEdit = canEditRecords(currentUser);
   const canDelete = canDeleteRecords(currentUser);
   const [tab, setTab] = useState("stock");
   const [showAdd, setShowAdd] = useState(false);
   const [addingProduct, setAddingProduct] = useState(false);
   const addingProductRef = useRef(false);
-  const [addCatalogOnly, setAddCatalogOnly] = useState(false);
   const [editProduct, setEditProduct] = useState(null);
   const [savingProduct, setSavingProduct] = useState(false);
   const savingProductRef = useRef(false);
@@ -1095,11 +1094,9 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
   const hiddenStockLogCount = stockLog.filter((l) => !isAppVisibleStockLog(l)).length;
 
   const stockItems = useMemo(() => stockProducts(products), [products]);
-  const catalogItems = useMemo(() => priceListProducts(products), [products]);
-  const tabProducts = tab === "pricelist" ? catalogItems : stockItems;
 
   const searchLower = search.toLowerCase();
-  const filtered = tabProducts.filter((p) =>
+  const filtered = stockItems.filter((p) =>
     (catFilter === "All" || p.category === catFilter) &&
     (
       (p.name || "").toLowerCase().includes(searchLower)
@@ -1122,9 +1119,9 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     setFormScanTarget(null);
   };
 
-  const handleLookupScanDetect = (code) => {
+  const handleLookupScanDetect = (code, { manual = false } = {}) => {
     const now = Date.now();
-    if (lastScanRef.current.code === code && now - lastScanRef.current.at < 2000) return;
+    if (!manual && lastScanRef.current.code === code && now - lastScanRef.current.at < 2000) return;
     lastScanRef.current = { code, at: now };
     clearTimeout(scanFeedbackTimerRef.current);
 
@@ -1169,8 +1166,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       notifyPermissionDenied(addNotification, "edit");
       return;
     }
-    const catalogOnly = addCatalogOnly || form.trackStock === false;
-    const check = validateProductFields(form, { catalogOnly });
+    const check = validateProductFields(form);
     if (!check.ok) {
       addNotification({ type: "error", title: "Invalid Product", message: check.message });
       return;
@@ -1179,13 +1175,13 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     addingProductRef.current = true;
     setAddingProduct(true);
     try {
-      const normalized = normalizeProductRecord(form, { catalogOnly });
+      const normalized = normalizeProductRecord(form);
       const p = touchUpdatedAt({ ...form, ...normalized, id: genStockLogId() });
       const productsSnapshot = products;
       const stockSnapshot = stockLog;
       const nextProducts = [...productsSnapshot, p];
       let nextStockLog = stockSnapshot;
-      if (!catalogOnly && p.stock > 0) {
+      if (p.stock > 0) {
         nextStockLog = [
           buildStockLogEntry(p, "restock", {
             qty: p.stock,
@@ -1198,11 +1194,10 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       if (!(await persistInventory(nextProducts, nextStockLog))) return;
       addNotification({
         type: "success",
-        title: catalogOnly ? "Price List Item Added" : "Product Added",
-        message: `${p.name} ${catalogOnly ? "added to invoice price list" : "added to inventory"}`,
+        title: "Product Added",
+        message: `${p.name} added to inventory`,
       });
       setShowAdd(false);
-      setAddCatalogOnly(false);
       setForm(EMPTY_PRODUCT_FORM);
     } finally {
       addingProductRef.current = false;
@@ -1210,11 +1205,8 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     }
   };
 
-  const openAddProduct = (catalogOnly = false) => {
-    setAddCatalogOnly(catalogOnly);
-    setForm(catalogOnly
-      ? { ...EMPTY_PRODUCT_FORM, trackStock: false, stock: 0, minStock: 0, unit: "bag" }
-      : EMPTY_PRODUCT_FORM);
+  const openAddProduct = () => {
+    setForm(EMPTY_PRODUCT_FORM);
     setShowAdd(true);
   };
 
@@ -1225,15 +1217,14 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       return;
     }
     const current = products.find((p) => sameProductId(p.id, editProduct.id));
-    const catalogOnly = editProduct.trackStock === false;
-    const check = validateProductFields(editProduct, { catalogOnly });
+    const check = validateProductFields(editProduct);
     if (!check.ok) {
       addNotification({ type: "error", title: "Invalid Product", message: check.message });
       return;
     }
     savingProductRef.current = true;
     setSavingProduct(true);
-    const normalized = normalizeProductRecord(editProduct, { catalogOnly });
+    const normalized = normalizeProductRecord(editProduct);
     const base = current
       ? { ...current, ...normalized, id: current.id }
       : { ...editProduct, ...normalized };
@@ -1284,15 +1275,6 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
     if (!deleteProduct || deletingProductRef.current) return;
     if (!canDelete) {
       notifyPermissionDenied(addNotification, "delete");
-      return;
-    }
-    if (isProductOnActiveInvoice(deleteProduct.id, invoices)) {
-      addNotification({
-        type: "error",
-        title: "Cannot Delete",
-        message: `${deleteProduct.name} is on an active invoice. Cancel or edit that invoice first.`,
-      });
-      setDeleteProduct(null);
       return;
     }
     const snapshot = products;
@@ -1596,12 +1578,11 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
         <h2 className="text-xl sm:text-2xl font-black text-white">Inventory</h2>
         <p className="text-slate-400 text-sm">Stock tracking & invoice price list</p>
       </div>
-      <Fab onClick={() => openAddProduct(tab === "pricelist")} label={tab === "pricelist" ? "Add Price Item" : "Add Product"} hidden={!canEdit || showAdd || !!editProduct || !!deleteProduct || !!showUse || !!showRestock || !!showAdjust} />
+      <Fab onClick={openAddProduct} label="Add Product" hidden={!canEdit || showAdd || !!editProduct || !!deleteProduct || !!showUse || !!showRestock || !!showAdjust} />
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
         {[
           { label: "Stock Products", value: stockItems.length, icon: Boxes, color: "text-cyan-400" },
-          { label: "Price List Items", value: catalogItems.length, icon: FileText, color: "text-violet-400" },
           { label: "Low Stock Items", value: lowStockItems.length, icon: AlertTriangle, color: lowStockItems.length > 0 ? "text-amber-400" : "text-emerald-400" },
           { label: "Stock Value (Selling)", value: formatSGD(totalStockValue), icon: TrendingUp, color: "text-emerald-400" },
         ].map(s => (
@@ -1616,7 +1597,6 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       <div className="flex gap-2 border-b border-slate-700 pb-0">
         {[
           { id: "stock", label: "📦 Stock" },
-          { id: "pricelist", label: "📋 Price List" },
           { id: "log", label: "📜 Activity Log" },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
@@ -1626,7 +1606,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
         ))}
       </div>
 
-      {(tab === "stock" || tab === "pricelist") && (
+      {tab === "stock" && (
         <>
           <div className="flex flex-wrap gap-3">
             <div className="relative flex-1 min-w-[180px]">
@@ -1634,8 +1614,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search products..."
                 className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-9 pr-3 py-3 sm:py-2 text-white text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/50" />
             </div>
-            {tab === "stock" && (
-              <button
+            <button
                 type="button"
                 onClick={() => { clearTimeout(scanFeedbackTimerRef.current); setScanFeedback(null); setLookupScanOpen(true); }}
                 aria-label="Scan a product barcode"
@@ -1644,7 +1623,6 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
                 <ScanBarcode size={16} />
                 <span>Scan</span>
               </button>
-            )}
             <div className="flex gap-2 flex-wrap">
               {["All", ...PRODUCT_CATEGORIES].map(c => (
                 <button key={c} onClick={() => setCatFilter(c)}
@@ -1658,55 +1636,47 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
               <Card className="md:col-span-2 xl:col-span-3">
                 <EmptyState
                   emoji="📦"
-                  title={tabProducts.length === 0
-                    ? (tab === "pricelist" ? "No price list items yet" : "No products yet")
-                    : "No products match your filters"}
-                  hint={tabProducts.length === 0 ? (tab === "pricelist" ? "Tap Add Price Item to get started" : "Tap Add Product to get started") : "Try a different search or category"}
-                  actionLabel={tabProducts.length === 0 && canEdit ? (tab === "pricelist" ? "Add Price Item" : "Add Product") : undefined}
-                  onAction={tabProducts.length === 0 && canEdit ? () => openAddProduct(tab === "pricelist") : undefined}
+                  title={stockItems.length === 0 ? "No products yet" : "No products match your filters"}
+                  hint={stockItems.length === 0 ? "Tap Add Product to get started" : "Try a different search or category"}
+                  actionLabel={stockItems.length === 0 && canEdit ? "Add Product" : undefined}
+                  onAction={stockItems.length === 0 && canEdit ? openAddProduct : undefined}
                 />
               </Card>
             ) : productPage.paginatedItems.map((p) => {
-              const isCatalog = !isStockTracked(p);
-              const isLow = !isCatalog && p.minStock > 0 && p.stock <= p.minStock;
+              const isLow = p.minStock > 0 && p.stock <= p.minStock;
               return (
-                <Card key={p.id} className={`p-4 ${isLow ? "border-amber-500/30 bg-amber-500/5" : isCatalog ? "border-violet-500/20" : ""}`}>
+                <Card key={p.id} className={`p-4 ${isLow ? "border-amber-500/30 bg-amber-500/5" : ""}`}>
                   <div className="flex items-start justify-between mb-3 gap-2">
                     <div className="min-w-0">
                       <p className="text-white font-bold text-sm">{p.name}</p>
                       <p className="text-slate-500 text-xs">{p.sku || "—"} · {p.category || "—"}</p>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
-                      {isCatalog && <Badge className="bg-violet-500/20 text-violet-300">Invoice only</Badge>}
                       {isLow && <Badge className="bg-amber-500/20 text-amber-300">Low Stock</Badge>}
                       {canEdit && <Btn variant="ghost" size="sm" onClick={() => setEditProduct({ ...p })} title="Edit"><Edit2 size={12} /></Btn>}
                       {canDelete && <Btn variant="danger" size="sm" onClick={() => setDeleteProduct(p)} title="Delete"><Trash2 size={12} /></Btn>}
                     </div>
                   </div>
-                  <div className={`grid gap-2 mb-4 text-center ${isCatalog ? "grid-cols-1" : "grid-cols-2"}`}>
-                    {!isCatalog && (
-                      <div className="bg-slate-900/50 rounded-lg p-2">
-                        <p className={`text-lg font-black ${isLow ? "text-amber-400" : "text-white"}`}>{p.stock}</p>
-                        <p className="text-slate-500 text-xs">In stock ({p.unit})</p>
-                      </div>
-                    )}
+                  <div className="grid gap-2 mb-4 text-center grid-cols-2">
+                    <div className="bg-slate-900/50 rounded-lg p-2">
+                      <p className={`text-lg font-black ${isLow ? "text-amber-400" : "text-white"}`}>{p.stock}</p>
+                      <p className="text-slate-500 text-xs">In stock ({p.unit})</p>
+                    </div>
                     <div className="bg-slate-900/50 rounded-lg p-2">
                       <p className="text-lg font-black text-cyan-400">{formatSGD(p.price)}</p>
-                      <p className="text-slate-500 text-xs">{isCatalog ? "Invoice price" : "Selling price"}</p>
+                      <p className="text-slate-500 text-xs">Selling price</p>
                     </div>
                   </div>
-                  {!isCatalog && p.minStock > 0 && (
+                  {p.minStock > 0 && (
                     <div className="mb-3">
                       <div className="flex justify-between text-xs text-slate-500 mb-1"><span>Stock Level</span><span>Min: {p.minStock}</span></div>
                       <div className="h-1.5 bg-slate-700 rounded-full"><div className={`h-full rounded-full ${isLow ? "bg-amber-400" : "bg-emerald-400"}`} style={{ width: `${Math.min((p.stock / (p.minStock * 3)) * 100, 100)}%` }} /></div>
                     </div>
                   )}
-                  {!isCatalog && (
-                    <div className="flex gap-2 flex-wrap">
-                      <Btn variant="secondary" size="sm" onClick={() => { setShowUse(p); setUseQty(1); setUseNote(""); }} disabled={!canEdit}><Archive size={12} />Use</Btn>
-                      <Btn variant="ghost" size="sm" onClick={() => { setShowRestock(p); setRestockQty(1); setRestockNote(""); }} disabled={!canEdit}><Plus size={12} />Restock</Btn>
-                    </div>
-                  )}
+                  <div className="flex gap-2 flex-wrap">
+                    <Btn variant="secondary" size="sm" onClick={() => { setShowUse(p); setUseQty(1); setUseNote(""); }} disabled={!canEdit}><Archive size={12} />Use</Btn>
+                    <Btn variant="ghost" size="sm" onClick={() => { setShowRestock(p); setRestockQty(1); setRestockNote(""); }} disabled={!canEdit}><Plus size={12} />Restock</Btn>
+                  </div>
                 </Card>
               );
             })}
@@ -1773,39 +1743,30 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
       )}
 
       {/* Add Product Modal */}
-      <Modal open={showAdd} onClose={() => { if (!addingProduct) { setShowAdd(false); setAddCatalogOnly(false); } }} title={addCatalogOnly ? "Add Price List Item" : "Add New Product"} size="lg">
+      <Modal open={showAdd} onClose={() => { if (!addingProduct) setShowAdd(false); }} title="Add New Product" size="lg">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {addCatalogOnly && (
-            <p className="sm:col-span-2 text-violet-300 text-xs bg-violet-500/10 border border-violet-500/30 rounded-lg p-2">
-              Invoice price list only — not tracked in stock. Use on invoices without deducting inventory.
-            </p>
-          )}
           <Input label="Product Name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required className="sm:col-span-2" />
           <Select label="Category" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} options={PRODUCT_CATEGORIES} />
           <Input label="SKU" value={form.sku} onChange={e => setForm(f => ({ ...f, sku: e.target.value }))} placeholder="FF001" />
           <BarcodeInputField value={form.barcode} onChange={e => setForm(f => ({ ...f, barcode: e.target.value }))} onScan={() => setFormScanTarget("add")} />
           <Input label="Selling Price (S$)" type="number" value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))} step="0.01" required />
-          {!addCatalogOnly && (
-            <>
-              <Input label="Current Stock" type="number" value={form.stock} onChange={e => setForm(f => ({ ...f, stock: e.target.value }))} required />
-              <Input label="Min Stock Alert" type="number" value={form.minStock} onChange={e => setForm(f => ({ ...f, minStock: e.target.value }))} />
-            </>
-          )}
+          <Input label="Current Stock" type="number" value={form.stock} onChange={e => setForm(f => ({ ...f, stock: e.target.value }))} required />
+          <Input label="Min Stock Alert" type="number" value={form.minStock} onChange={e => setForm(f => ({ ...f, minStock: e.target.value }))} />
           <Input label="Unit" value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} placeholder="bag / bottle / pcs" />
           <Textarea label="Description" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} className="sm:col-span-2" />
         </div>
         <div className="modal-actions">
-          <Btn variant="secondary" onClick={() => { if (!addingProduct) { setShowAdd(false); setAddCatalogOnly(false); } }} disabled={addingProduct}>Cancel</Btn>
+          <Btn variant="secondary" onClick={() => { if (!addingProduct) setShowAdd(false); }} disabled={addingProduct}>Cancel</Btn>
           <Btn onClick={addProduct} disabled={addingProduct}>
             {addingProduct
               ? <><Loader2 size={14} className="animate-spin" />Saving...</>
-              : <><Plus size={14} />{addCatalogOnly ? "Add to Price List" : "Add Product"}</>}
+              : <><Plus size={14} />Add Product</>}
           </Btn>
         </div>
       </Modal>
 
       {/* Edit Product Modal */}
-      <Modal open={!!editProduct} onClose={() => { if (!savingProduct) setEditProduct(null); }} title={editProduct?.trackStock === false ? "Edit Price List Item" : "Edit Product"} size="lg">
+      <Modal open={!!editProduct} onClose={() => { if (!savingProduct) setEditProduct(null); }} title="Edit Product" size="lg">
         {editProduct && (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1814,21 +1775,17 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, invoice
               <Input label="SKU" value={editProduct.sku} onChange={e => setEditProduct(p => ({ ...p, sku: e.target.value }))} placeholder="FF001" />
               <BarcodeInputField value={editProduct.barcode || ""} onChange={e => setEditProduct(p => ({ ...p, barcode: e.target.value }))} onScan={() => setFormScanTarget("edit")} />
               <Input label="Selling Price (S$)" type="number" value={editProduct.price} onChange={e => setEditProduct(p => ({ ...p, price: e.target.value }))} step="0.01" required />
-              {editProduct.trackStock !== false && (
-                <>
-                  <div className="sm:col-span-2">
-                    <Input label="Current Stock" type="number" value={editProduct.stock} readOnly className="pointer-events-none opacity-80" />
-                    <p className="text-[11px] text-slate-500 mt-1">Stock is read-only here. Use Adjust Stock to keep history in activity log.</p>
-                    <div className="mt-2">
-                      <Btn type="button" variant="ghost" size="sm" onClick={() => openAdjustStock(editProduct)} disabled={savingProduct || !canEdit}>
-                        <Plus size={12} />Adjust Stock
-                      </Btn>
-                      {!canEdit && <p className="text-[11px] text-amber-400 mt-1">Edit permission is required to adjust stock.</p>}
-                    </div>
-                  </div>
-                  <Input label="Min Stock Alert" type="number" value={editProduct.minStock} onChange={e => setEditProduct(p => ({ ...p, minStock: e.target.value }))} />
-                </>
-              )}
+              <div className="sm:col-span-2">
+                <Input label="Current Stock" type="number" value={editProduct.stock} readOnly className="pointer-events-none opacity-80" />
+                <p className="text-[11px] text-slate-500 mt-1">Stock is read-only here. Use Adjust Stock to keep history in activity log.</p>
+                <div className="mt-2">
+                  <Btn type="button" variant="ghost" size="sm" onClick={() => openAdjustStock(editProduct)} disabled={savingProduct || !canEdit}>
+                    <Plus size={12} />Adjust Stock
+                  </Btn>
+                  {!canEdit && <p className="text-[11px] text-amber-400 mt-1">Edit permission is required to adjust stock.</p>}
+                </div>
+              </div>
+              <Input label="Min Stock Alert" type="number" value={editProduct.minStock} onChange={e => setEditProduct(p => ({ ...p, minStock: e.target.value }))} />
               <Input label="Unit" value={editProduct.unit} onChange={e => setEditProduct(p => ({ ...p, unit: e.target.value }))} placeholder="bag / bottle / pcs" />
               <Textarea label="Description" value={editProduct.description} onChange={e => setEditProduct(p => ({ ...p, description: e.target.value }))} className="sm:col-span-2" />
             </div>

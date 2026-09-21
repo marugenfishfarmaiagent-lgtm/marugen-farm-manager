@@ -91,10 +91,13 @@ export function formatDateTime(dateStr) {
   return formatDateFns(d, 'dd MMM yyyy, HH:mm')
 }
 
+// "ponds" is intentionally NOT a togglable permission here: hasPermission()
+// grants Pond Calculator access to every active team member regardless of
+// their permissions array, so it must not appear as a checkbox that implies
+// it can be turned off.
 export const ALL_PERMISSIONS = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'inventory', label: 'Inventory' },
-  { id: 'ponds', label: 'Pond Management' },
   { id: 'edit', label: 'Edit records' },
   { id: 'delete', label: 'Delete records' },
   { id: 'users', label: 'Team & Permissions' },
@@ -102,7 +105,7 @@ export const ALL_PERMISSIONS = [
 
 export const DEFAULT_PERMISSIONS = {
   owner: ALL_PERMISSIONS.map((p) => p.id),
-  staff: ['dashboard', 'inventory', 'ponds'],
+  staff: ['dashboard', 'inventory'],
 }
 
 export const KOI_VARIETIES = [

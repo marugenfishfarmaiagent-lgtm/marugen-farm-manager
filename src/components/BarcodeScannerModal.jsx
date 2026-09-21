@@ -94,7 +94,7 @@ export default function BarcodeScannerModal({ onClose, onDetect, title = 'Scan B
     e.preventDefault()
     const code = manualCode.trim()
     if (!code) return
-    onDetect?.(code)
+    onDetect?.(code, { manual: true })
   }
 
   return createPortal(
@@ -102,7 +102,7 @@ export default function BarcodeScannerModal({ onClose, onDetect, title = 'Scan B
       role="dialog"
       aria-modal="true"
       aria-labelledby={headingId}
-      className="fixed inset-0 z-[60] bg-slate-950 flex flex-col"
+      className="fixed inset-0 z-[100] bg-slate-950 flex flex-col"
     >
       <div className="safe-top flex items-center justify-between px-4 py-3 shrink-0">
         <h2 id={headingId} className="text-white font-bold text-sm flex items-center gap-2">
