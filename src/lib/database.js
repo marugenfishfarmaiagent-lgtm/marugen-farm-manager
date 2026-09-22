@@ -46,6 +46,7 @@ function mapProduct(row) {
     name: row.name,
     category: row.category,
     sku: row.sku,
+    barcode: row.barcode || '',
     price: Number(row.price),
     cost: Number(row.cost),
     unit: row.unit,

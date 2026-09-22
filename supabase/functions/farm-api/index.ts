@@ -1441,7 +1441,8 @@ Deno.serve(async (req) => {
           }
         }
         await upsertSync("products", incoming.map((p) => withTs({
-          id: p.id, name: String(p.name ?? "").trim(), category: p.category, sku: p.sku, price: nullableNumeric(p.price),
+          id: p.id, name: String(p.name ?? "").trim(), category: p.category, sku: p.sku,
+          barcode: p.barcode ?? "", price: nullableNumeric(p.price),
           cost: nullableNumeric(p.cost ?? 0), unit: p.unit, stock: nullableNumeric(p.stock),
           min_stock: nullableNumeric(p.minStock ?? p.min_stock), description: p.description,
           track_stock: p.trackStock !== false,

@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS products (
   name TEXT NOT NULL,
   category TEXT,
   sku TEXT,
+  barcode TEXT DEFAULT '',
   price NUMERIC DEFAULT 0,
   cost NUMERIC DEFAULT 0,
   unit TEXT DEFAULT 'unit',
