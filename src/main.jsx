@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { Analytics } from '@vercel/analytics/react'
 import './index.css'
 import App from './App.jsx'
+import UpdatePrompt from './components/UpdatePrompt.jsx'
 import { initMonitoring } from './lib/monitoring.js'
 import './lib/connectionManager.js'
 
@@ -12,6 +13,7 @@ const root = createRoot(document.getElementById('root'))
 root.render(
   <StrictMode>
     <App />
+    <UpdatePrompt />
     <Analytics />
   </StrictMode>,
 )
