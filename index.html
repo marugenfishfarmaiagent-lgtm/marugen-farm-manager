@@ -20,6 +20,21 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <title>Marugen Farm Manager</title>
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('marugen-theme');
+          var theme = saved === 'light' || saved === 'dark'
+            ? saved
+            : (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+          var root = document.documentElement;
+          root.setAttribute('data-theme', theme);
+          if (window.navigator.standalone === true) root.setAttribute('data-ios-standalone', '');
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute('content', theme === 'light' ? '#f8fafc' : '#0f172a');
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="splash" style="position:fixed;inset:0;background:#0f172a;z-index:9999;display:flex;align-items:center;justify-content:center;transition:opacity 0.35s ease;pointer-events:none">

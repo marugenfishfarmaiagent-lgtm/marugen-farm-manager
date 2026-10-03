@@ -37,6 +37,7 @@ import Fab from "./components/Fab";
 import MobileBottomNav from "./components/MobileBottomNav";
 import ToastStack from "./components/ToastStack";
 import BarcodeScannerModal from "./components/BarcodeScannerModal";
+import ThemeToggle from "./components/ThemeToggle";
 import ErrorBoundary from "./components/ErrorBoundary";
 import EmptyState from "./components/ui/EmptyState";
 import ModuleSkeleton from "./components/ui/ModuleSkeleton";
@@ -386,7 +387,8 @@ function SetupScreen({ onComplete }) {
   };
 
   return (
-    <div className="min-h-screen min-h-[100dvh] bg-slate-900 flex flex-col safe-bottom" style={{ background: "radial-gradient(ellipse at 50% 0%, rgba(6,182,212,0.15) 0%, transparent 60%), #0f172a" }}>
+    <div className="relative min-h-screen min-h-[100dvh] bg-slate-900 flex flex-col safe-bottom" style={{ background: "radial-gradient(ellipse at 50% 0%, rgba(6,182,212,0.15) 0%, transparent 60%), var(--color-slate-900)" }}>
+      <ThemeToggle className="absolute top-3 right-3 z-10 safe-top" />
       <div className="flex-1 flex items-center justify-center p-4">
         <div className="w-full max-w-sm">
           <div className="text-center mb-6">
@@ -458,7 +460,8 @@ function LoginScreen({ onLogin, users, cloudMode }) {
   const activeUsers = users.filter((u) => u.active !== false);
 
   return (
-    <div className="min-h-screen min-h-[100dvh] bg-slate-900 flex flex-col safe-bottom" style={{ background: "radial-gradient(ellipse at 50% 0%, rgba(6,182,212,0.15) 0%, transparent 60%), #0f172a" }}>
+    <div className="relative min-h-screen min-h-[100dvh] bg-slate-900 flex flex-col safe-bottom" style={{ background: "radial-gradient(ellipse at 50% 0%, rgba(6,182,212,0.15) 0%, transparent 60%), var(--color-slate-900)" }}>
+      <ThemeToggle className="absolute top-3 right-3 z-10 safe-top" />
       <div className="flex-1 flex items-center justify-center p-4">
         <div className="w-full max-w-sm">
           <div className="text-center mb-6 sm:mb-8">
@@ -3403,13 +3406,15 @@ export default function App() {
 
           <div className="flex-1 hidden lg:block" />
 
+          <ThemeToggle />
+
           <div className="relative">
             <button onClick={() => setNotifOpen(o => !o)}
               className={`relative p-2.5 rounded-xl transition-all touch-manipulation ${notifOpen ? "bg-slate-700 text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"}`}
               aria-label="Team alerts">
               <Bell size={18} />
               {unreadCount > 0 && (
-                <span className="absolute top-0.5 right-0.5 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center text-[10px] font-black text-white">{unreadCount > 9 ? "9+" : unreadCount}</span>
+                <span className="absolute top-0.5 right-0.5 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center text-[10px] font-black text-[#fff]">{unreadCount > 9 ? "9+" : unreadCount}</span>
               )}
             </button>
 
