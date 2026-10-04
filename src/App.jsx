@@ -1579,7 +1579,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
     <div className="space-y-4 pb-20 lg:pb-12">
       <div>
         <h2 className="text-xl sm:text-2xl font-black text-white">Inventory</h2>
-        <p className="text-slate-400 text-sm">Stock tracking & invoice price list</p>
+        <p className="text-slate-400 text-sm">Stock tracking & activity log</p>
       </div>
       <Fab onClick={openAddProduct} label="Add Product" hidden={!canEdit || showAdd || !!editProduct || !!deleteProduct || !!showUse || !!showRestock || !!showAdjust} />
 
@@ -1588,8 +1588,8 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
           { label: "Stock Products", value: stockItems.length, icon: Boxes, color: "text-cyan-400" },
           { label: "Low Stock Items", value: lowStockItems.length, icon: AlertTriangle, color: lowStockItems.length > 0 ? "text-amber-400" : "text-emerald-400" },
           { label: "Stock Value (Selling)", value: formatSGD(totalStockValue), icon: TrendingUp, color: "text-emerald-400" },
-        ].map(s => (
-          <Card key={s.label} className="p-4">
+        ].map((s, i) => (
+          <Card key={s.label} className={`p-4 ${i === 2 ? "col-span-2 lg:col-span-1" : ""}`}>
             <s.icon size={20} className={`${s.color} mb-2`} />
             <p className={`text-lg font-black ${s.color}`}>{s.value}</p>
             <p className="text-slate-400 text-xs">{s.label}</p>
