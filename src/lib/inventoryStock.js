@@ -91,7 +91,6 @@ function computeStockAdjust(products, items, deltaSign) {
 }
 
 function adjustProductsStock(setProducts, items, deltaSign) {
-  const qtyByProduct = aggregateQtyByProduct(items)
   setProducts((prev) => {
     const result = computeStockAdjust(prev, items, deltaSign)
     return result.ok ? result.nextProducts : prev

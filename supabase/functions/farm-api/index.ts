@@ -447,7 +447,10 @@ async function upsertSync(
 
     if (!clientRaw) continue;
     if (preserveClientTimestamp && Number.isFinite(clientTs) && clientTs === serverTime) continue;
-    if (Number.isFinite(clientTs) && clientTs >= serverTime) {
+    // Strictly newer only: an equal timestamp means the client is just echoing back the
+    // version it pulled. Re-saving it stamped every row with a fresh updated_at on each
+    // login/refresh, which other devices then saw as changes and pulled again.
+    if (Number.isFinite(clientTs) && clientTs > serverTime) {
       const merged = { ...next, updated_at: pickUpdatedAt(clientRaw) };
       delete merged.updatedAt;
       toUpsert.push(merged);

@@ -13,8 +13,12 @@ import {
 } from '../lib/webPush'
 
 export default function PushNotificationPrompt({ addNotification }) {
-  const [visible, setVisible] = useState(false)
-  const [enabled, setEnabled] = useState(false)
+  // Derived synchronously so the banner is present on first paint; showing it only
+  // after an async check pushed the whole page down a moment after every login.
+  const [visible, setVisible] = useState(
+    () => isPushSupported() && getPushPermission() !== 'granted' && !isPushPromptDismissed(),
+  )
+  const [enabled, setEnabled] = useState(() => isPushSupported() && getPushPermission() === 'granted')
   const [busy, setBusy] = useState(false)
 
   const refresh = useCallback(async () => {
@@ -22,11 +26,10 @@ export default function PushNotificationPrompt({ addNotification }) {
       setVisible(false)
       return
     }
-    const permission = getPushPermission()
-    if (permission === 'granted') {
-      await ensurePushSubscription()
+    if (getPushPermission() === 'granted') {
       setEnabled(true)
       setVisible(false)
+      ensurePushSubscription().catch(() => {})
       return
     }
     setEnabled(false)

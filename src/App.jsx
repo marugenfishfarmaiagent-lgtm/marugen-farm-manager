@@ -2142,6 +2142,7 @@ export default function App() {
   const lastUserActivityAt = useRef(0);
   const syncTimersRef = useRef({});
   const syncInFlightRef = useRef(0);
+  const loggingOutRef = useRef(false);
   const explicitFlushAtRef = useRef({ expenses: 0, invoices: 0, calendar: 0, customerkoi: 0, koifish: 0 });
   const syncStateRef = useRef({});
   const inventorySyncPendingRef = useRef(false);
@@ -3174,9 +3175,26 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    await auth.logout();
+    if (loggingOutRef.current) return;
+    loggingOutRef.current = true;
+    try {
+      await auth.logout();
+    } finally {
+      loggingOutRef.current = false;
+    }
+    // A debounced upload still queued would otherwise fire after the session is gone.
+    Object.values(syncTimersRef.current).forEach((t) => clearTimeout(t));
+    syncTimersRef.current = {};
     setCurrentUser(null);
     resetCloudBusinessState();
+    syncFailCountRef.current = 0;
+    setSyncFailCount(0);
+    setCloudError(null);
+    setCloudPulling(false);
+    setIsFromCache(false);
+    setCacheCachedAt(null);
+    setLastSyncAt(null);
+    setShowChangePin(false);
     setNotifOpen(false);
     setToasts([]);
     toastTimers.current.forEach((t) => clearTimeout(t));
@@ -3277,7 +3295,7 @@ export default function App() {
 
   const guard = (permission, label, content) => {
     if (!hasPermission(currentUser, permission)) return <AccessDenied moduleName={label} />;
-    return <ErrorBoundary>{content}</ErrorBoundary>;
+    return <ErrorBoundary key={`${currentUser.id}:${effectiveTab}`}>{content}</ErrorBoundary>;
   };
 
   const renderModule = () => {
