@@ -3303,7 +3303,7 @@ export default function App() {
   const activeNav = navItems.find((item) => item.id === effectiveTab);
 
   return (
-    <div className="h-[100dvh] max-h-[100dvh] overflow-hidden bg-slate-950 text-white flex" style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif" }}>
+    <div className="fixed inset-0 overflow-hidden bg-slate-950 text-white flex" style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif" }}>
       {isMobile && sidebarOpen && (
         <button
           type="button"
@@ -3477,10 +3477,14 @@ export default function App() {
         <main className={`flex-1 min-h-0 overscroll-y-contain ${
           isMobile && effectiveTab === "chat"
             ? "flex flex-col overflow-hidden p-0 pb-[calc(3.75rem+env(safe-area-inset-bottom))]"
-            : `overflow-y-auto overflow-x-hidden p-4 sm:p-6 ${isMobile ? "pb-[calc(4.5rem+env(safe-area-inset-bottom))]" : ""}`
+            : "overflow-y-auto overflow-x-hidden p-4 sm:p-6"
         }`}>
           {cloudPulling ? <ModuleSkeleton tab={effectiveTab} /> : renderModule()}
         </main>
+
+        {isMobile && (
+          <MobileBottomNav items={navItems} activeTab={effectiveTab} onSelect={goToTab} />
+        )}
       </div>
 
       <ChangePinModal
@@ -3493,10 +3497,6 @@ export default function App() {
       />
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
-
-      {isMobile && (
-        <MobileBottomNav items={navItems} activeTab={effectiveTab} onSelect={goToTab} />
-      )}
     </div>
   );
 }

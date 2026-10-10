@@ -1,14 +1,12 @@
-import { createPortal } from 'react-dom'
 import { useEffect, useRef, useState } from 'react'
 
-/** Portaled to body so the bar stays pinned to the viewport while main content scrolls. */
+/**
+ * Last row of the app shell (which fills the screen with fixed inset-0), so the bar
+ * always sits at the bottom of the visible area instead of floating on its own layer.
+ */
 export default function MobileBottomNav({ items, activeTab, onSelect }) {
-  if (typeof document === 'undefined' || !items?.length) return null
-
-  return createPortal(
-    <BottomNavInner items={items} activeTab={activeTab} onSelect={onSelect} />,
-    document.body,
-  )
+  if (!items?.length) return null
+  return <BottomNavInner items={items} activeTab={activeTab} onSelect={onSelect} />
 }
 
 function BottomNavInner({ items, activeTab, onSelect }) {
@@ -43,7 +41,7 @@ function BottomNavInner({ items, activeTab, onSelect }) {
 
   return (
     <nav
-      className="fixed bottom-0 left-0 right-0 z-50 bg-slate-900/95 backdrop-blur border-t border-slate-800 safe-bottom-nav lg:hidden"
+      className="relative z-50 shrink-0 bg-slate-900/95 backdrop-blur border-t border-slate-800 safe-bottom-nav lg:hidden"
       aria-label="Main navigation"
     >
       <div className="relative">
