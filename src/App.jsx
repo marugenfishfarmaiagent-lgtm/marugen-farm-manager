@@ -629,7 +629,7 @@ function Dashboard({
                 <div key={l.id} className="flex items-center justify-between gap-2 text-xs border-b border-slate-800 last:border-0 pb-2 last:pb-0">
                   <div className="min-w-0">
                     <p className="text-slate-200 font-medium truncate">{l.productName}</p>
-                    <p className="text-slate-500 mt-0.5">{l.date} · By {l.by || "Staff"}</p>
+                    <p className="text-slate-500 mt-0.5">{l.date} · By {l.by || "Staff"}{l.note && !/^Manual (use|restock)$/.test(l.note) ? ` · ${l.note}` : ""}</p>
                   </div>
                   <div className="text-right shrink-0">
                     <Badge className={l.type === "restock" ? "bg-purple-500/20 text-purple-300" : l.type === "sell" ? "bg-emerald-500/20 text-emerald-300" : "bg-blue-500/20 text-blue-300"}>{l.type}</Badge>
@@ -1048,6 +1048,8 @@ function TeamModule({ users, setUsers, currentUser, addNotification, onCurrentUs
 // ─────────────────────────────────────────────
 // INVENTORY / PRODUCTS MODULE
 // ─────────────────────────────────────────────
+const USE_REASONS = ["Feeding", "Packing", "Selling"];
+const LOW_STOCK_FILTER = "Low Stock";
 const EMPTY_PRODUCT_FORM = { name: "", category: "Fish Food", sku: "", barcode: "", price: "", unit: "kg", stock: "", minStock: "", description: "", trackStock: true };
 
 function InventoryModule({ products, setProducts, stockLog, setStockLog, addNotification, currentUser, onProductsSaved, onInventorySaved, onAdjustStockCloud }) {
@@ -1099,8 +1101,9 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
   const stockItems = useMemo(() => stockProducts(products), [products]);
 
   const searchLower = search.toLowerCase();
+  const isLowStockItem = (p) => p.minStock > 0 && p.stock <= p.minStock;
   const filtered = stockItems.filter((p) =>
-    (catFilter === "All" || p.category === catFilter) &&
+    (catFilter === "All" || (catFilter === LOW_STOCK_FILTER ? isLowStockItem(p) : p.category === catFilter)) &&
     (
       (p.name || "").toLowerCase().includes(searchLower)
       || (p.sku || "").toLowerCase().includes(searchLower)
@@ -1627,9 +1630,11 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
                 <span>Scan</span>
               </button>
             <div className="flex gap-2 flex-wrap">
-              {["All", ...PRODUCT_CATEGORIES].map(c => (
+              {["All", LOW_STOCK_FILTER, ...PRODUCT_CATEGORIES].map(c => (
                 <button key={c} onClick={() => setCatFilter(c)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${catFilter === c ? "bg-cyan-500 text-slate-900" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>{c}</button>
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${catFilter === c ? (c === LOW_STOCK_FILTER ? "bg-amber-500 text-slate-900" : "bg-cyan-500 text-slate-900") : c === LOW_STOCK_FILTER ? "bg-amber-500/20 text-amber-300 hover:bg-amber-500/30" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>
+                  {c === LOW_STOCK_FILTER ? `${c} (${stockItems.filter(isLowStockItem).length})` : c}
+                </button>
               ))}
             </div>
           </div>
@@ -1715,7 +1720,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
                   <span className="text-white font-bold">×{l.qty}</span>
                 </div>
                 <div className="text-slate-500 text-xs mt-1">By: <span className="text-slate-300">{l.by || "Staff"}</span></div>
-                {l.note && <p className="text-slate-500 text-xs mt-1">{l.note}</p>}
+                {l.note && <p className="text-xs mt-1"><span className="text-slate-500">Note: </span><span className="text-slate-300 font-semibold">{l.note}</span></p>}
               </div>
             ))}
           </div>
@@ -1735,7 +1740,7 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
                   <td className="p-3"><Badge className={l.type === "sell" ? "bg-emerald-500/20 text-emerald-300" : l.type === "use" ? "bg-blue-500/20 text-blue-300" : "bg-purple-500/20 text-purple-300"}>{l.type}</Badge></td>
                   <td className="p-3 text-right font-bold">{l.qty}</td>
                   <td className="p-3 text-right text-emerald-400">{l.total ? formatSGD(l.total) : "-"}</td>
-                  <td className="p-3 text-slate-500 text-xs max-w-[10rem] truncate" title={l.note || ""}>{l.note || "—"}</td>
+                  <td className="p-3 text-slate-300 text-xs max-w-[10rem] truncate" title={l.note || ""}>{l.note || "—"}</td>
                   <td className="p-3 text-slate-400 text-xs">{l.by}</td>
                 </tr>
               ))}
@@ -1945,7 +1950,22 @@ function InventoryModule({ products, setProducts, stockLog, setStockLog, addNoti
       >
         <p className="text-slate-400 text-sm mb-4">Available: <span className="text-white font-bold">{(products.find((p) => sameProductId(p.id, showUse?.id))?.stock ?? showUse?.stock)} {showUse?.unit}</span></p>
         <Input label="Quantity to Use" type="number" value={useQty} onChange={(e) => setUseQty(parseStockQty(e.target.value) || "")} min="1" className="mb-3" />
-        <Textarea label="Note (optional)" value={useNote} onChange={e => setUseNote(e.target.value)} rows={2} />
+        <div>
+          <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wide">Reason (optional)</label>
+          <div className="grid grid-cols-3 gap-2">
+            {USE_REASONS.map((reason) => (
+              <button
+                key={reason}
+                type="button"
+                aria-pressed={useNote === reason}
+                onClick={() => setUseNote((prev) => (prev === reason ? "" : reason))}
+                className={`min-h-[44px] rounded-lg text-sm font-bold transition-all touch-manipulation ${useNote === reason ? "bg-cyan-500 text-slate-900" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}
+              >
+                {reason}
+              </button>
+            ))}
+          </div>
+        </div>
       </Modal>
 
       {/* Restock Modal */}
